@@ -12,7 +12,8 @@
   non-ASCII bytes when the code page isn't UTF-8 raises ETextEncodingException
   instead of corrupting the text. LCL applications already run in UTF-8;
   console and service programs call SetMultiByteConversionCodePage(CP_UTF8)
-  at startup. Same rule as PdbUtf8BytesToString (pascal-db-faa). }
+  at startup. Since 0.1.1 the decoding is pascal-common-faa's
+  PcTryUtf8BytesToString, which pascal-db-faa's PdbUtf8BytesToString uses too. }
 
 interface
 
@@ -43,46 +44,22 @@ implementation
 
 uses
   {$IFDEF FPC}
-  md5;
+  md5,
   {$ELSE}
-  System.Hash;
+  System.Hash,
   {$ENDIF}
+  PascalCommon.Utf8;
 
 function PaUtf8BytesToString(const ABytes: TBytes; const AOrigin: string): string;
-var
-  LStart, LLen: Integer;
-  {$IFDEF FPC}
-  I: Integer;
-  LUtf8: UTF8String;
-  LNonAscii: Boolean;
-  {$ENDIF}
 begin
-  LStart := 0;
-  LLen := Length(ABytes);
-  if (LLen >= 3) and (ABytes[0] = $EF) and (ABytes[1] = $BB) and (ABytes[2] = $BF) then
-    LStart := 3;
-  if LLen - LStart <= 0 then
-    Exit('');
-  {$IFDEF FPC}
-  LNonAscii := False;
-  for I := LStart to LLen - 1 do
-    if ABytes[I] >= $80 then
-    begin
-      LNonAscii := True;
-      Break;
-    end;
-  if LNonAscii and (DefaultSystemCodePage <> CP_UTF8) then
+  // The decoding is pascal-common-faa's (1.4.0); this keeps the exception
+  // and the message.
+  if not PcTryUtf8BytesToString(ABytes, Result) then
     raise ETextEncodingException.CreateFmt(
       '%s contains non-ASCII characters, but the process default code page is %d, ' +
       'not UTF-8 (65001): FPC would silently turn characters outside that code page into "?". ' +
       'Call SetMultiByteConversionCodePage(CP_UTF8) at startup (LCL applications already run in UTF-8).',
       [AOrigin, DefaultSystemCodePage]);
-  SetLength(LUtf8, LLen - LStart);
-  Move(ABytes[LStart], LUtf8[1], LLen - LStart);
-  Result := string(LUtf8);
-  {$ELSE}
-  Result := TEncoding.UTF8.GetString(ABytes, LStart, LLen - LStart);
-  {$ENDIF}
 end;
 
 function PaStringToUtf8Bytes(const AText: string): TBytes;

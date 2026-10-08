@@ -6,6 +6,16 @@ may change the API; each such change is listed here.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-08
+
+### Changed
+
+- `PaUtf8BytesToString` decodes through pascal-common-faa 1.4.0's `PcTryUtf8BytesToString`, the
+  same code pascal-db-faa had (it moved to pascal-common-faa because both libraries had a copy).
+  Behavior, exception (`ETextEncodingException`) and message unchanged.
+- Minimum pascal-common-faa: 1.4.0 (`PascalApi.Dto`, the `.lpk`). Tested against pascal-db-faa
+  0.12.1.
+
 ## [0.1.0] - 2026-10-08
 
 First version: the infrastructure of `delphi-api-infra-faa` (Delphi only) ported to Delphi and

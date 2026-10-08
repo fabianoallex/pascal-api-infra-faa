@@ -10,7 +10,7 @@ threading), [pascal-jsonmapper-faa](https://github.com/fabianoallex/pascal-jsonm
 paging). It is not a drop-in replacement for the Delphi library: DTOs map **published**
 properties, because FPC 3.2.2's RTTI sees nothing else.
 
-Version **0.1.0** (see the [changelog](CHANGELOG.md)): the core and the Horse middlewares; OpenAPI and
+Version **0.1.1** (see the [changelog](CHANGELOG.md)): the core and the Horse middlewares; OpenAPI and
 MCP come later. See [docs/plan.md](docs/plan.md).
 
 ## Contents
