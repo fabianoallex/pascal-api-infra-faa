@@ -46,8 +46,17 @@ THorse.Listen(9000);
 ```
 
 On FPC a Horse callback is a plain procedure, so each middleware keeps its settings in the unit:
-one configuration per process. [samples/01-api](samples/01-api/ApiSample.dpr) uses all of them,
-and `tools/http_scenarios.sh` checks it over HTTP.
+one configuration per process.
+
+## Samples
+
+| Sample | Shows | Checked by |
+|---|---|---|
+| [01-api](samples/01-api/ApiSample.dpr) | every middleware (errors, CORS, log, JWT, rate limit), paging and validation, in memory | `tools/http_scenarios.sh` (65 checks) |
+| [02-db](samples/02-db/DbApiSample.dpr) | SQLite through pascal-db-faa (SQLdb on FPC, FireDAC on Delphi): migrations, paging and ordering in SQL, filters, 409 from a unique key, NULL as `null` | `tools/http_scenarios_db.sh` (31 checks) |
+
+Both run with one source on Delphi and Lazarus/FPC. On FPC for Windows, sample 02 needs
+sqlite.org's `sqlite3.dll` next to the executable (see `tools/test_http.sh`).
 
 ## Using it
 
@@ -73,7 +82,7 @@ program's `uses`.
 git submodule update --init
 sh tools/test_fpc.sh            # FPC on Windows (lazbuild)
 sh tools/test_fpc_docker.sh     # FPC 3.2.2 on Linux, in Docker
-sh tools/test_http.sh           # samples/01-api over HTTP (FPC on Windows)
+sh tools/test_http.sh           # both samples over HTTP (FPC on Windows)
 sh tools/test_http_docker.sh    # the same on Linux, in Docker
 sh tools/ci-test.sh             # what CI runs
 ```

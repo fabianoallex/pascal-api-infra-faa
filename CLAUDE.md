@@ -136,10 +136,10 @@ exception in a helper and assert on what it returned.
 |---|---|
 | `sh tools/test_fpc.sh` | regenerate mirrors, `lazbuild` + run the FPCUnit suite (Windows) |
 | `sh tools/test_fpc_docker.sh` | the same suite with plain `fpc` on Linux (Docker, `FPC_IMAGE`) |
-| `sh tools/test_http.sh` | build `samples/01-api` with lazbuild, start it, run `tools/http_scenarios.sh` (Windows) |
-| `sh tools/test_http_docker.sh` | the same on Linux with plain `fpc` (Docker; image needs curl) |
+| `sh tools/test_http.sh` | build both samples with lazbuild, start each, run `tools/http_scenarios.sh` / `tools/http_scenarios_db.sh` (Windows; sample 02 needs sqlite.org's `sqlite3.dll` in `SQLITE_DLL` or `.deps/`) |
+| `sh tools/test_http_docker.sh` | the same on Linux with plain `fpc` (Docker; image needs curl and libsqlite3-0) |
 | `sh tools/ci-test.sh` | what CI runs: unit suite + HTTP scenarios on Linux (builds the image if needed) |
-| Delphi | open `PascalApi.groupproj`, build `PascalApi.UnitTests` and `ApiSample` (Win32 and Win64); run the tests; start `ApiSample.exe` and run `sh tools/http_scenarios.sh 9310` |
+| Delphi | open `PascalApi.groupproj`, build `PascalApi.UnitTests`, `ApiSample` and `DbApiSample` (Win32 and Win64); run the tests; start `ApiSample.exe` and run `sh tools/http_scenarios.sh 9310`; start `DbApiSample.exe 9330 --reset` and run `sh tools/http_scenarios_db.sh 9330` |
 
 The middlewares are tested in two layers: their decisions in `PascalApi.HttpTests` (no server),
 and over real HTTP by `tools/http_scenarios.sh` (curl, 65 checks) against `samples/01-api`,

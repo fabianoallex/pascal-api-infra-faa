@@ -87,6 +87,13 @@ Error handler, CORS, request log, Bearer auth, JWT (HS256), rate limit, on Horse
   400; messages are replaceable (`TApiMessages`, English default, Portuguese available).
 - Still open: the PR to Horse for the `constref` workaround.
 
+### Sample with a real database — done (2026-10-08)
+
+`samples/02-db`: SQLite through pascal-db-faa, SQLdb on FPC and FireDAC on Delphi; 31 HTTP checks
+(`tools/http_scenarios_db.sh`) green on FPC Windows and Linux and Delphi 12 Win32/Win64. It found a real defect:
+`ParseQueryInt`/`ParseQueryStr` returned `nil` for a missing parameter, and a repository testing
+`HasValue` on it crashed; they now return an absent optional (breaking, for 0.2.0).
+
 ### 4. OpenAPI / Swagger — later
 
 Generate the document with pascal-jsonmapper-faa's DOM instead of SwagDoc (Delphi only). The

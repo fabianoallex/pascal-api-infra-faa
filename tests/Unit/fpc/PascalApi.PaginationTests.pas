@@ -26,9 +26,9 @@ type
   TPaginationTests = class(TTestCase)
   published
     procedure ParseQueryInt_Number;
-    procedure ParseQueryInt_EmptyOrInvalid_IsNil;
+    procedure ParseQueryInt_EmptyOrInvalid_IsAbsentNotNil;
     procedure ParseQueryStr_Text;
-    procedure ParseQueryStr_Empty_IsNil;
+    procedure ParseQueryStr_Empty_IsAbsentNotNil;
 
     procedure PageRequestFrom_Nil_UsesDefaults;
     procedure PageRequestFrom_Values;
@@ -60,11 +60,17 @@ begin
   TAssert.AssertEquals(42, LValue.Value);
 end;
 
-procedure TPaginationTests.ParseQueryInt_EmptyOrInvalid_IsNil;
+procedure TPaginationTests.ParseQueryInt_EmptyOrInvalid_IsAbsentNotNil;
+var
+  LText: string;
+  LValue: IOptInteger;
 begin
-  TAssert.AssertTrue('empty', ParseQueryInt('') = nil);
-  TAssert.AssertTrue('text', ParseQueryInt('abc') = nil);
-  TAssert.AssertTrue('decimal', ParseQueryInt('1.5') = nil);
+  for LText in TArray<string>.Create('', 'abc', '1.5') do
+  begin
+    LValue := ParseQueryInt(LText);
+    TAssert.AssertTrue('assigned: "' + LText + '"', Assigned(LValue));
+    TAssert.AssertFalse('absent: "' + LText + '"', LValue.HasValue);
+  end;
 end;
 
 procedure TPaginationTests.ParseQueryStr_Text;
@@ -76,9 +82,13 @@ begin
   TAssert.AssertEquals('São', LValue.Value);
 end;
 
-procedure TPaginationTests.ParseQueryStr_Empty_IsNil;
+procedure TPaginationTests.ParseQueryStr_Empty_IsAbsentNotNil;
+var
+  LValue: IOptString;
 begin
-  TAssert.AssertTrue(ParseQueryStr('') = nil);
+  LValue := ParseQueryStr('');
+  TAssert.AssertTrue(Assigned(LValue));
+  TAssert.AssertFalse(LValue.HasValue);
 end;
 
 procedure TPaginationTests.PageRequestFrom_Nil_UsesDefaults;

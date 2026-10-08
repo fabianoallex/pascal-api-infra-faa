@@ -40,3 +40,9 @@ server.log
 
 # scratch builds and logs of local runs
 .ci/
+
+# local native libraries for FPC/Windows test runs (sqlite.org sqlite3.dll)
+.deps/
+samples/02-db/DbApiSample
+*.sqlite
+samples/02-db/sqlite3.dll

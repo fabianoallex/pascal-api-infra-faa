@@ -14,6 +14,10 @@
     ...
     Res.Send(PageEnvelopeJson(TPageMeta.Create(LPage, LTotal), LItemsJson));
 
+  ParseQueryInt/ParseQueryStr return an absent optional, never nil (they
+  returned nil until 0.1.1, as in the origin, and a caller testing HasValue on
+  a missing parameter got an access violation: found by samples/02-db).
+
   Ported from Common.Pagination (delphi-api-infra-faa). Its TPageParams and
   TPageMeta were the same idea as PascalDb.Paging's records, so they are not
   repeated here; the one visible difference is that Offset and Total are
@@ -26,11 +30,12 @@ uses
   PascalDb.Paging;
 
 /// The value of a query-string parameter as an optional integer: absent when
-/// the text is empty or not an integer.
+/// the text is empty or not an integer. Never nil (since 0.2.0): callers test
+/// HasValue directly.
 function ParseQueryInt(const AText: string): IOptInteger;
 
 /// The value of a query-string parameter as an optional string: absent when
-/// the text is empty.
+/// the text is empty. Never nil (since 0.2.0).
 function ParseQueryStr(const AText: string): IOptString;
 
 /// A page request from optional page and limit (nil or absent use the
@@ -65,7 +70,7 @@ begin
   if (AText <> '') and TryStrToInt(AText, N) then
     Result := TOptNullInteger.From(N)
   else
-    Result := nil;
+    Result := TOptNullInteger.Undefined;
 end;
 
 function ParseQueryStr(const AText: string): IOptString;
@@ -73,7 +78,7 @@ begin
   if AText <> '' then
     Result := TOptNullString.From(AText)
   else
-    Result := nil;
+    Result := TOptNullString.Undefined;
 end;
 
 function PageRequestFrom(const APage, ALimit: IOptInteger;

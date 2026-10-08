@@ -6,6 +6,21 @@ may change the API; each such change is listed here.
 
 ## [Unreleased]
 
+### Added
+
+- `samples/02-db`: a Horse API over SQLite through pascal-db-faa (SQLdb on FPC, FireDAC on
+  Delphi): migrations, paging and ordering in SQL (`TOrderBySpec` + `PdbPagingClause`), a state
+  filter in a tagged SQL block, 409 from the database's primary key, NULL as JSON `null`.
+  `tools/http_scenarios_db.sh` checks it over HTTP (31 checks); `tools/test_http.sh` and
+  `tools/test_http_docker.sh` (CI) run both samples.
+
+### Changed
+
+- **Breaking:** `ParseQueryInt` and `ParseQueryStr` (`PascalApi.Pagination`) return an absent
+  optional instead of `nil` for an empty or invalid value, as every getter of the library does.
+  Code comparing their result with `nil` must test `HasValue` instead. A caller testing
+  `HasValue` on a missing parameter got an access violation before (found by `samples/02-db`).
+
 ## [0.1.1] - 2026-10-08
 
 ### Changed
