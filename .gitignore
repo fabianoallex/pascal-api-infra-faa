@@ -32,3 +32,11 @@ packagefiles.xml
 # local build/run logs of tools/test_fpc.sh
 build.log
 run.log
+
+# Horse copy for FPC builds (tools/prepare_horse.sh)
+.horse-src/
+samples/01-api/ApiSample
+server.log
+
+# scratch builds and logs of local runs
+.ci/

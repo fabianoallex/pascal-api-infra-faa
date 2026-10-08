@@ -6,6 +6,9 @@
         <Projects Include="tests\Unit\PascalApi.UnitTests.dproj">
             <Dependencies/>
         </Projects>
+        <Projects Include="samples\01-api\ApiSample.dproj">
+            <Dependencies/>
+        </Projects>
     </ItemGroup>
     <ProjectExtensions>
         <Borland.Personality>Default.Personality.12</Borland.Personality>
@@ -23,14 +26,23 @@
     <Target Name="PascalApi_UnitTests:Make">
         <MSBuild Projects="tests\Unit\PascalApi.UnitTests.dproj" Targets="Make"/>
     </Target>
+    <Target Name="ApiSample">
+        <MSBuild Projects="samples\01-api\ApiSample.dproj"/>
+    </Target>
+    <Target Name="ApiSample:Clean">
+        <MSBuild Projects="samples\01-api\ApiSample.dproj" Targets="Clean"/>
+    </Target>
+    <Target Name="ApiSample:Make">
+        <MSBuild Projects="samples\01-api\ApiSample.dproj" Targets="Make"/>
+    </Target>
     <Target Name="Build">
-        <CallTarget Targets="PascalApi_UnitTests"/>
+        <CallTarget Targets="PascalApi_UnitTests;ApiSample"/>
     </Target>
     <Target Name="Clean">
-        <CallTarget Targets="PascalApi_UnitTests:Clean"/>
+        <CallTarget Targets="PascalApi_UnitTests:Clean;ApiSample:Clean"/>
     </Target>
     <Target Name="Make">
-        <CallTarget Targets="PascalApi_UnitTests:Make"/>
+        <CallTarget Targets="PascalApi_UnitTests:Make;ApiSample:Make"/>
     </Target>
     <Import Project="$(BDS)\Bin\CodeGear.Group.Targets" Condition="Exists('$(BDS)\Bin\CodeGear.Group.Targets')"/>
 </Project>

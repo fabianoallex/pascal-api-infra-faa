@@ -30,7 +30,9 @@ uses
   PascalApi.PaginationTests,
   PascalApi.RateLimitStateTests,
   PascalApi.FileLogTests,
-  PascalApi.DtoTests;
+  PascalApi.DtoTests,
+  PascalApi.CryptoTests,
+  PascalApi.HttpTests;
 
 var
   ConsoleApp: TTestRunner;

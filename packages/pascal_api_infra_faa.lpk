@@ -57,12 +57,29 @@
         <Filename Value="..\src\PascalApi.Messaging.pas"/>
         <UnitName Value="PascalApi.Messaging"/>
       </Item>
+      <Item>
+        <Filename Value="..\src\PascalApi.Crypto.pas"/>
+        <UnitName Value="PascalApi.Crypto"/>
+      </Item>
+      <Item>
+        <Filename Value="..\src\PascalApi.Jwt.pas"/>
+        <UnitName Value="PascalApi.Jwt"/>
+      </Item>
+      <Item>
+        <Filename Value="..\src\PascalApi.Http.pas"/>
+        <UnitName Value="PascalApi.Http"/>
+      </Item>
     </Files>
     <RequiredPkgs>
       <Item>
         <PackageName Value="pascal_common_faa"/>
         <DefaultFilename Value="..\external\pascal-common-faa\packages\pascal_common_faa.lpk" Prefer="True"/>
         <MinVersion Major="1" Minor="3" Valid="True"/>
+      </Item>
+      <Item>
+        <PackageName Value="pascaljsonmapper_pkg"/>
+        <DefaultFilename Value="..\external\pascal-jsonmapper-faa\packages\pascaljsonmapper_pkg.lpk" Prefer="True"/>
+        <MinVersion Minor="2" Valid="True"/>
       </Item>
       <Item>
         <PackageName Value="pascal_db_faa"/>

@@ -7,3 +7,6 @@
 [submodule "external/pascal-db-faa"]
 	path = external/pascal-db-faa
 	url = https://github.com/fabianoallex/pascal-db-faa.git
+[submodule "external/horse"]
+	path = external/horse
+	url = https://github.com/HashLoad/horse.git

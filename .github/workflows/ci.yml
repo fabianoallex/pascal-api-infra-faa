@@ -19,5 +19,5 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.x'
-      - name: Unit suite (FPC 3.2.2)
+      - name: Unit suite and HTTP scenarios (FPC 3.2.2)
         run: sh tools/ci-test.sh

@@ -59,20 +59,33 @@ Decisions taken in the port (each unit's header has the details):
 - Log rotation never overwrites an archive from the same second (`_1`, `_2`...).
 - Ported interfaces have new GUIDs.
 
-### 3. Middlewares — next
+### 3. Middlewares — done (2026-10-08)
 
-Error handler, CORS, logger, auth (bearer), JWT (HS256), rate limit, on Horse v3.3.0 pinned at
-`72cc45f` as a submodule.
+Error handler, CORS, request log, Bearer auth, JWT (HS256), rate limit, on Horse `72cc45f`
+(tag 3.3.2) as a submodule.
 
-The API changes because of the plain-procedure callback: settings move into the unit
-(`TCorsMiddleware.Configure(Options)` + the handler), so each middleware has **one configuration
-per process**. Callbacks the user supplies (`TTokenValidator`, `TLogProc`,
-`TRateLimitKeyExtractor`) follow `PASCALAPI_FUNCREFS`. One configuration per process is
-accepted (user, 2026-10-08): no known consumer configures the same middleware twice.
-
-Needs: Horse submodule, the FPC/Windows `constref` workaround (and a PR upstream), SHA-256/HMAC
-for JWT, HTTP-level tests (the pure part of each middleware tested without a server, plus a
-small end-to-end run over a real Horse instance).
+- Pure decisions in `PascalApi.Http`; `PascalApi.Crypto` (SHA-256, HMAC, Base64url) and
+  `PascalApi.Jwt` (sign + verify, alg check, exp/nbf); Horse glue in
+  `src/horse/PascalApi.Horse.Middlewares`.
+- Same calls as the origin (`THorse.Use(TCorsMiddleware.New(...))`); the settings live in the
+  unit: **one configuration per process** per middleware (accepted by the user, 2026-10-08: no
+  known consumer configures the same middleware twice). Callbacks (`TTokenValidator`,
+  `TLogProc`, `TRateLimitKeyExtractor`) follow `PASCALAPI_FUNCREFS`.
+- Verified: unit suite 156 tests, 0 leaks, on FPC 3.2.2 Win64 and Linux and Delphi 12 CE Win32 and
+  Win64; `samples/01-api` over HTTP, 65 curl checks (`tools/http_scenarios.sh`), on FPC Windows
+  (Horse with the `tools/prepare_horse.sh` workaround), FPC Linux (Horse unchanged) and Delphi
+  Win32/Win64.
+- The Delphi HTTP run found what the unit tests couldn't: `Res.Send(string)` broke accented JSON
+  on Delphi (4 checks); `TJsonSend.Send` (UTF-8 bytes) fixed it. Also a Delphi-only compile error
+  in the sample (two anonymous `array of T` types are incompatible on Delphi, accepted by FPC).
+- Measured: FPC 3.2.2/Linux `DateTimeToUnix(Now, False)` equals `date +%s` with the system time
+  zone set to UTC, America/Sao_Paulo and Asia/Tokyo (`Now` is UTC there, offset 0), so JWT
+  exp/nbf are right on Linux.
+- Found: `THorseRequest.RemoteAddr` is '' with the console provider (see CLAUDE.md); fixed here by
+  falling back to `RawWebRequest.RemoteAddr`. Probably affects the origin's IP rate limit too.
+- Differences from the origin: excluded path prefixes match whole segments; JSON body errors are
+  400; messages are replaceable (`TApiMessages`, English default, Portuguese available).
+- Still open: the PR to Horse for the `constref` workaround.
 
 ### 4. OpenAPI / Swagger — later
 

@@ -1,9 +1,9 @@
 # pascal-api-infra-faa — Guide for AI agents
 
 Infrastructure for REST APIs on Horse, **dual-compiler** (Delphi + Lazarus/FPC 3.2.2): query-string
-paging and ordering, configuration, file logging, rate limiting, DTO bases, messaging contracts
-and (phase 3, not yet written) Horse middlewares. Built on pascal-common-faa,
-pascal-jsonmapper-faa and pascal-db-faa.
+paging and ordering, configuration, file logging, rate limiting, DTO bases, messaging contracts,
+JWT (HS256) and the Horse middlewares (error handler, CORS, request log, Bearer/JWT auth, rate
+limit). Built on pascal-common-faa, pascal-jsonmapper-faa, pascal-db-faa and Horse.
 
 For the general dual-compiler rules (project anatomy, `.inc`, mirrored tests, CI), use the
 `dual-compiler-delphi-lazarus` skill. This file records only what is specific to this repo. The
@@ -15,7 +15,9 @@ plan, the phases and what is still open are in `docs/plan.md`.
 
 Everything in this repository is in **English**: code, identifiers, comments, runtime messages,
 test names and assertion messages, documentation and commit messages. Test *data* may contain
-non-ASCII values on purpose (`'São Paulo → ok'`).
+non-ASCII values on purpose (`'São Paulo → ok'`). One deliberate exception:
+`TApiMessages.Portuguese` (`PascalApi.Http`), the client-facing messages in Portuguese, which an
+application selects at startup (the default is `TApiMessages.English`).
 
 ---
 
@@ -35,6 +37,9 @@ don't flow between the two automatically. Each unit's header says what changed i
 | `PascalApi.Dto` | `Common.DTO.Base` |
 | `PascalApi.Messaging` | `Messaging.Interfaces` + `Messaging.Adapters.Registry` |
 | `PascalApi.Text` | — (new: UTF-8 bytes, MD5, UTF-8 prefix) |
+| `PascalApi.Http` | the decisions inside `Horse.Middleware.*` (status mapping, CORS headers, Bearer parsing, client IP, access log line), without Horse |
+| `PascalApi.Crypto`, `PascalApi.Jwt` | `TJwtHelper` in `Horse.Middleware.Jwt` (System.Hash/NetEncoding/JSON); now also signs |
+| `src/horse/PascalApi.Horse.Middlewares` | `Horse.Middleware.ErrorHandler`/`Cors`/`Logger`/`Auth`/`Jwt`/`RateLimit` |
 | pascal-jsonmapper-faa | `Common.JsonMapper` |
 | pascal-db-faa | `src/Db`, `Common.Helpers` |
 
@@ -47,8 +52,9 @@ all (measured, skill `references/rtti-gotchas.md`).
 
 ## Dependencies
 
-`external/` holds the three libraries as git submodules, pinned to tags: pascal-common-faa
-`v1.3.0`, pascal-jsonmapper-faa `v0.2.1`, pascal-db-faa `v0.12.0`. They are **only for this
+`external/` holds the dependencies as git submodules, pinned: pascal-common-faa `v1.3.0`,
+pascal-jsonmapper-faa `v0.2.1`, pascal-db-faa `v0.12.0`, Horse `72cc45f` (tag 3.3.2, the commit
+pascal-dfe-broker and delphi-api-starter use). They are **only for this
 repository's tests**: a consumer provides its own single copy of each (submodule + search path),
 never `pascal-api-infra-faa/external/...`. Clone with `git submodule update --init` (no
 `--recursive`: pascal-db-faa's own `external/` is not needed).
@@ -57,9 +63,36 @@ never `pascal-api-infra-faa/external/...`. Clone with `git submodule update --in
 - Delphi search path of a test project: `src`, `external/pascal-common-faa/src`,
   `external/pascal-common-faa/bridges/jsonmapper`, `external/pascal-jsonmapper-faa/src`,
   `external/pascal-db-faa/src`.
-- Lazarus: `packages/pascal_api_infra_faa.lpk` requires `pascal_common_faa` and `pascal_db_faa`
-  with `DefaultFilename ... Prefer="True"` pointing at `external/`. The test project also requires
-  `pascaljsonmapper_pkg` and `pascal_common_faa_jsonmapper` (mapper listed before the bridge).
+- Minimum pascal-db-faa version checked in `PascalApi.Http` (`PASCALDB_VERSION`).
+- Lazarus: `packages/pascal_api_infra_faa.lpk` requires `pascal_common_faa`, `pascaljsonmapper_pkg`
+  and `pascal_db_faa` with `DefaultFilename ... Prefer="True"` pointing at `external/`. The test
+  project also requires `pascal_common_faa_jsonmapper` (the bridge).
+
+### Horse
+
+The core package (`src/`) doesn't use Horse; only `src/horse/PascalApi.Horse.Middlewares` does,
+and it is **not** in the `.lpk` (Horse has no Lazarus package): a consumer adds `src/horse` and
+its own Horse `src` to the search path.
+
+- **FPC on Windows needs a one-line workaround in Horse** (`const` vs `constref` in
+  `Horse.FPC.inc`, found in pascal-dfe-broker). `sh tools/prepare_horse.sh` copies
+  `external/horse/src` to `.horse-src` (git-ignored) and applies it there; the submodule is never
+  edited. `samples/01-api/ApiSample.lpi` uses `.horse-src`. Linux and Delphi use Horse unchanged.
+- **Horse's FPC callbacks are plain procedures** (`Horse.Callback.pas`), so a middleware can't
+  capture its settings: each one keeps them in the unit, **one configuration per process**
+  (accepted by the user, 2026-10-08). `THorse.OnError` has the same shape on both compilers.
+- Returning a handler as `THorseCallback` (a record on FPC): `Result := AProc` reads as a call on
+  FPC; `AsCallback` uses `@AProc` there (the code address, what Horse's own `Implicit` stores).
+- **JSON goes out through `TJsonSend.Send` (UTF-8 bytes + `charset=utf-8`), never
+  `Res.Send(string)`.** On Delphi, `Send(string)` goes through the web response's `Content`, which
+  encodes by the Content-Type's charset: with plain `application/json`, accented text arrived
+  broken (4 of the 65 HTTP checks, Delphi 12 Win32 and Win64; FPC was fine because its string is
+  already UTF-8). The unit tests can't see this: only the HTTP scenarios on Delphi do.
+- **`THorseRequest.RemoteAddr` is '' with the console provider** (fpWeb on FPC; by reading Horse's code, Indy on Delphi too):
+  only Horse's raw providers (Epoll, IOCP, HttpSys, Daemon, LCL) call `Populate` with it. Measured
+  on FPC 3.2.2/Windows (the access log showed `-`); `RemoteAddrOf` falls back to
+  `RawWebRequest.RemoteAddr`. Delphi not measured yet. The origin uses `Req.RemoteAddr` directly,
+  so its IP rate limit probably keys every client as `unknown` there — not checked on that side.
 
 ---
 
@@ -86,7 +119,9 @@ never `pascal-api-infra-faa/external/...`. Clone with `git submodule update --in
 - **GUIDs are generated** (`[guid]::NewGuid()`), never typed; a hook rejects suspicious ones.
 - **Top-of-file comment** in every unit, program and test, between `unit X;` (+ `{$I ...}`) and
   `interface`. Plain prose. If it quotes a `}` (a GUID in an example), use `(* ... *)` — a `}`
-  closes a `{ }` comment early (this happened in `PascalApi.Dto`: "String exceeds line").
+  closes a `{ }` comment early (this happened in `PascalApi.Dto`: "String exceeds line"). And
+  inside `(* ... *)`, never write `*)`: `(Horse.Middleware.*)` closed the comment in
+  `PascalApi.Http` ("INTERFACE expected but identifier ONLY found").
 
 ---
 
@@ -101,8 +136,18 @@ exception in a helper and assert on what it returned.
 |---|---|
 | `sh tools/test_fpc.sh` | regenerate mirrors, `lazbuild` + run the FPCUnit suite (Windows) |
 | `sh tools/test_fpc_docker.sh` | the same suite with plain `fpc` on Linux (Docker, `FPC_IMAGE`) |
-| `sh tools/ci-test.sh` | what CI runs (builds the FPC 3.2.2 image if needed) |
-| Delphi | open `PascalApi.groupproj`, build `PascalApi.UnitTests` (Win32 and Win64), run it |
+| `sh tools/test_http.sh` | build `samples/01-api` with lazbuild, start it, run `tools/http_scenarios.sh` (Windows) |
+| `sh tools/test_http_docker.sh` | the same on Linux with plain `fpc` (Docker; image needs curl) |
+| `sh tools/ci-test.sh` | what CI runs: unit suite + HTTP scenarios on Linux (builds the image if needed) |
+| Delphi | open `PascalApi.groupproj`, build `PascalApi.UnitTests` and `ApiSample` (Win32 and Win64); run the tests; start `ApiSample.exe` and run `sh tools/http_scenarios.sh 9310` |
+
+The middlewares are tested in two layers: their decisions in `PascalApi.HttpTests` (no server),
+and over real HTTP by `tools/http_scenarios.sh` (curl, 65 checks) against `samples/01-api`,
+which uses every middleware. In-process servers aren't used: on FPC, Horse's `Listen` blocks in
+`THTTPApplication.Run` and there is no `StopListen`.
+
+Sending non-ASCII bodies with curl from Git Bash on Windows: put them in a file with explicit
+UTF-8 bytes (`printf 'Macei\303\263'`), since curl.exe gets its arguments in the ANSI code page.
 
 Acceptance on every side: 0 errors, 0 failures, 0 leaks (heaptrc / FastMM). Delphi Community
 Edition can't build from the command line: the user builds in the IDE, then the executable

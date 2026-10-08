@@ -25,6 +25,9 @@ uses
   PascalApi.FileLog in '..\..\src\PascalApi.FileLog.pas',
   PascalApi.Dto in '..\..\src\PascalApi.Dto.pas',
   PascalApi.Messaging in '..\..\src\PascalApi.Messaging.pas',
+  PascalApi.Crypto in '..\..\src\PascalApi.Crypto.pas',
+  PascalApi.Jwt in '..\..\src\PascalApi.Jwt.pas',
+  PascalApi.Http in '..\..\src\PascalApi.Http.pas',
   PascalApi.DUnitXCompat in 'PascalApi.DUnitXCompat.pas',
   PascalApi.VersionTests in 'PascalApi.VersionTests.pas',
   PascalApi.ConfigTests in 'PascalApi.ConfigTests.pas',
@@ -32,7 +35,9 @@ uses
   PascalApi.PaginationTests in 'PascalApi.PaginationTests.pas',
   PascalApi.RateLimitStateTests in 'PascalApi.RateLimitStateTests.pas',
   PascalApi.FileLogTests in 'PascalApi.FileLogTests.pas',
-  PascalApi.DtoTests in 'PascalApi.DtoTests.pas';
+  PascalApi.DtoTests in 'PascalApi.DtoTests.pas',
+  PascalApi.CryptoTests in 'PascalApi.CryptoTests.pas',
+  PascalApi.HttpTests in 'PascalApi.HttpTests.pas';
 
 var
   runner: ITestRunner;
