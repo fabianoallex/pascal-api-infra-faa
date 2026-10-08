@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CONFIG>
+  <Package Version="5">
+    <PathDelim Value="\"/>
+    <Name Value="pascal_api_infra_faa"/>
+    <Author Value="Fabiano Arndt"/>
+    <CompilerOptions>
+      <Version Value="11"/>
+      <PathDelim Value="\"/>
+      <SearchPaths>
+        <IncludeFiles Value="..\src"/>
+        <OtherUnitFiles Value="..\src"/>
+        <UnitOutputDirectory Value="lib\$(TargetCPU)-$(TargetOS)"/>
+      </SearchPaths>
+    </CompilerOptions>
+    <Description Value="Infrastructure for REST APIs on Horse, for Delphi and Lazarus/FPC (dual-compiler): pagination and ordering from the query string, configuration, file logging, rate limiting and middlewares. Built on pascal-common-faa, pascal-jsonmapper-faa and pascal-db-faa."/>
+    <License Value="MIT"/>
+    <Version Minor="1"/>
+    <Files>
+      <Item>
+        <Filename Value="..\src\pascalapi.inc"/>
+        <Type Value="Include"/>
+      </Item>
+      <Item>
+        <Filename Value="..\src\PascalApi.Version.pas"/>
+        <UnitName Value="PascalApi.Version"/>
+      </Item>
+      <Item>
+        <Filename Value="..\src\PascalApi.Text.pas"/>
+        <UnitName Value="PascalApi.Text"/>
+      </Item>
+      <Item>
+        <Filename Value="..\src\PascalApi.Config.pas"/>
+        <UnitName Value="PascalApi.Config"/>
+      </Item>
+      <Item>
+        <Filename Value="..\src\PascalApi.OrderBy.pas"/>
+        <UnitName Value="PascalApi.OrderBy"/>
+      </Item>
+      <Item>
+        <Filename Value="..\src\PascalApi.Pagination.pas"/>
+        <UnitName Value="PascalApi.Pagination"/>
+      </Item>
+      <Item>
+        <Filename Value="..\src\PascalApi.RateLimitState.pas"/>
+        <UnitName Value="PascalApi.RateLimitState"/>
+      </Item>
+      <Item>
+        <Filename Value="..\src\PascalApi.FileLog.pas"/>
+        <UnitName Value="PascalApi.FileLog"/>
+      </Item>
+      <Item>
+        <Filename Value="..\src\PascalApi.Dto.pas"/>
+        <UnitName Value="PascalApi.Dto"/>
+      </Item>
+      <Item>
+        <Filename Value="..\src\PascalApi.Messaging.pas"/>
+        <UnitName Value="PascalApi.Messaging"/>
+      </Item>
+    </Files>
+    <RequiredPkgs>
+      <Item>
+        <PackageName Value="pascal_common_faa"/>
+        <DefaultFilename Value="..\external\pascal-common-faa\packages\pascal_common_faa.lpk" Prefer="True"/>
+        <MinVersion Major="1" Minor="3" Valid="True"/>
+      </Item>
+      <Item>
+        <PackageName Value="pascal_db_faa"/>
+        <DefaultFilename Value="..\external\pascal-db-faa\packages\pascal_db_faa.lpk" Prefer="True"/>
+        <MinVersion Minor="12" Valid="True"/>
+      </Item>
+      <Item>
+        <PackageName Value="FCL"/>
+      </Item>
+    </RequiredPkgs>
+    <UsageOptions>
+      <UnitPath Value="$(PkgOutDir)"/>
+    </UsageOptions>
+    <PublishOptions>
+      <Version Value="2"/>
+      <UseFileFilters Value="True"/>
+    </PublishOptions>
+  </Package>
+</CONFIG>

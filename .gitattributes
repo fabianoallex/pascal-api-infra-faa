@@ -1,0 +1,5 @@
+# LF for every text file, in the repository and in the working tree,
+# regardless of the machine's core.autocrlf. FPC and Delphi 12+ read LF
+# without issues; mixing CRLF/LF produces huge diffs between environments
+# (default recommended by the dual-compiler-delphi-lazarus skill).
+* text=auto eol=lf
