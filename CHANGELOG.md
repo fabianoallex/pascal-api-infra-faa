@@ -4,6 +4,37 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 follow [Semantic Versioning](https://semver.org/). While the version is 0.x, a minor version
 may change the API; each such change is listed here.
 
+## [0.10.0] - 2026-10-09
+
+Phase C of the observability design (`docs/observability-design.md`): spans exported to an
+OpenTelemetry collector over OTLP/HTTP.
+
+### Added
+
+- `PascalApi.Tracing` (**unstable API**: it moves to pascal-common-faa in phase D): `ISpan`,
+  `TTracing.StartSpan` (a child of the thread's current span), `StartSpanWith`, `Current`,
+  parent-based sampling with a ratio for new traces (`ShouldSample`), and a batch processor on
+  its own thread with a bounded queue (oldest dropped, `DroppedCount`) handing spans to an
+  `ISpanExporter`; `TTracingOptions.FromEnvironment` reads `OTEL_SERVICE_NAME`,
+  `OTEL_RESOURCE_ATTRIBUTES`, `OTEL_TRACES_SAMPLER_ARG` and `OTEL_BSP_*`. Not started, every
+  call still works and records nothing.
+- `PascalApi.Otlp`: `OtlpTracesJson` (the OTLP/HTTP JSON body, pure) and `TOtlpHttpExporter`
+  (`OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, `OTEL_EXPORTER_OTLP_ENDPOINT`,
+  `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_EXPORTER_OTLP_TIMEOUT`; fphttpclient on FPC, THTTPClient
+  on Delphi).
+- `TLoggerMiddleware` opens each request's server span with the ids it resolves (named
+  `<method> <route>`, HTTP semantic-convention attributes, error status for a 5xx) and, when
+  tracing is started, samples new traces by the ratio (the `traceparent` flag says so).
+- The MCP executor wraps each tool call in a client span: MCP request -> tool call -> the
+  route's server span, one trace.
+- Samples export to a collector when `OTEL_EXPORTER_OTLP_ENDPOINT` is set; sample 01's
+  `GET /trace` adds a child span. CI runs an OpenTelemetry Collector (contrib 0.111.0) next to
+  the samples and checks what it received (`tools/otlp_check.py`, `tools/otelcol.yaml`).
+
+Verified: 230 unit tests with 0 leaks, and 146 + 61 HTTP checks, on FPC 3.2.2 Win64 and Linux
+x86_64 and Delphi 12 Win32 and Win64; on all four, an OpenTelemetry Collector accepted every
+span batch and `tools/otlp_check.py` passed (on Windows, at UTC-03: the timestamps are UTC).
+
 ## [0.9.0] - 2026-10-09
 
 Phase B of the observability design (`docs/observability-design.md`): metrics and health.

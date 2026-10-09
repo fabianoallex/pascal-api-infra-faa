@@ -29,6 +29,8 @@ uses
   PascalApi.Http in '..\..\src\PascalApi.Http.pas',
   PascalApi.OpenApi in '..\..\src\PascalApi.OpenApi.pas',
   PascalApi.Mcp in '..\..\src\PascalApi.Mcp.pas',
+  PascalApi.Tracing in '..\..\src\PascalApi.Tracing.pas',
+  PascalApi.Otlp in '..\..\src\PascalApi.Otlp.pas',
   PascalApi.DUnitXCompat in 'PascalApi.DUnitXCompat.pas',
   PascalApi.VersionTests in 'PascalApi.VersionTests.pas',
   PascalApi.ConfigTests in 'PascalApi.ConfigTests.pas',
@@ -40,7 +42,9 @@ uses
   PascalApi.CryptoTests in 'PascalApi.CryptoTests.pas',
   PascalApi.HttpTests in 'PascalApi.HttpTests.pas',
   PascalApi.OpenApiTests in 'PascalApi.OpenApiTests.pas',
-  PascalApi.McpTests in 'PascalApi.McpTests.pas';
+  PascalApi.McpTests in 'PascalApi.McpTests.pas',
+  PascalApi.TracingTests in 'PascalApi.TracingTests.pas',
+  PascalApi.OtlpTests in 'PascalApi.OtlpTests.pas';
 
 var
   runner: ITestRunner;

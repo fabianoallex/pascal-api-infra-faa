@@ -156,6 +156,13 @@ its own Horse `src` to the search path.
   visited, also on a partial match (`GET /cities/1/extra` left `/cities`), and `''` when a global
   middleware answered first (a 401 from JWT). `MetricRoute` drops a template whose segment count
   differs from the path. Never label a metric with the raw path.
+- **Spans** (`PascalApi.Tracing`, unstable until phase D): the logger opens the server span; a
+  handler's `TTracing.StartSpan` is its child. The current span is a per-thread pointer (Delphi
+  doesn't finalize managed threadvars). In tests, never compare `TTracing.Current` inline: the
+  temporary interface keeps the span alive until the end of the procedure (it broke
+  `UnfinishedSpan_Freed_ClearsCurrent` on FPC); read it in a helper. CI checks the spans with a
+  real OpenTelemetry Collector (`tools/otlp_check.py`); after changing the OTLP JSON, run
+  `tools/ci-test.sh`.
 - **Every metric needs a description**: `promtool check metrics` (run by CI on both samples'
   `/metrics`) exits non-zero on "no help text" even when the format is right.
 - **`THorseRequest.RemoteAddr` is '' with the console provider** (fpWeb on FPC, Indy on Delphi):

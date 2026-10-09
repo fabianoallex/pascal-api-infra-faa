@@ -10,8 +10,9 @@ threading), [pascal-jsonmapper-faa](https://github.com/fabianoallex/pascal-jsonm
 paging). It is not a drop-in replacement for the Delphi library: DTOs map **published**
 properties, because FPC 3.2.2's RTTI sees nothing else.
 
-Version **0.9.0** (see the [changelog](CHANGELOG.md)): the core, the Horse middlewares, OpenAPI, an MCP
-server (protocol 2026-07-28), W3C trace context, metrics (Prometheus) and health endpoints.
+Version **0.10.0** (see the [changelog](CHANGELOG.md)): the core, the Horse middlewares, OpenAPI, an MCP
+server (protocol 2026-07-28), W3C trace context, metrics (Prometheus), health endpoints and
+spans exported to an OpenTelemetry collector (OTLP).
 Observability plan: [docs/observability-design.md](docs/observability-design.md). See [docs/plan.md](docs/plan.md).
 
 ## Contents
@@ -33,6 +34,8 @@ Observability plan: [docs/observability-design.md](docs/observability-design.md)
 | `PascalApi.Horse.OpenApi` (`src/horse`) | `TRouteDoc`: register and document a route in one call; `/swagger` UI and `/swagger/doc.json`, with the JWT/Bearer scheme taken from the auth middleware |
 | `PascalApi.Mcp` | MCP (2026-07-28): the documented routes as tools, and the JSON-RPC dispatcher |
 | `PascalApi.Horse.Mcp` (`src/horse`) | `TMcpEndpoint.Register('/mcp', ...)`: the MCP endpoint; tool calls go through the API's own middlewares |
+| `PascalApi.Tracing` | spans with a current span per thread, sampling, batch export on a thread of its own (unstable API until phase D of the observability plan) |
+| `PascalApi.Otlp` | OTLP/HTTP JSON for traces and `TOtlpHttpExporter`, configured by the standard `OTEL_*` variables |
 | `PascalApi.Horse.Observability` (`src/horse`) | `TMetricsMiddleware` (OpenTelemetry HTTP server metrics), `TMetricsEndpoint` (`/metrics`, Prometheus text), `THealthEndpoint` (`/health/live`, `/health/ready` with your checks) |
 | `PascalApi.Version` | `PASCALAPI_VERSION`, for compile-time checks |
 
@@ -51,6 +54,8 @@ THorse.Get('/cities', GetCities);   // raise ENotFoundException / EValidationExc
 TMetricsEndpoint.Register('/metrics');                  // Prometheus scrape
 THealthEndpoint.AddCheck('database', LChecks.Database); // a function: Boolean (method on FPC)
 THealthEndpoint.Register('/health');                    // /health/live, /health/ready (200 or 503)
+TTracing.Start(TTracingOptions.FromEnvironment('cities-api', '1.0.0'),
+  TOtlpHttpExporter.FromEnvironment);                   // spans to an OpenTelemetry collector
 THorse.Listen(9000);
 ```
 

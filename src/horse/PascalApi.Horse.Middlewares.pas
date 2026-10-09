@@ -92,6 +92,14 @@ type
   ///   call made by the handler should send (tracestate too, when forwarded).
   /// A handler reads them as AReq.Headers['X-Request-Id'] and
   /// AReq.Headers['traceparent'] (e.g. for its own FileLog lines).
+  ///
+  /// It opens the request's server span (PascalApi.Tracing) with those ids,
+  /// the current span while the handler runs, so TTracing.StartSpan in the
+  /// handler makes a child of it. When TTracing is started, a new trace is
+  /// sampled by its ratio (the traceparent's flag says so) and the span is
+  /// exported with the HTTP semantic-convention attributes; named
+  /// '<method> <route>' ('<method>' when no route matched), status error
+  /// for a 5xx.
   TLoggerMiddleware = class
   public
     class function New: THorseCallback; overload; static;
@@ -157,7 +165,8 @@ uses
   PascalCommon.Threading,
   PascalApi.Jwt,
   PascalApi.RateLimitState,
-  PascalApi.Text;
+  PascalApi.Text,
+  PascalApi.Tracing;
 
 type
   TStringArray = array of string;
@@ -318,9 +327,10 @@ const
 procedure LoggerHandler(AReq: THorseRequest; ARes: THorseResponse; ANext: TNextProc);
 var
   LTrace: TRequestTrace;
-  LLine, LIp: string;
+  LLine, LIp, LRoute, LMethod: string;
   LStart: UInt64;
   LHeaders: THorseList;
+  LSpan: ISpan;
 begin
   // When no route matches, Horse 3.3.12 runs the router again with '/*'
   // (Horse.Core.RouterTree, DoExecuteInternal), so global middlewares run
@@ -335,6 +345,9 @@ begin
   LHeaders.Add(LOGGED_KEY, '1');
   LTrace := ResolveRequestTrace(AReq.Headers['traceparent'], AReq.Headers['tracestate'],
     AReq.Headers['X-Request-Id']);
+  // A new trace: the ratio decides (a parent's flag is kept as it came).
+  if (LTrace.ParentSpanId = '') and TTracing.Enabled then
+    LTrace.Sampled := TTracing.ShouldSample(LTrace.TraceId);
   // Set before Next, so they are there even when the handler raises. The
   // dictionary ignores case: these replace the incoming headers.
   LHeaders.AddOrSetValue('X-Request-Id', LTrace.TraceId);
@@ -344,11 +357,35 @@ begin
   else
     LHeaders.Remove('tracestate');
   ARes.AddHeader('X-Request-Id', LTrace.TraceId);
+  LMethod := MetricMethod(AReq.Method);
+  if LMethod = '_OTHER' then
+    LMethod := 'HTTP'; // the span name the semantic conventions give an unknown method
+  LSpan := TTracing.StartSpanWith(LTrace.TraceId, LTrace.SpanId, LTrace.ParentSpanId,
+    LTrace.TraceState, LTrace.Sampled, LMethod, skServer);
   LStart := PcTickMs;
   try
     ANext();
   finally
     LIp := ClientIp(AReq.Headers['X-Forwarded-For'], RemoteAddrOf(AReq), '');
+    LRoute := MetricRoute(AReq.MatchedRoute, AReq.PathInfo);
+    if LRoute <> '' then
+    begin
+      LSpan.SetName(LMethod + ' ' + LRoute);
+      LSpan.SetAttribute('http.route', LRoute);
+    end;
+    LSpan.SetAttribute('http.request.method', MetricMethod(AReq.Method));
+    if MetricMethod(AReq.Method) = '_OTHER' then
+      LSpan.SetAttribute('http.request.method_original', AReq.Method);
+    LSpan.SetAttribute('url.path', AReq.PathInfo);
+    LSpan.SetAttribute('url.scheme', 'http');
+    LSpan.SetIntAttribute('http.response.status_code', ARes.Status);
+    if LIp <> '' then
+      LSpan.SetAttribute('client.address', LIp);
+    if AReq.Headers['User-Agent'] <> '' then
+      LSpan.SetAttribute('user_agent.original', AReq.Headers['User-Agent']);
+    if ARes.Status >= 500 then
+      LSpan.SetStatus(ssError);
+    LSpan.Finish;
     if GLogFormat = alfJson then
       LLine := AccessLogJson(TClock.Now, AReq.Method, AReq.PathInfo, ARes.Status,
         Int64(PcTickMs - LStart), LIp, ResponseBytes(ARes), QueryText(AReq),

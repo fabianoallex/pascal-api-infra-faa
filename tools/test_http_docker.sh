@@ -8,6 +8,11 @@
 # curl, libsqlite3-0, openapi-spec-validator, the MCP Python SDK (mcp 2.0.0,
 # for tools/mcp_client_check.py) and Prometheus' promtool (2.53.0, for the
 # /metrics output); tools/ci-test.sh builds one.
+#
+# Spans: an OpenTelemetry Collector (OTEL_COLLECTOR_IMAGE, contrib 0.111.0)
+# runs next to it on a Docker network of its own; both samples export to it
+# (OTEL_EXPORTER_OTLP_ENDPOINT), it writes what it accepts to a volume, and
+# tools/otlp_check.py checks that after both samples ran.
 set -e
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 IMAGE="${FPC_IMAGE:-pascalapi-fpc322}"
@@ -19,7 +24,20 @@ for D in pascal-common-faa pascal-jsonmapper-faa pascal-db-faa horse; do
   [ -d "external/$D/src" ] || { echo "external/$D is empty: git submodule update --init"; exit 1; }
 done
 
-MSYS_NO_PATHCONV=1 docker run --rm -v "$MOUNT:/src:ro" "$IMAGE" sh -c '
+COLLECTOR_IMAGE="${OTEL_COLLECTOR_IMAGE:-otel/opentelemetry-collector-contrib:0.111.0}"
+NAME="pascalapi-otel-$$"
+cleanup() {
+  docker rm -f "$NAME" >/dev/null 2>&1 || true
+  docker network rm "$NAME" >/dev/null 2>&1 || true
+  docker volume rm "$NAME" >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+docker network create "$NAME" >/dev/null
+docker volume create "$NAME" >/dev/null
+# As root: the file exporter writes to the volume's root, which root owns.
+MSYS_NO_PATHCONV=1 docker run -d --name "$NAME" --network "$NAME" --user 0   -v "$NAME:/otel" -v "$MOUNT:/src:ro" "$COLLECTOR_IMAGE" --config /src/tools/otelcol.yaml >/dev/null
+
+MSYS_NO_PATHCONV=1 docker run --rm --network "$NAME" -v "$NAME:/otel:ro" -v "$MOUNT:/src:ro"   -e OTEL_EXPORTER_OTLP_ENDPOINT="http://$NAME:4318" -e OTEL_BSP_SCHEDULE_DELAY=200   "$IMAGE" sh -c '
   set -e
   mkdir -p /t/uApiSample /t/uDbApiSample && cp -r /src/src /src/samples /src/tools /src/external /t/
   E=/t/external
@@ -49,12 +67,18 @@ MSYS_NO_PATHCONV=1 docker run --rm -v "$MOUNT:/src:ro" "$IMAGE" sh -c '
     if [ $RC -eq 0 ]; then
       python3 /t/tools/mcp_client_check.py $6 http://127.0.0.1:$3 || RC=$?
     fi
+    # The last spans: the exporter sends every 200 ms.
+    sleep 1
     kill $PID 2>/dev/null || true
+    if grep -q "span export failed" /t/server-$2.log; then
+      grep "span export failed" /t/server-$2.log | head -3; RC=1
+    fi
     [ $RC -eq 0 ] || { echo "--- server log"; tail -40 /t/server-$2.log; exit $RC; }
   }
   echo "-- samples/01-api"
   run 01-api ApiSample 9310 http_scenarios.sh "" 01
   echo "-- samples/02-db"
   run 02-db DbApiSample 9330 http_scenarios_db.sh --reset 02
-  RC=0
-  exit $RC'
+  echo "-- spans received by the collector"
+  sleep 1
+  python3 /t/tools/otlp_check.py /otel/traces.json'

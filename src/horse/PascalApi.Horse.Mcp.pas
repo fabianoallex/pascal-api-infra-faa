@@ -20,8 +20,10 @@
   on FPC, THTTPClient on Delphi), so it goes through every middleware as a
   direct call would: the incoming Authorization header, the caller's
   address (as X-Forwarded-For) and the trace context (traceparent and
-  tracestate, as TLoggerMiddleware left them: the tool call's request is a
-  child of the MCP request's span, in the same trace) are passed on. The endpoint is a route like
+  tracestate) are passed on. With TLoggerMiddleware in use, each call is a
+  client span (PascalApi.Tracing) under the MCP request's server span, and
+  the call's traceparent names it: MCP request -> tool call -> the route's
+  own server span, one trace. The endpoint is a route like
   any other: behind TJwtMiddleware unless the application excludes it. The
   provider must serve requests concurrently (Horse's are threaded), since
   the call waits for the API while the MCP request is open.
@@ -48,6 +50,8 @@ type
   private
     FBaseUrl: string;
     FTimeoutMs: Integer;
+    function Send(const AMethod, APathAndQuery, ABody: string; const AForward: TMcpForward;
+      out AStatus: Integer): string;
   public
     constructor Create(const ABaseUrl: string; ATimeoutMs: Integer = MCP_HTTP_TIMEOUT_MS);
     function Execute(const AMethod, APathAndQuery, ABody: string; const AForward: TMcpForward;
@@ -81,6 +85,7 @@ uses
   {$ENDIF}
   PascalApi.Text,
   PascalApi.Http,
+  PascalApi.Tracing,
   PascalApi.OpenApi,
   PascalApi.Horse.Middlewares,
   PascalApi.Horse.OpenApi;
@@ -133,7 +138,7 @@ end;
 
 {$IFDEF FPC}
 
-function TMcpHttpExecutor.Execute(const AMethod, APathAndQuery, ABody: string;
+function TMcpHttpExecutor.Send(const AMethod, APathAndQuery, ABody: string;
   const AForward: TMcpForward; out AStatus: Integer): string;
 var
   LClient: TFPHTTPClient;
@@ -177,7 +182,7 @@ end;
 
 {$ELSE}
 
-function TMcpHttpExecutor.Execute(const AMethod, APathAndQuery, ABody: string;
+function TMcpHttpExecutor.Send(const AMethod, APathAndQuery, ABody: string;
   const AForward: TMcpForward; out AStatus: Integer): string;
 var
   LClient: THTTPClient;
@@ -220,6 +225,41 @@ begin
 end;
 
 {$ENDIF}
+
+function TMcpHttpExecutor.Execute(const AMethod, APathAndQuery, ABody: string;
+  const AForward: TMcpForward; out AStatus: Integer): string;
+var
+  LSpan: ISpan;
+  LForward: TMcpForward;
+begin
+  // No current span (no TLoggerMiddleware): pass the caller's context on.
+  if TTracing.Current = nil then
+    Exit(Send(AMethod, APathAndQuery, ABody, AForward, AStatus));
+  LSpan := TTracing.StartSpan(AMethod, skClient);
+  try
+    LSpan.SetAttribute('http.request.method', MetricMethod(AMethod));
+    LSpan.SetAttribute('url.full', FBaseUrl + APathAndQuery);
+    LForward := AForward;
+    LForward.TraceParent := LSpan.TraceParent;
+    LForward.TraceState := LSpan.TraceState;
+    try
+      Result := Send(AMethod, APathAndQuery, ABody, LForward, AStatus);
+    except
+      on E: Exception do
+      begin
+        LSpan.SetAttribute('error.type', E.ClassName);
+        LSpan.SetStatus(ssError, E.Message);
+        raise;
+      end;
+    end;
+    LSpan.SetIntAttribute('http.response.status_code', AStatus);
+    // A client span is an error from 400 on (the semantic conventions).
+    if AStatus >= 400 then
+      LSpan.SetStatus(ssError);
+  finally
+    LSpan.Finish;
+  end;
+end;
 
 { Handlers }
 

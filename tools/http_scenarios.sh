@@ -105,7 +105,9 @@ body_has "\"traceparent\":\"00-$TRACE_ID-" "trace: handler's traceparent keeps t
 body_lacks "$PARENT_ID" "trace: handler's traceparent is a new span, not the caller's"
 body_has '-01"' "trace: sampled flag kept"
 body_has '"tracestate":"vendor=1"' "trace: tracestate passed on"
-req GET /trace "" -H "$AUTH" -H "traceparent: 00-$TRACE_ID-$PARENT_ID-00"
+# Its own trace id: tools/otlp_check.py checks that this one was never exported.
+NOT_SAMPLED_ID=5bf92f3577b34da6a3ce929d0e0e4736
+req GET /trace "" -H "$AUTH" -H "traceparent: 00-$NOT_SAMPLED_ID-$PARENT_ID-00"
 body_has '-00"' "trace: not-sampled flag kept"
 req GET /trace "" -H "$AUTH" -H 'traceparent: garbage' -H 'tracestate: vendor=1'
 body_has '"tracestate":""' "trace: tracestate dropped with an invalid traceparent"

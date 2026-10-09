@@ -3,7 +3,8 @@
 Status: **approved (2026-10-09)**. Decisions 1, 2 and 3 taken with the user; 4, 5 and 6 as
 recommended (user, 2026-10-09). **Phase A done** (2026-10-09): part 1 in pascal-common-faa 1.5.0
 (`PascalCommon.TraceContext`), part 2 here (0.8.0; see "Phase A: what was done"). **Phase B done** (2026-10-09, 0.9.0): pascal-common-faa 1.6.0 (`PascalCommon.Metrics`) and
-`PascalApi.Horse.Observability` here (see "Phase B: what was done"). Next: phase C.
+`PascalApi.Horse.Observability` here (see "Phase B: what was done"). **Phase C done** (2026-10-09,
+0.10.0; see "Phase C: what was done"). Next: phase D.
 
 ## Goal
 
@@ -187,9 +188,8 @@ the message headers), using the contracts moved to pascal-common-faa.
 - **Timestamps.** OTLP wants Unix nanoseconds in UTC. On FPC/Linux `Now` is UTC (measured for
   JWT); on Delphi/Windows it is local time and must be converted. Durations with `PcTickUs`,
   never `TClock`.
-- **fphttpclient in the core package.** Today only `src/horse` uses an HTTP client. If the OTLP
-  sender goes into `src/`, check that the `.lpk` builds with it (fcl-web) on Windows and in the
-  Linux image.
+- **fphttpclient in the core package.** Settled in phase C: `PascalApi.Otlp` uses it and the
+  `.lpk` builds unchanged on Windows and in the Linux image.
 - **Overhead.** Per request: one id, one histogram observation, one span object. Measure with
   the sample under load before and after, and keep the exporter off the request thread.
 - **One configuration per process.** It fits: one tracer, one registry, one exporter per
@@ -222,6 +222,32 @@ the message headers), using the contracts moved to pascal-common-faa.
 - Not checked by a script: the error line's `trace_id=` and the JSON line are only in the
   samples' `server.log` (read by hand: correct). The scenario scripts don't read the server's
   output, because on Delphi the user starts the sample by hand.
+
+## Phase C: what was done (2026-10-09)
+
+- `PascalApi.Tracing` (unstable): `ISpan`, `TTracing` (`StartSpan`, `StartSpanWith`,
+  `Current`, `ShouldSample`, `Start`/`Shutdown`/`FlushNow`), a batch processor on a `TThread`
+  subclass with a bounded queue, `TTracingOptions.FromEnvironment` (decision 6: the `OTEL_*`
+  names). Sampling as decision 5: parent-based, ratio for new traces (TraceIdRatioBased on the
+  last 16 hex digits), 1.0 by default.
+- `PascalApi.Otlp`: the OTLP/HTTP JSON body (pure, byte-for-byte tests) and
+  `TOtlpHttpExporter`. The HTTP client is in the core package after all (`fphttpclient` built
+  in the `.lpk` without any change: the risk listed below did not happen).
+- `TLoggerMiddleware` opens the server span with the ids of phase A (one source of truth for
+  trace id, span id and parent); `TMcpHttpExecutor` opens a client span per tool call.
+- Time: `UnixNanoOfLocal` (local `TClock.Now` to UTC with `DateTimeToUnix(.., False)`,
+  milliseconds), durations from `PcTickUs`. Measured: spans from FPC Windows on a machine at
+  UTC-03 arrived within an hour of the collector's clock (a local time taken for UTC would be 3
+  hours off), and from FPC Linux in CI.
+- Verified: unit suite 230 tests, 0 leaks, FPC Win64 and Linux; HTTP 146 + 61 checks; an
+  OpenTelemetry Collector (contrib 0.111.0) accepted every batch from both samples on FPC
+  Windows (local, `-p 4318`) and FPC Linux (CI), and `tools/otlp_check.py` passed: server
+  span child of the incoming `traceparent`, the handler's child span, the MCP chain (server ->
+  client -> server), error status for a 5xx and not for a 404, a not-sampled trace never
+  exported, route templates only. Delphi 12 Win32 and Win64: the same tests and checks pass,
+  and the collector accepted every batch from `THTTPClient` (125 spans each, checked).
+- Not done: metrics over OTLP (Prometheus covers them; `PcMetrics.Snapshot` is there when
+  wanted), span events (an exception as an `exception` event), logs over OTLP.
 
 ## Phase B: what was done (2026-10-09)
 

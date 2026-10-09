@@ -32,7 +32,8 @@
   checks all of this over HTTP.
 
   The access log is JSON, one object per request (sample 01 keeps the text
-  line), with the trace id the response carries as X-Request-Id. *)
+  line), with the trace id the response carries as X-Request-Id. Spans go to
+  an OpenTelemetry collector when OTEL_EXPORTER_OTLP_ENDPOINT is set. *)
 
 {$IFDEF FPC}{$MODE DELPHI}{$H+}{$ENDIF}
 {$APPTYPE CONSOLE}
@@ -65,6 +66,8 @@ uses
   PascalApi.Horse.OpenApi,
   PascalApi.Horse.Mcp,
   PascalApi.Horse.Observability,
+  PascalApi.Tracing,
+  PascalApi.Otlp,
   DbApiSample.Cities in 'DbApiSample.Cities.pas';
 
 var
@@ -205,6 +208,9 @@ begin
     end;
     GCities := TCityRepository.Create(GFactory);
 
+    if TAppConfig.Get('OTEL_EXPORTER_OTLP_ENDPOINT', '') <> '' then
+      TTracing.Start(TTracingOptions.FromEnvironment('cities-api', '1.0.0'),
+        TOtlpHttpExporter.FromEnvironment, GLog.Error);
     TErrorHandlerMiddleware.Register(GLog.Error);
     THorse.Use(TLoggerMiddleware.New(nil, alfJson));
     THorse.Use(TMetricsMiddleware.New);

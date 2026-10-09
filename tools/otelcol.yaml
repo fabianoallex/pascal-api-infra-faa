@@ -1,0 +1,25 @@
+# OpenTelemetry Collector for tools/test_http_docker.sh: receives the
+# samples' spans over OTLP/HTTP (JSON) and writes them, one export request
+# per line, to /otel/traces.json, which tools/otlp_check.py reads. The
+# collector is the reference implementation here: a body it can't decode
+# is answered 400, the sample logs "span export failed", and the check
+# finds nothing.
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+
+exporters:
+  file:
+    path: /otel/traces.json
+    flush_interval: 100ms
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      exporters: [file]
+  telemetry:
+    logs:
+      level: warn
