@@ -71,8 +71,8 @@
       <Filename Value="DbApiSample"/>
     </Target>
     <SearchPaths>
-      <IncludeFiles Value="..\..\src;..\..\.horse-src"/>
-      <OtherUnitFiles Value="..\..\src\horse;..\..\.horse-src"/>
+      <IncludeFiles Value="..\..\src;..\..\external\horse\src"/>
+      <OtherUnitFiles Value="..\..\src\horse;..\..\external\horse\src"/>
       <UnitOutputDirectory Value="lib\$(TargetCPU)-$(TargetOS)"/>
     </SearchPaths>
     <Parsing>

@@ -6,6 +6,13 @@ may change the API; each such change is listed here.
 
 ## [Unreleased]
 
+### Changed
+
+- Tested with Horse 3.3.12 (was 3.3.2). Horse 3.3.3 fixed the `const`/`constref` mismatch that
+  kept 3.3.2 from compiling on FPC 3.2.2 for Windows, so `tools/prepare_horse.sh` and its patched
+  copy (`.horse-src`) are gone: every target uses Horse unchanged. Applications on FPC for
+  Windows need Horse 3.3.3 or later.
+
 ## [0.4.0] - 2026-10-08
 
 ### Added

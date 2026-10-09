@@ -17,7 +17,6 @@ LAZBUILD="${LAZBUILD:-lazbuild}"
 command -v "$LAZBUILD" >/dev/null 2>&1 || LAZBUILD=/c/lazarus4.0/lazbuild.exe
 
 cd "$ROOT"
-sh tools/prepare_horse.sh
 
 # build DIR LPI: lazbuild to DIR/build.log; never pipe lazbuild into head
 # (it hangs when the pipe closes).

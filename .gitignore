@@ -33,8 +33,6 @@ packagefiles.xml
 build.log
 run.log
 
-# Horse copy for FPC builds (tools/prepare_horse.sh)
-.horse-src/
 samples/01-api/ApiSample
 server.log
 

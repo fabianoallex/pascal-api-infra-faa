@@ -4,8 +4,7 @@
 # middlewares; tools/http_scenarios_db.sh, SQLite through pascal-db-faa's
 # SQLdb adapter, which loads Debian's libsqlite3.so.0).
 #
-# Horse is used unchanged on Linux (the FPC/Windows workaround of
-# tools/prepare_horse.sh isn't needed there). The image needs FPC 3.2.2 and
+# Horse is used unchanged (external/horse, 3.3.12). The image needs FPC 3.2.2 and
 # curl, libsqlite3-0 and openapi-spec-validator (tools/ci-test.sh builds one).
 set -e
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

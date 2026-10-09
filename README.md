@@ -71,8 +71,8 @@ Add the library's `src` and its dependencies to the project, each from **your** 
 - Lazarus: require `packages/pascal_api_infra_faa.lpk` (it requires `pascal_common_faa`,
   `pascaljsonmapper_pkg` and `pascal_db_faa`); for DTO JSON, also `pascal_common_faa_jsonmapper`.
   The middlewares are not in the package (Horse has none): add `src/horse` and Horse's `src` to
-  the project's search path. On **Windows**, FPC 3.2.2 needs a one-line workaround in Horse
-  3.3.2's `Horse.FPC.inc`; `tools/prepare_horse.sh` shows it.
+  the project's search path. Use Horse 3.3.3 or later: 3.3.2 doesn't compile on FPC 3.2.2 for
+  Windows (fixed upstream in 3.3.3). Tested with 3.3.12.
 
 Console and service programs on FPC call `SetMultiByteConversionCodePage(CP_UTF8)` at startup
 (LCL programs already run in UTF-8); on Unix, put `cthreads` and `cwstring` first in the

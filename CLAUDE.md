@@ -53,8 +53,8 @@ all (measured, skill `references/rtti-gotchas.md`).
 ## Dependencies
 
 `external/` holds the dependencies as git submodules, pinned: pascal-common-faa `v1.4.0`,
-pascal-jsonmapper-faa `v0.3.0`, pascal-db-faa `v0.12.1`, Horse `72cc45f` (tag 3.3.2, the commit
-pascal-dfe-broker and delphi-api-starter use). They are **only for this
+pascal-jsonmapper-faa `v0.3.0`, pascal-db-faa `v0.12.1`, Horse `3.3.12` (`fda6fed`; until 0.4.0
+this repository used 3.3.2, `72cc45f`, as pascal-dfe-broker and delphi-api-starter still do). They are **only for this
 repository's tests**: a consumer provides its own single copy of each (submodule + search path),
 never `pascal-api-infra-faa/external/...`. Clone with `git submodule update --init` (no
 `--recursive`: pascal-db-faa's own `external/` is not needed).
@@ -88,10 +88,11 @@ The core package (`src/`) doesn't use Horse; only `src/horse/PascalApi.Horse.Mid
 and it is **not** in the `.lpk` (Horse has no Lazarus package): a consumer adds `src/horse` and
 its own Horse `src` to the search path.
 
-- **FPC on Windows needs a one-line workaround in Horse** (`const` vs `constref` in
-  `Horse.FPC.inc`, found in pascal-dfe-broker). `sh tools/prepare_horse.sh` copies
-  `external/horse/src` to `.horse-src` (git-ignored) and applies it there; the submodule is never
-  edited. `samples/01-api/ApiSample.lpi` uses `.horse-src`. Linux and Delphi use Horse unchanged.
+- **Horse 3.3.3 or later on FPC for Windows.** Horse 3.3.2 picked `const` for its generic
+  comparer on Win64, where FPC 3.2.2's `rtl-generics` declares `constref`, and didn't compile
+  ("No matching implementation for interface method Equals(constref ...)"); fixed upstream in
+  3.3.3 (commit `7a9a9cb`, issue #542). Until 0.4.0 this repository patched a copy of Horse's
+  `src` (`tools/prepare_horse.sh`, removed); with 3.3.12 every target uses Horse unchanged.
 - **Horse's FPC callbacks are plain procedures** (`Horse.Callback.pas`), so a middleware can't
   capture its settings: each one keeps them in the unit, **one configuration per process**
   (accepted by the user, 2026-10-08). `THorse.OnError` has the same shape on both compilers.

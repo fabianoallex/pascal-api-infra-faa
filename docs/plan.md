@@ -73,7 +73,7 @@ Error handler, CORS, request log, Bearer auth, JWT (HS256), rate limit, on Horse
   `TLogProc`, `TRateLimitKeyExtractor`) follow `PASCALAPI_FUNCREFS`.
 - Verified: unit suite 156 tests, 0 leaks, on FPC 3.2.2 Win64 and Linux and Delphi 12 CE Win32 and
   Win64; `samples/01-api` over HTTP, 65 curl checks (`tools/http_scenarios.sh`), on FPC Windows
-  (Horse with the `tools/prepare_horse.sh` workaround), FPC Linux (Horse unchanged) and Delphi
+  (Horse with the then-needed `tools/prepare_horse.sh` workaround; removed with Horse 3.3.12), FPC Linux and Delphi
   Win32/Win64.
 - The Delphi HTTP run found what the unit tests couldn't: `Res.Send(string)` broke accented JSON
   on Delphi (4 checks); `TJsonSend.Send` (UTF-8 bytes) fixed it. Also a Delphi-only compile error
@@ -85,7 +85,8 @@ Error handler, CORS, request log, Bearer auth, JWT (HS256), rate limit, on Horse
   falling back to `RawWebRequest.RemoteAddr`. Probably affects the origin's IP rate limit too.
 - Differences from the origin: excluded path prefixes match whole segments; JSON body errors are
   400; messages are replaceable (`TApiMessages`, English default, Portuguese available).
-- Still open: the PR to Horse for the `constref` workaround.
+- The `constref` workaround: no PR needed, Horse fixed it in 3.3.3 (`7a9a9cb`, issue #542,
+  2026-08-19); this repository moved to Horse 3.3.12 and dropped it.
 
 ### Sample with a real database — done (2026-10-08)
 
