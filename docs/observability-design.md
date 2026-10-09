@@ -1,8 +1,8 @@
 # Phase 6 design: observability (trace context, metrics, OpenTelemetry)
 
 Status: **approved (2026-10-09)**. Decisions 1, 2 and 3 taken with the user; 4, 5 and 6 as
-recommended (user, 2026-10-09). Nothing is implemented yet; the first step is in "Next step"
-at the end.
+recommended (user, 2026-10-09). **Phase A done** (2026-10-09): part 1 in pascal-common-faa 1.5.0
+(`PascalCommon.TraceContext`), part 2 here (0.8.0; see "Phase A: what was done"). Next: phase B.
 
 ## Goal
 
@@ -83,8 +83,8 @@ the exported trace are the same, and a support ticket with the response's `X-Req
 the trace directly. The trace id exists for every request, sampled or not.
 
 It is a **breaking change** (8 hex digits become 32): released as **0.8.0**, with a CHANGELOG
-entry. Still pre-1.0, the cheapest moment to do it. `NewRequestId` is removed (or kept returning
-a new trace id; decided during implementation, recorded here).
+entry. Still pre-1.0, the cheapest moment to do it. `NewRequestId` is removed: the id comes from
+`ResolveRequestTrace`.
 
 Where the trace id of a request comes from, in order:
 
@@ -201,7 +201,28 @@ the message headers), using the contracts moved to pascal-common-faa.
 - gRPC/protobuf OTLP.
 - Automatic instrumentation of outgoing HTTP calls the application makes on its own.
 
-## Next step: phase A, part 1, in pascal-common-faa
+## Phase A: what was done (2026-10-09)
+
+- pascal-common-faa 1.5.0: `PascalCommon.TraceContext` (ids from the OS random source,
+  `BCryptGenRandom` / `/dev/urandom`, not `CreateGUID`; W3C parsing rules).
+- Here: `ResolveRequestTrace` / `TRequestTrace`, `AccessLogJson`, `WithTraceId`
+  (`PascalApi.Http`, pure, 10 tests); `TLoggerMiddleware` sets `X-Request-Id` and `traceparent`
+  (the request's own span) on the request, `X-Request-Id` on the response, and takes
+  `alfText`/`alfJson`; the error handler's line ends with `trace_id=`; the MCP executor forwards
+  `traceparent`/`tracestate`. `samples/01-api` got `GET /trace`; `samples/02-db` logs JSON.
+- Verified: unit suite 204 tests, 0 leaks, on FPC 3.2.2 Win64 and Linux and Delphi 12 Win32 and
+  Win64; HTTP 122 + 56 checks on all four, and the MCP SDK on FPC Linux (CI).
+- **Found:** when no route matches, Horse 3.3.12 runs the router a second time with `/*`, so
+  global middlewares run twice for one request: the logger wrote two lines (the second a child
+  span of the first) and sent two `X-Request-Id` headers. The logger now marks the request and
+  runs once; `tools/http_scenarios.sh` checks one `X-Request-Id` on an unknown route (it fails
+  without the mark, checked). It was there before this phase, unnoticed: two lines with
+  different 8-digit ids looked like two requests.
+- Not checked by a script: the error line's `trace_id=` and the JSON line are only in the
+  samples' `server.log` (read by hand: correct). The scenario scripts don't read the server's
+  output, because on Delphi the user starts the sample by hand.
+
+## Phase A, part 1, in pascal-common-faa (the handoff, kept for the record)
 
 Done in a session opened in pascal-common-faa (its CLAUDE.md, hooks and test layout apply).
 A minor release (1.5.0), then this repository bumps the submodule and does part 2 (the

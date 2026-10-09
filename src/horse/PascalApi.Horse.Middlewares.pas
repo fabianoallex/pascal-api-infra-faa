@@ -6,7 +6,7 @@
   authentication, JWT and rate limiting.
 
     TErrorHandlerMiddleware.Register(LOnError);                 // before Listen
-    THorse.Use(TLoggerMiddleware.New);                           // first in the chain
+    THorse.Use(TLoggerMiddleware.New);                           // first in the chain; trace id
     THorse.Use(TCorsMiddleware.New('https://app.example.com'));
     THorse.Use(TRateLimitMiddleware.New(60, 60));
     THorse.Use(TJwtMiddleware.New(TAppConfig.Get('JWT_SECRET'), ['/health', '/auth/login']));
@@ -50,7 +50,8 @@ type
   /// the status of PascalApi.Http.MapException, through THorse.OnError (not
   /// a middleware in the chain: register it any time before Listen). AOnError
   /// gets the log line of the errors worth monitoring (500, 503, 422, lock
-  /// conflicts); client errors aren't passed to it.
+  /// conflicts), ending with " trace_id=<X-Request-Id>" when
+  /// TLoggerMiddleware is in use; client errors aren't passed to it.
   /// Sends AJson with AStatus as "application/json; charset=utf-8", as UTF-8
   /// bytes. Use it instead of Res.Send(string) for JSON: on Delphi,
   /// Send(string) goes through the web response's Content, which encodes by
@@ -79,15 +80,23 @@ type
     class function New(const AOptions: TCorsOptions): THorseCallback; overload; static;
   end;
 
-  /// One line per request (PascalApi.Http.AccessLogLine), written when the
-  /// request ends; to the console (SafeWriteln) unless AOnLog is given.
-  /// Also sets X-Request-Id on the request (for the handler's own logs) and
-  /// on the response. Use it first, so the time and status include
-  /// everything after it.
+  /// One line per request, written when the request ends: text
+  /// (PascalApi.Http.AccessLogLine) or JSON (AccessLogJson); to the console
+  /// (SafeWriteln) unless AOnLog is given. Use it first, so the time and
+  /// status include everything after it.
+  ///
+  /// It also resolves the request's trace context (ResolveRequestTrace) and
+  /// sets, before the handler runs:
+  /// - X-Request-Id on the request and the response: the trace id;
+  /// - traceparent on the request: this request's span, what an outgoing
+  ///   call made by the handler should send (tracestate too, when forwarded).
+  /// A handler reads them as AReq.Headers['X-Request-Id'] and
+  /// AReq.Headers['traceparent'] (e.g. for its own FileLog lines).
   TLoggerMiddleware = class
   public
     class function New: THorseCallback; overload; static;
     class function New(const AOnLog: TLogProc): THorseCallback; overload; static;
+    class function New(const AOnLog: TLogProc; AFormat: TAccessLogFormat): THorseCallback; overload; static;
   end;
 
   /// "Authorization: Bearer <token>", checked by AValidator; 401 otherwise.
@@ -142,6 +151,7 @@ implementation
 uses
   Generics.Collections,
   DateUtils,
+  Horse.Core.Param,
   PascalCommon.SafeLog,
   PascalCommon.SystemContext,
   PascalCommon.Threading,
@@ -156,6 +166,7 @@ var
   GOnError: TLogProc;
   GCorsOptions: TCorsOptions;
   GOnLog: TLogProc;
+  GLogFormat: TAccessLogFormat;
   GAuthValidator: TTokenValidator;
   GAuthExcluded: TStringArray;
   GJwtSecret: string;
@@ -217,7 +228,7 @@ var
 begin
   LError := MapException(AException, ARequest.Method, ARequest.PathInfo);
   if (LError.LogLine <> '') and Assigned(GOnError) then
-    GOnError(LError.LogLine);
+    GOnError(WithTraceId(LError.LogLine, ARequest.Headers['X-Request-Id']));
   SendError(AResponse, LError.Status, LError.Message);
 end;
 
@@ -298,22 +309,54 @@ begin
     Result := '';
 end;
 
+// Set on the request by the first pass of the logger. A header name can't
+// contain ':' (it ends the name in HTTP/1.1, and Horse strips HTTP/2
+// pseudo-headers), so no client can send it.
+const
+  LOGGED_KEY = ':pascalapi-logged';
+
 procedure LoggerHandler(AReq: THorseRequest; ARes: THorseResponse; ANext: TNextProc);
 var
-  LRequestId, LLine: string;
+  LTrace: TRequestTrace;
+  LLine, LIp: string;
   LStart: UInt64;
+  LHeaders: THorseList;
 begin
-  LRequestId := NewRequestId;
-  // Set before Next, so it is there even when the handler raises.
-  AReq.Headers.Dictionary.AddOrSetValue('X-Request-Id', LRequestId);
-  ARes.AddHeader('X-Request-Id', LRequestId);
+  // When no route matches, Horse 3.3.12 runs the router again with '/*'
+  // (Horse.Core.RouterTree, DoExecuteInternal), so global middlewares run
+  // twice for one request. Seen in samples/02-db's log: two lines for one
+  // GET /, the second a child span of the first. The first pass logs it.
+  LHeaders := AReq.Headers.Dictionary;
+  if LHeaders.ContainsKey(LOGGED_KEY) then
+  begin
+    ANext();
+    Exit;
+  end;
+  LHeaders.Add(LOGGED_KEY, '1');
+  LTrace := ResolveRequestTrace(AReq.Headers['traceparent'], AReq.Headers['tracestate'],
+    AReq.Headers['X-Request-Id']);
+  // Set before Next, so they are there even when the handler raises. The
+  // dictionary ignores case: these replace the incoming headers.
+  LHeaders.AddOrSetValue('X-Request-Id', LTrace.TraceId);
+  LHeaders.AddOrSetValue('traceparent', LTrace.TraceParent);
+  if LTrace.TraceState <> '' then
+    LHeaders.AddOrSetValue('tracestate', LTrace.TraceState)
+  else
+    LHeaders.Remove('tracestate');
+  ARes.AddHeader('X-Request-Id', LTrace.TraceId);
   LStart := PcTickMs;
   try
     ANext();
   finally
-    LLine := AccessLogLine(TClock.Now, AReq.Method, AReq.PathInfo, ARes.Status,
-      Int64(PcTickMs - LStart), ClientIp(AReq.Headers['X-Forwarded-For'], RemoteAddrOf(AReq), ''),
-      ResponseBytes(ARes), QueryText(AReq), AReq.Headers['User-Agent'], LRequestId);
+    LIp := ClientIp(AReq.Headers['X-Forwarded-For'], RemoteAddrOf(AReq), '');
+    if GLogFormat = alfJson then
+      LLine := AccessLogJson(TClock.Now, AReq.Method, AReq.PathInfo, ARes.Status,
+        Int64(PcTickMs - LStart), LIp, ResponseBytes(ARes), QueryText(AReq),
+        AReq.Headers['User-Agent'], LTrace)
+    else
+      LLine := AccessLogLine(TClock.Now, AReq.Method, AReq.PathInfo, ARes.Status,
+        Int64(PcTickMs - LStart), LIp, ResponseBytes(ARes), QueryText(AReq),
+        AReq.Headers['User-Agent'], LTrace.TraceId);
     if Assigned(GOnLog) then
       GOnLog(LLine)
     else
@@ -323,13 +366,18 @@ end;
 
 class function TLoggerMiddleware.New: THorseCallback;
 begin
-  GOnLog := nil;
-  Result := AsCallback(LoggerHandler);
+  Result := New(nil, alfText);
 end;
 
 class function TLoggerMiddleware.New(const AOnLog: TLogProc): THorseCallback;
 begin
+  Result := New(AOnLog, alfText);
+end;
+
+class function TLoggerMiddleware.New(const AOnLog: TLogProc; AFormat: TAccessLogFormat): THorseCallback;
+begin
   GOnLog := AOnLog;
+  GLogFormat := AFormat;
   Result := AsCallback(LoggerHandler);
 end;
 

@@ -16,6 +16,7 @@
     GET  /fail/server         an unexpected exception: 500
     GET  /fail/database       the database is down: 503
     GET  /limited             rate limited: 3 requests per minute per X-Client header
+    GET  /trace               the request's trace context, as the handler sees it
     GET  /swagger             public; Swagger UI, and /swagger/doc.json the OpenAPI document
     POST /mcp                 MCP (2026-07-28): the documented routes as tools; needs the
                               token, which each tool call passes on to the route
@@ -151,6 +152,28 @@ begin
   TJsonSend.Send(ARes, '{"ok":true}');
 end;
 
+// What TLoggerMiddleware left on the request: the trace id (X-Request-Id)
+// and this request's span (traceparent), what an outgoing call would send.
+procedure GetTrace(AReq: THorseRequest; ARes: THorseResponse; ANext: TNextProc);
+var
+  LWriter: TJsonWriter;
+begin
+  LWriter := TJsonWriter.Create;
+  try
+    LWriter.BeginObject;
+    LWriter.Name('requestId');
+    LWriter.WriteString(AReq.Headers['X-Request-Id']);
+    LWriter.Name('traceparent');
+    LWriter.WriteString(AReq.Headers['traceparent']);
+    LWriter.Name('tracestate');
+    LWriter.WriteString(AReq.Headers['tracestate']);
+    LWriter.EndObject;
+    TJsonSend.Send(ARes, LWriter.ToString);
+  finally
+    LWriter.Free;
+  end;
+end;
+
 { Rate limit key and error log: methods, the portable callback form }
 
 type
@@ -219,6 +242,9 @@ begin
   THorse.Use('/limited', TRateLimitMiddleware.New(GRateLimit));
   TRouteDoc.Get('/limited').Summary('3 requests a minute per X-Client').Tag('limits')
     .NoContent(200).Error(429).Register(GetLimited);
+  TRouteDoc.Get('/trace').Summary('The request''s trace context').Tag('trace')
+    .NoContent(200, '{"requestId": "...", "traceparent": "...", "tracestate": "..."}')
+    .Error(401).Register(GetTrace);
   TRouteDoc.Serve('/swagger', 'pascal-api-infra-faa sample 01', '1.0.0');
   // After every route: the tools are the operations documented so far.
   TMcpEndpoint.Register('/mcp', 'http://127.0.0.1:' + IntToStr(GPort), 'pascal-api-sample-01', '1.0.0');

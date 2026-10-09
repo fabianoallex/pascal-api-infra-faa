@@ -255,6 +255,8 @@ begin
   LHeaders.Name := ANameHeader;
   LForward.Authorization := 'Bearer abc';
   LForward.ForwardedFor := '10.0.0.7';
+  LForward.TraceParent := '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01';
+  LForward.TraceState := 'vendor=1';
   Result := FServer.HandlePost(ABody, LHeaders, LForward, FStatus);
 end;
 
@@ -444,6 +446,9 @@ begin
   Call('list_citie', '{}');
   TAssert.AssertEquals('Bearer abc', FFake.Forwarded.Authorization);
   TAssert.AssertEquals('10.0.0.7', FFake.Forwarded.ForwardedFor);
+  TAssert.AssertEquals('00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01',
+    FFake.Forwarded.TraceParent);
+  TAssert.AssertEquals('vendor=1', FFake.Forwarded.TraceState);
 end;
 
 procedure TMcpTests.Call_ApiError_IsError;

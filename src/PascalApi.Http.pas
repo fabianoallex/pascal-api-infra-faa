@@ -5,7 +5,8 @@
 (* The decisions behind the Horse middlewares, without Horse: which status
   and message an exception becomes, which CORS headers a request gets, what
   an Authorization header holds, which paths skip authentication, the
-  client's IP and the access log line.
+  client's IP, the request's trace context and the access log line (text or
+  JSON).
 
   Kept apart so they are tested without a server, on both compilers; the
   middlewares (the PascalApi.Horse units) only move values between Horse's request
@@ -23,7 +24,10 @@
     EJsonMapperError whose message carries a JSON path ('$...'). An
     EJsonMapperError without a path is a programming error (a DTO not
     registered) and stays 500.
-  - ETextEncodingException (PascalApi.Text) is 400, like EEncodingError. *)
+  - ETextEncodingException (PascalApi.Text) is 400, like EEncodingError.
+  - The request id is the W3C trace id (32 hex digits, 0.8.0), resolved by
+    ResolveRequestTrace from traceparent or a 32-digit X-Request-Id; the
+    origin made a new 8-digit id for every request. *)
 
 interface
 
@@ -116,6 +120,26 @@ type
 
   TBearerResult = (brOk, brMissing, brNotBearer, brEmpty);
 
+  TAccessLogFormat = (alfText, alfJson);
+
+  /// The trace context of one request (W3C Trace Context): its trace id,
+  /// which is also the X-Request-Id, and the span the server opens for it.
+  TRequestTrace = record
+    /// 32 lowercase hex digits.
+    TraceId: string;
+    /// 16 lowercase hex digits, new for each request: the server's span.
+    SpanId: string;
+    /// The caller's span, from a valid incoming traceparent; '' otherwise.
+    ParentSpanId: string;
+    /// The caller's decision when there is one; True for a new trace.
+    Sampled: Boolean;
+    /// The incoming tracestate to pass on; '' when not forwarded.
+    TraceState: string;
+    /// '00-<TraceId>-<SpanId>-<flags>': what an outgoing call made while
+    /// serving this request sends, so its span is a child of this one.
+    function TraceParent: string;
+  end;
+
 /// The response for an exception escaping a handler (see the mapping in the
 /// implementation). AMethod and APath only go into LogLine.
 function MapException(E: Exception; const AMethod, APath: string): TErrorResponse;
@@ -137,13 +161,36 @@ function PathMatchesAny(const APath: string; const APrefixes: array of string): 
 /// The first address of X-Forwarded-For, else ARemoteAddr, else ADefault.
 function ClientIp(const AForwardedFor, ARemoteAddr, ADefault: string): string;
 
-/// 8 hex digits, new for every call (MD5 of a fresh GUID).
-function NewRequestId: string;
+/// The trace context of a request, from its headers, in this order:
+/// 1. a valid traceparent: its trace id, its span as the parent, its
+///    sampled flag, and ATraceState passed on;
+/// 2. else an X-Request-Id of exactly 32 lowercase hex digits, not all
+///    zeros (nginx's $request_id has this shape): adopted as the trace id;
+/// 3. else a new trace id.
+/// Any other X-Request-Id is ignored: client text never reaches the logs.
+/// The span id is always new. Sampled is True unless a valid traceparent
+/// says otherwise (parent-based, every new trace sampled).
+function ResolveRequestTrace(const ATraceParent, ATraceState, ARequestId: string): TRequestTrace;
 
 /// [yyyy-mm-dd hh:nn:ss] METHOD /path STATUS Xms IP BYTES "QUERY" "USER-AGENT" REQUEST-ID
 /// Empty IP, bytes, query or user agent are written as "-".
 function AccessLogLine(ATime: TDateTime; const AMethod, APath: string; AStatus: Integer;
   AElapsedMs: Int64; const AIp, ABytes, AQuery, AUserAgent, ARequestId: string): string;
+
+/// The same request as one JSON object, for log collectors:
+/// {"time":"yyyy-mm-ddThh:nn:ss.zzz","trace_id":...,"span_id":...,
+///  "parent_span_id":...,"method":...,"path":...,"status":...,
+///  "duration_ms":...,"client_ip":...,"bytes":...,"query":...,"user_agent":...}
+/// ATime is written as given, without a zone (TClock.Now, as the text
+/// line). Empty values are left out; bytes is a number when it is one.
+function AccessLogJson(ATime: TDateTime; const AMethod, APath: string; AStatus: Integer;
+  AElapsedMs: Int64; const AIp, ABytes, AQuery, AUserAgent: string;
+  const ATrace: TRequestTrace): string;
+
+/// ALine + ' trace_id=<ATraceId>'; ALine unchanged when ATraceId is ''.
+/// For the error handler's line, so it can be found from the response's
+/// X-Request-Id.
+function WithTraceId(const ALine, ATraceId: string): string;
 
 /// Seconds until AResetUnix, never below 0.
 function RetryAfterSeconds(AResetUnix, ANowUnix: Int64): Int64;
@@ -153,6 +200,7 @@ implementation
 uses
   PascalJsonMapper.Json,
   PascalJsonMapper.Mapper,
+  PascalCommon.TraceContext,
   PascalDb.Interfaces,
   PascalDb.Version,
   PascalApi.OrderBy,
@@ -434,12 +482,34 @@ begin
     Result := ADefault;
 end;
 
-function NewRequestId: string;
-var
-  LGuid: TGUID;
+function TRequestTrace.TraceParent: string;
 begin
-  CreateGUID(LGuid);
-  Result := Copy(PaMd5Hex(PaStringToUtf8Bytes(GUIDToString(LGuid))), 1, 8);
+  Result := PcFormatTraceParent(TraceId, SpanId, Sampled);
+end;
+
+function ResolveRequestTrace(const ATraceParent, ATraceState, ARequestId: string): TRequestTrace;
+var
+  LParent: TPcTraceParent;
+  LValid: Boolean;
+begin
+  LValid := PcTryParseTraceParent(ATraceParent, LParent);
+  if LValid then
+  begin
+    Result.TraceId := LParent.TraceId;
+    Result.ParentSpanId := LParent.ParentId;
+    Result.Sampled := LParent.Sampled;
+  end
+  else
+  begin
+    if PcIsValidTraceId(ARequestId) then
+      Result.TraceId := ARequestId
+    else
+      Result.TraceId := PcNewTraceId;
+    Result.ParentSpanId := '';
+    Result.Sampled := True;
+  end;
+  Result.SpanId := PcNewSpanId;
+  Result.TraceState := PcResolveTraceState(LValid, ATraceState);
 end;
 
 function DashIfEmpty(const AValue: string): string;
@@ -457,6 +527,61 @@ begin
     [FormatDateTime('yyyy-mm-dd hh:nn:ss', ATime), AMethod, APath, AStatus, AElapsedMs,
      DashIfEmpty(AIp), DashIfEmpty(ABytes), DashIfEmpty(AQuery), DashIfEmpty(AUserAgent),
      ARequestId]);
+end;
+
+function AccessLogJson(ATime: TDateTime; const AMethod, APath: string; AStatus: Integer;
+  AElapsedMs: Int64; const AIp, ABytes, AQuery, AUserAgent: string;
+  const ATrace: TRequestTrace): string;
+var
+  LWriter: TJsonWriter;
+  LBytes: Int64;
+
+  procedure Text(const AName, AValue: string);
+  begin
+    if AValue <> '' then
+    begin
+      LWriter.Name(AName);
+      LWriter.WriteString(AValue);
+    end;
+  end;
+
+begin
+  LWriter := TJsonWriter.Create;
+  try
+    LWriter.BeginObject;
+    Text('time', FormatDateTime('yyyy-mm-dd"T"hh:nn:ss.zzz', ATime));
+    Text('trace_id', ATrace.TraceId);
+    Text('span_id', ATrace.SpanId);
+    Text('parent_span_id', ATrace.ParentSpanId);
+    Text('method', AMethod);
+    Text('path', APath);
+    LWriter.Name('status');
+    LWriter.WriteInt64(AStatus);
+    LWriter.Name('duration_ms');
+    LWriter.WriteInt64(AElapsedMs);
+    Text('client_ip', AIp);
+    if TryStrToInt64(ABytes, LBytes) then
+    begin
+      LWriter.Name('bytes');
+      LWriter.WriteInt64(LBytes);
+    end
+    else
+      Text('bytes', ABytes);
+    Text('query', AQuery);
+    Text('user_agent', AUserAgent);
+    LWriter.EndObject;
+    Result := LWriter.ToString;
+  finally
+    LWriter.Free;
+  end;
+end;
+
+function WithTraceId(const ALine, ATraceId: string): string;
+begin
+  if ATraceId = '' then
+    Result := ALine
+  else
+    Result := ALine + ' trace_id=' + ATraceId;
 end;
 
 function RetryAfterSeconds(AResetUnix, ANowUnix: Int64): Int64;

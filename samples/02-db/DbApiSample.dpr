@@ -26,7 +26,10 @@
 
   On startup the migrations run (TDBMigrationEngine): SCHEMA_MIGRATIONS,
   CITIES and seed rows; a second start applies nothing. tools/http_scenarios_db.sh
-  checks all of this over HTTP. *)
+  checks all of this over HTTP.
+
+  The access log is JSON, one object per request (sample 01 keeps the text
+  line), with the trace id the response carries as X-Request-Id. *)
 
 {$IFDEF FPC}{$MODE DELPHI}{$H+}{$ENDIF}
 {$APPTYPE CONSOLE}
@@ -54,6 +57,7 @@ uses
   PascalApi.Pagination,
   PascalApi.OrderBy,
   PascalApi.OpenApi,
+  PascalApi.Http,
   PascalApi.Horse.Middlewares,
   PascalApi.Horse.OpenApi,
   PascalApi.Horse.Mcp,
@@ -185,7 +189,7 @@ begin
     GCities := TCityRepository.Create(GFactory);
 
     TErrorHandlerMiddleware.Register(GLog.Error);
-    THorse.Use(TLoggerMiddleware.New);
+    THorse.Use(TLoggerMiddleware.New(nil, alfJson));
     // Each route registered in Horse and documented in one call.
     TRouteDoc.Get('/cities')
       .Summary('List cities, a page at a time').Tag('cities')

@@ -70,7 +70,7 @@ all (measured, skill `references/rtti-gotchas.md`).
 
 ## Dependencies
 
-`external/` holds the dependencies as git submodules, pinned: pascal-common-faa `v1.4.0`,
+`external/` holds the dependencies as git submodules, pinned: pascal-common-faa `v1.5.0`,
 pascal-jsonmapper-faa `v0.3.0`, pascal-db-faa `v0.12.1`, Horse `3.3.12` (`fda6fed`; until 0.4.0
 this repository used 3.3.2, `72cc45f`; pascal-dfe-broker moved to 3.3.12 on 2026-10-09, delphi-api-starter is still on 3.3.2). They are **only for this
 repository's tests**: a consumer provides its own single copy of each (submodule + search path),
@@ -141,6 +141,16 @@ its own Horse `src` to the search path.
   encodes by the Content-Type's charset: with plain `application/json`, accented text arrived
   broken (4 of the 65 HTTP checks of the time, Delphi 12 Win32 and Win64; FPC was fine because its string is
   already UTF-8). The unit tests can't see this: only the HTTP scenarios on Delphi do.
+- **When no route matches, Horse 3.3.12 runs the router twice** (the path, then `/*`:
+  `Horse.Core.RouterTree`, `DoExecuteInternal`), so every global middleware runs twice for one
+  request. Seen in samples/02-db's log (two access lines for one `GET /`). `TLoggerMiddleware`
+  marks the request (`:pascalapi-logged`, a name no client can send) and runs once; a new
+  global middleware with side effects must do the same. The others still run twice there; a
+  global `TRateLimitMiddleware` would presumably count such a request twice (not measured, not
+  fixed: only routes that don't exist).
+- **Observability** (`docs/observability-design.md`): the request id is the W3C trace id
+  (`ResolveRequestTrace`, from pascal-common-faa's `PascalCommon.TraceContext`); the contracts
+  that the sibling libraries will need go to pascal-common-faa, not here.
 - **`THorseRequest.RemoteAddr` is '' with the console provider** (fpWeb on FPC, Indy on Delphi):
   only Horse's raw providers (Epoll, IOCP, HttpSys, Daemon, LCL) call `Populate` with it. Measured
   on FPC 3.2.2/Windows (the access log showed `-`) and on Delphi 12 Win32 (a probe, 2026-10-08);
@@ -196,7 +206,7 @@ exception in a helper and assert on what it returned.
 | Delphi | open `PascalApi.groupproj`, build `PascalApi.UnitTests`, `ApiSample` and `DbApiSample` (Win32 and Win64); run the tests; start `ApiSample.exe` and run `sh tools/http_scenarios.sh 9310`; start `DbApiSample.exe 9330 --reset` and run `sh tools/http_scenarios_db.sh 9330` |
 
 The middlewares are tested in two layers: their decisions in `PascalApi.HttpTests` (no server),
-and over real HTTP by `tools/http_scenarios.sh` (curl, 103 checks) against `samples/01-api`,
+and over real HTTP by `tools/http_scenarios.sh` (curl, 122 checks) against `samples/01-api`,
 which uses every middleware. In-process servers aren't used: on FPC, Horse's `Listen` blocks in
 `THTTPApplication.Run` and there is no `StopListen`.
 

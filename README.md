@@ -38,7 +38,7 @@ server (protocol 2026-07-28). See [docs/plan.md](docs/plan.md).
 
 ```pascal
 TErrorHandlerMiddleware.Register(LOnError);            // {"error": ...} + status for any exception
-THorse.Use(TLoggerMiddleware.New);                      // one access line per request, X-Request-Id
+THorse.Use(TLoggerMiddleware.New);                      // one access line per request; X-Request-Id = W3C trace id
 THorse.Use(TCorsMiddleware.New('https://app.example.com'));
 THorse.Use(TJwtMiddleware.New(TAppConfig.Get('JWT_SECRET'), ['/health', '/auth/login']));
 THorse.Use('/reports', TRateLimitMiddleware.New(60, 60));
@@ -83,7 +83,7 @@ How to add them to an application, minimum versions and short examples:
 
 | Sample | Shows | Checked by |
 |---|---|---|
-| [01-api](samples/01-api/ApiSample.dpr) | every middleware (errors, CORS, log, JWT, rate limit), paging and validation, in memory | `tools/http_scenarios.sh` (103 checks) |
+| [01-api](samples/01-api/ApiSample.dpr) | every middleware (errors, CORS, log, JWT, rate limit), paging and validation, in memory | `tools/http_scenarios.sh` (122 checks) |
 | [02-db](samples/02-db/DbApiSample.dpr) | SQLite through pascal-db-faa (SQLdb on FPC, FireDAC on Delphi): migrations, paging and ordering in SQL, filters, 409 from a unique key, NULL as `null` | `tools/http_scenarios_db.sh` (56 checks) |
 
 Both run with one source on Delphi and Lazarus/FPC. On FPC for Windows, sample 02 needs

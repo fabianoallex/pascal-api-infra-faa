@@ -4,6 +4,52 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 follow [Semantic Versioning](https://semver.org/). While the version is 0.x, a minor version
 may change the API; each such change is listed here.
 
+## [0.8.0] - 2026-10-09
+
+Phase A of the observability design (`docs/observability-design.md`): W3C trace context and
+correlated logs.
+
+### Changed
+
+- **The request id is the W3C trace id** (breaking): `X-Request-Id` on the request and the
+  response, and the last field of the access line, are 32 lowercase hex digits instead of 8. The
+  id comes from a valid incoming `traceparent`, else from an incoming `X-Request-Id` of exactly
+  32 lowercase hex digits (nginx's `$request_id`), else it is new; any other `X-Request-Id` is
+  ignored, as before.
+- `TLoggerMiddleware` also sets `traceparent` on the request, naming a new span for the request
+  (a child of the caller's), and passes `tracestate` on when the `traceparent` was valid: what a
+  handler's outgoing call should send.
+- The error handler's line ends with ` trace_id=<id>` when `TLoggerMiddleware` is in use.
+- The MCP executor forwards `traceparent` and `tracestate`: a tool call's request is in the MCP
+  request's trace. `TMcpForward` has two new fields, `TraceParent` and `TraceState`.
+- Requires **pascal-common-faa 1.5.0** (`PascalCommon.TraceContext`), checked in `PascalApi.Dto`
+  and the `.lpk`.
+
+### Added
+
+- `ResolveRequestTrace` and `TRequestTrace` (`PascalApi.Http`): the trace context of a request
+  from its headers, pure.
+- JSON access log: `TLoggerMiddleware.New(AOnLog, alfJson)` writes one object per request
+  (`AccessLogJson`) with `trace_id`, `span_id` and `parent_span_id`; the text line stays the
+  default. `samples/02-db` uses it.
+- `WithTraceId` (`PascalApi.Http`).
+- `samples/01-api`: `GET /trace` returns what the handler sees (`X-Request-Id`, `traceparent`,
+  `tracestate`); `tools/http_scenarios.sh` checks the trace context directly and through MCP.
+
+### Removed
+
+- `NewRequestId` (breaking): the id comes from `ResolveRequestTrace`.
+
+### Fixed
+
+- One access line and one `X-Request-Id` per request on routes that don't exist. When no
+  route matches, Horse 3.3.12 runs the router a second time with `/*`, so global middlewares ran
+  twice: two lines (with different ids, before this release) and two `X-Request-Id` headers. The
+  logger now runs once per request.
+
+Verified: 204 unit tests with 0 leaks, and 122 + 56 HTTP checks, on FPC 3.2.2 Win64 and Linux
+x86_64 and Delphi 12 Win32 and Win64; the official MCP SDK on FPC Linux (CI).
+
 ## [0.7.0] - 2026-10-09
 
 ### Added

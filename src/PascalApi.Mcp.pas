@@ -52,6 +52,8 @@ type
   TMcpForward = record
     Authorization: string; // the incoming Authorization header, as is
     ForwardedFor: string;  // the caller's address, sent as X-Forwarded-For
+    TraceParent: string;   // the MCP request's span (TLoggerMiddleware), so the call is its child
+    TraceState: string;    // passed on with it
   end;
 
   IMcpToolExecutor = interface

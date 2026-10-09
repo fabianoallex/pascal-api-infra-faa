@@ -18,8 +18,10 @@
 
   A tool call is an HTTP request to the API itself at ABaseUrl (fphttpclient
   on FPC, THTTPClient on Delphi), so it goes through every middleware as a
-  direct call would: the incoming Authorization header and the caller's
-  address (as X-Forwarded-For) are passed on. The endpoint is a route like
+  direct call would: the incoming Authorization header, the caller's
+  address (as X-Forwarded-For) and the trace context (traceparent and
+  tracestate, as TLoggerMiddleware left them: the tool call's request is a
+  child of the MCP request's span, in the same trace) are passed on. The endpoint is a route like
   any other: behind TJwtMiddleware unless the application excludes it. The
   provider must serve requests concurrently (Horse's are threaded), since
   the call waits for the API while the MCP request is open.
@@ -150,6 +152,10 @@ begin
       LClient.AddHeader('Authorization', AForward.Authorization);
     if AForward.ForwardedFor <> '' then
       LClient.AddHeader('X-Forwarded-For', AForward.ForwardedFor);
+    if AForward.TraceParent <> '' then
+      LClient.AddHeader('traceparent', AForward.TraceParent);
+    if AForward.TraceState <> '' then
+      LClient.AddHeader('tracestate', AForward.TraceState);
     if ABody <> '' then
     begin
       // FPC strings are UTF-8 already (the jsonmapper writes them so).
@@ -191,6 +197,10 @@ begin
       LRequest.SetHeaderValue('Authorization', AForward.Authorization);
     if AForward.ForwardedFor <> '' then
       LRequest.SetHeaderValue('X-Forwarded-For', AForward.ForwardedFor);
+    if AForward.TraceParent <> '' then
+      LRequest.SetHeaderValue('traceparent', AForward.TraceParent);
+    if AForward.TraceState <> '' then
+      LRequest.SetHeaderValue('tracestate', AForward.TraceState);
     if ABody <> '' then
     begin
       LSent := TBytesStream.Create(PaStringToUtf8Bytes(ABody));
@@ -258,6 +268,8 @@ begin
   LHeaders.Name := AReq.Headers['Mcp-Name'];
   LForward.Authorization := AReq.Headers['Authorization'];
   LForward.ForwardedFor := ClientIp(AReq.Headers['X-Forwarded-For'], RemoteAddr(AReq), '');
+  LForward.TraceParent := AReq.Headers['traceparent'];
+  LForward.TraceState := AReq.Headers['tracestate'];
   LAnswer := LEntry.Server.HandlePost(AReq.Body, LHeaders, LForward, LStatus);
   if LStatus = 202 then
     ARes.Status(202).Send('')

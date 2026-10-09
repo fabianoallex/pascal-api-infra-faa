@@ -40,7 +40,7 @@ git submodule add https://github.com/fabianoallex/pascal-amqp-faa external/pasca
 - **Lazarus:** require the library's `.lpk`; point its `pascal_common_faa` requirement at the
   application's copy (the same one `pascal_api_infra_faa.lpk` uses).
 - Minimum pascal-common-faa: 1.1.3 (AMQP), 1.2 (Redis), 1.0 (Pipes); this library requires
-  1.4.0, so an application of it meets all three.
+  1.5.0, so an application of it meets all three.
 - Callbacks in all three are `procedure ... of object` (FPC 3.2.2 has no anonymous methods):
   write a method of a class of yours, as for this library's middlewares.
 

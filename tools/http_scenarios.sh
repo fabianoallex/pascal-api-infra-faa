@@ -1,6 +1,6 @@
 #!/bin/sh
 # Checks samples/01-api over HTTP with curl: every middleware of
-# PascalApi.Horse.Middlewares (error handler, CORS, logger's request id,
+# PascalApi.Horse.Middlewares (error handler, CORS, logger's trace id,
 # JWT, rate limit) plus paging, ordering, DTO validation, OpenAPI and the
 # MCP endpoint (2026-07-28).
 #
@@ -36,11 +36,27 @@ header()    { tr -d '\r' < "$T/headers" | grep -i "^$1:" | head -1 | sed 's/^[^:
 header_is() { [ "$(header "$1")" = "$2" ] && ok || fail "$3: header $1 = '$(header "$1")', expected '$2'"; }
 no_header() { [ -z "$(header "$1")" ] && ok || fail "$2: unexpected header $1: $(header "$1")"; }
 
-# --- public route, request id
+# --- public route, request id = W3C trace id
+TRACE_ID=4bf92f3577b34da6a3ce929d0e0e4736
+PARENT_ID=00f067aa0ba902b7
+is_trace_id() { echo "$1" | grep -qE '^[0-9a-f]{32}$' && [ "$1" != 00000000000000000000000000000000 ]; }
 req GET /health ""
 status_is 200 "health"
 body_is '{"status":"ok"}' "health"
-echo "$(header X-Request-Id)" | grep -qE '^[0-9a-f]{8}$' && ok || fail "health: X-Request-Id '$(header X-Request-Id)'"
+is_trace_id "$(header X-Request-Id)" && ok || fail "health: X-Request-Id '$(header X-Request-Id)'"
+FIRST_ID="$(header X-Request-Id)"
+req GET /health ""
+[ "$(header X-Request-Id)" != "$FIRST_ID" ] && ok || fail "a new trace id per request"
+req GET /health "" -H "traceparent: 00-$TRACE_ID-$PARENT_ID-01"
+header_is X-Request-Id "$TRACE_ID" "trace id from traceparent"
+req GET /health "" -H "traceparent: 00-$(echo $TRACE_ID | tr a-f A-F)-$PARENT_ID-01"
+is_trace_id "$(header X-Request-Id)" && [ "$(header X-Request-Id)" != "$TRACE_ID" ] && ok   || fail "uppercase traceparent ignored: X-Request-Id '$(header X-Request-Id)'"
+req GET /health "" -H "X-Request-Id: $TRACE_ID"
+header_is X-Request-Id "$TRACE_ID" "32-digit X-Request-Id adopted"
+req GET /health "" -H 'X-Request-Id: 1a2b3c4d'
+is_trace_id "$(header X-Request-Id)" && ok || fail "short X-Request-Id replaced: '$(header X-Request-Id)'"
+req GET /health "" -H 'X-Request-Id: <script>'
+is_trace_id "$(header X-Request-Id)" && ok || fail "free-text X-Request-Id replaced: '$(header X-Request-Id)'"
 
 # --- CORS (before JWT: a preflight carries no token)
 req OPTIONS /cities "" -H 'Origin: https://app.example.com' -H 'Access-Control-Request-Method: GET'
@@ -75,6 +91,23 @@ status_is 400 "login without user"
 body_is '{"error":"\"user\" is required."}' "login without user"
 req GET /auth/login-admin ""
 status_is 401 "excluded prefix matches whole segments only"
+req GET /no/such/route "" -H "$AUTH"
+status_is 404 "unknown route"
+[ "$(tr -d '\r' < "$T/headers" | grep -ci '^X-Request-Id:')" = 1 ] && ok \
+  || fail "unknown route: one X-Request-Id (Horse runs the middlewares twice there)"
+
+# --- what the handler sees: X-Request-Id and its own span in traceparent
+req GET /trace "" -H "$AUTH" -H "traceparent: 00-$TRACE_ID-$PARENT_ID-01" -H 'tracestate: vendor=1'
+status_is 200 "trace"
+body_has "\"requestId\":\"$TRACE_ID\"" "trace: handler sees the trace id"
+body_has "\"traceparent\":\"00-$TRACE_ID-" "trace: handler's traceparent keeps the trace"
+body_lacks "$PARENT_ID" "trace: handler's traceparent is a new span, not the caller's"
+body_has '-01"' "trace: sampled flag kept"
+body_has '"tracestate":"vendor=1"' "trace: tracestate passed on"
+req GET /trace "" -H "$AUTH" -H "traceparent: 00-$TRACE_ID-$PARENT_ID-00"
+body_has '-00"' "trace: not-sampled flag kept"
+req GET /trace "" -H "$AUTH" -H 'traceparent: garbage' -H 'tracestate: vendor=1'
+body_has '"tracestate":""' "trace: tracestate dropped with an invalid traceparent"
 
 # --- paging and ordering
 req GET '/cities?page=1&limit=2' "" -H "$AUTH"
@@ -216,6 +249,11 @@ body_has '"code":-32020' "MCP header mismatch"
 req POST /mcp '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"x","version":"1"}}}' -H "$AUTH"
 status_is 404 "MCP initialize (legacy)"
 body_has '2026-07-28' "MCP initialize names the version"
+# The tool call is a request of its own, in the MCP request's trace.
+mcp tools/call ',"name":"list_trace","arguments":{}' list_trace -H "$AUTH" -H "traceparent: 00-$TRACE_ID-$PARENT_ID-01"
+body_has '"isError":false' "MCP call: trace route"
+body_has "\\\"requestId\\\":\\\"$TRACE_ID\\\"" "MCP call: the trace id reaches the tool's request"
+body_lacks "$PARENT_ID" "MCP call: the tool's request is a child of the MCP request's span"
 req POST /mcp '{"jsonrpc":"2.0","method":"notifications/initialized"}' -H "$AUTH"
 status_is 202 "MCP notification"
 body_is '' "MCP notification"
