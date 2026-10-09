@@ -149,6 +149,18 @@ status_is 200 "rate limit only on /limited"
 req GET /health "" -H 'X-Forwarded-For: 203.0.113.9, 10.0.0.1'
 status_is 200 "health behind a proxy"
 
+# --- OpenAPI document and Swagger UI (public)
+req GET /swagger/doc.json ""
+status_is 200 "OpenAPI document"
+body_has '"openapi":"3.0.3"' "OpenAPI document"
+body_has '"/cities/{id}":' "path parameter converted"
+body_has '"requestBody"' "request body documented"
+req GET /swagger ""
+status_is 200 "Swagger UI"
+body_has 'swagger-ui-dist@' "Swagger UI"
+# OPENAPI_OUT: also save the document, for a validator (tools/test_http_docker.sh).
+[ -n "$OPENAPI_OUT" ] && curl -s -o "$OPENAPI_OUT" "$BASE/swagger/doc.json"
+
 rm -rf "$T"
 echo "$CHECKS checks, $FAILS failed"
 [ "$FAILS" -eq 0 ]

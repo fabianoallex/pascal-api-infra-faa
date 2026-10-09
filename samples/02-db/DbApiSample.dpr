@@ -19,6 +19,7 @@
     POST   /cities          {"code":"4205407","name":"...","state":"SC","population":123}
                             201; 409 when the code exists (the database says so), 400 invalid
     DELETE /cities/:code    204; 404 when it doesn't exist
+    GET    /swagger         Swagger UI; /swagger/doc.json is the OpenAPI 3.0.3 document
 
   On startup the migrations run (TDBMigrationEngine): SCHEMA_MIGRATIONS,
   CITIES and seed rows; a second start applies nothing. tools/http_scenarios_db.sh
@@ -48,7 +49,10 @@ uses
   {$ENDIF}
   PascalApi.Config,
   PascalApi.Pagination,
+  PascalApi.OrderBy,
+  PascalApi.OpenApi,
   PascalApi.Horse.Middlewares,
+  PascalApi.Horse.OpenApi,
   DbApiSample.Cities in 'DbApiSample.Cities.pas';
 
 var
@@ -171,10 +175,36 @@ begin
 
     TErrorHandlerMiddleware.Register(GLog.Error);
     THorse.Use(TLoggerMiddleware.New);
-    THorse.Get('/cities', GetCities);
-    THorse.Get('/cities/:code', GetCity);
-    THorse.Post('/cities', PostCity);
-    THorse.Delete('/cities/:code', DeleteCity);
+    // Each route registered in Horse and documented in one call.
+    TRouteDoc.Get('/cities')
+      .Summary('List cities, a page at a time').Tag('cities')
+      .QueryParam('state', 'Only the cities of this state (two letters)')
+      .QueryParam('page', 'Page number, from 1', ptInteger)
+      .QueryParam('limit', 'Cities per page (default 2, at most 50)', ptInteger)
+      .QueryParam('orderBy', CityOrderSpec.DocHint)
+      .ResponsePaged<ICity>(200, 'A page of cities')
+      .Error(400, 'An order field that is not allowed')
+      .Register(GetCities);
+    TRouteDoc.Get('/cities/:code')
+      .Summary('One city').Tag('cities')
+      .PathParam('code', 'IBGE code (7 digits)')
+      .Response<ICity>(200)
+      .Error(404, 'No city with this code')
+      .Register(GetCity);
+    TRouteDoc.Post('/cities')
+      .Summary('Create a city').Tag('cities')
+      .Body<ICityInsert>
+      .Response<ICity>(201, 'Created')
+      .Error(400, 'Invalid data')
+      .Error(409, 'A city with this code already exists')
+      .Register(PostCity);
+    TRouteDoc.Delete('/cities/:code')
+      .Summary('Delete a city').Tag('cities')
+      .PathParam('code', 'IBGE code (7 digits)')
+      .NoContent(204, 'Deleted')
+      .Error(404, 'No city with this code')
+      .Register(DeleteCity);
+    TRouteDoc.Serve('/swagger', 'Cities API (pascal-api-infra-faa sample 02)', '1.0.0');
 
     Writeln('DbApiSample listening on port ', GPort);
     THorse.Listen(GPort);

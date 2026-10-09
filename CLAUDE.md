@@ -53,7 +53,7 @@ all (measured, skill `references/rtti-gotchas.md`).
 ## Dependencies
 
 `external/` holds the dependencies as git submodules, pinned: pascal-common-faa `v1.4.0`,
-pascal-jsonmapper-faa `v0.2.1`, pascal-db-faa `v0.12.1`, Horse `72cc45f` (tag 3.3.2, the commit
+pascal-jsonmapper-faa `v0.3.0`, pascal-db-faa `v0.12.1`, Horse `72cc45f` (tag 3.3.2, the commit
 pascal-dfe-broker and delphi-api-starter use). They are **only for this
 repository's tests**: a consumer provides its own single copy of each (submodule + search path),
 never `pascal-api-infra-faa/external/...`. Clone with `git submodule update --init` (no
@@ -63,10 +63,24 @@ never `pascal-api-infra-faa/external/...`. Clone with `git submodule update --in
 - Delphi search path of a test project: `src`, `external/pascal-common-faa/src`,
   `external/pascal-common-faa/bridges/jsonmapper`, `external/pascal-jsonmapper-faa/src`,
   `external/pascal-db-faa/src`.
-- Minimum pascal-db-faa version checked in `PascalApi.Http` (`PASCALDB_VERSION`).
+- Minimum pascal-db-faa version checked in `PascalApi.Http` (`PASCALDB_VERSION`). pascal-jsonmapper-faa
+  has no version constant: its minimum (0.3.0, for `Members`) is only in the `.lpk`.
 - Lazarus: `packages/pascal_api_infra_faa.lpk` requires `pascal_common_faa`, `pascaljsonmapper_pkg`
   and `pascal_db_faa` with `DefaultFilename ... Prefer="True"` pointing at `external/`. The test
   project also requires `pascal_common_faa_jsonmapper` (the bridge).
+
+### OpenAPI
+
+`PascalApi.OpenApi` (pure, tested in `PascalApi.OpenApiTests`) builds the document;
+`src/horse/PascalApi.Horse.OpenApi` (`TRouteDoc`) registers routes and serves it. Design and the
+four decisions taken with the user: `docs/openapi-design.md`. Rules that keep it honest:
+
+- Schemas come from `TJsonMapper.Members` (pascal-jsonmapper-faa 0.3.0): never re-derive JSON
+  names here, or the document can name a member the wire doesn't have.
+- Types by `PTypeInfo` identity and kind, never by name (names differ between compilers).
+- Metadata by Pascal property name, checked at `Describe` time (`EApiSchemaError`).
+- Both samples document their routes, and `tools/test_http_docker.sh` (CI) validates each
+  document with `openapi-spec-validator`.
 
 ### Horse
 

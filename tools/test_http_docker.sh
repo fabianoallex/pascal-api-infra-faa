@@ -6,7 +6,7 @@
 #
 # Horse is used unchanged on Linux (the FPC/Windows workaround of
 # tools/prepare_horse.sh isn't needed there). The image needs FPC 3.2.2 and
-# curl and libsqlite3-0 (tools/ci-test.sh builds one).
+# curl, libsqlite3-0 and openapi-spec-validator (tools/ci-test.sh builds one).
 set -e
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 IMAGE="${FPC_IMAGE:-pascalapi-fpc322}"
@@ -35,7 +35,11 @@ MSYS_NO_PATHCONV=1 docker run --rm -v "$MOUNT:/src:ro" "$IMAGE" sh -c '
     PID=$!
     for I in 1 2 3 4 5 6 7 8 9 10; do curl -s -o /dev/null http://127.0.0.1:$3/ && break; sleep 1; done
     RC=0
-    sh /t/tools/$4 $3 || RC=$?
+    OPENAPI_OUT=/t/openapi-$2.json sh /t/tools/$4 $3 || RC=$?
+    # The document each sample serves, checked against the OpenAPI 3.0 spec.
+    if [ $RC -eq 0 ]; then
+      python3 -m openapi_spec_validator /t/openapi-$2.json || RC=$?
+    fi
     kill $PID 2>/dev/null || true
     [ $RC -eq 0 ] || { echo "--- server log"; tail -40 /t/server-$2.log; exit $RC; }
   }

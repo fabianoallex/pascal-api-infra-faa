@@ -6,6 +6,27 @@ may change the API; each such change is listed here.
 
 ## [Unreleased]
 
+### Added
+
+- OpenAPI 3.0.3 (phase 4). `PascalApi.OpenApi`: the document from route descriptions and DTO
+  types, schemas inferred from the published properties through pascal-jsonmapper-faa's
+  `Members` (the names on the wire), optional interfaces as not required/nullable, enumerations,
+  nested DTOs and arrays; metadata registered in code with `TApiSchema.Describe` (FPC has no
+  attributes). `src/horse/PascalApi.Horse.OpenApi`: `TRouteDoc.Get(...)...Register(Handler)`
+  registers and documents a route in one call; `TRouteDoc.Serve` publishes `/swagger` (Swagger
+  UI from unpkg, `swagger-ui-dist` pinned) and `/swagger/doc.json`. Both samples document their
+  routes; CI validates both documents with `openapi-spec-validator`. Design:
+  `docs/openapi-design.md`.
+
+### Fixed
+
+- `TOrderBySpec.DocHint` showed the SQL expression of a tiebreaker that isn't a client field
+  (a column name); such a tiebreaker is now left out of the hint.
+
+### Changed
+
+- Requires pascal-jsonmapper-faa 0.3.0 (`TJsonMapper.Members`).
+
 ## [0.2.0] - 2026-10-08
 
 ### Added

@@ -125,6 +125,7 @@
         <DCCReference Include="..\..\src\PascalApi.Crypto.pas"/>
         <DCCReference Include="..\..\src\PascalApi.Jwt.pas"/>
         <DCCReference Include="..\..\src\PascalApi.Http.pas"/>
+        <DCCReference Include="..\..\src\PascalApi.OpenApi.pas"/>
         <DCCReference Include="PascalApi.DUnitXCompat.pas"/>
         <DCCReference Include="PascalApi.VersionTests.pas"/>
         <DCCReference Include="PascalApi.ConfigTests.pas"/>
@@ -135,6 +136,7 @@
         <DCCReference Include="PascalApi.DtoTests.pas"/>
         <DCCReference Include="PascalApi.CryptoTests.pas"/>
         <DCCReference Include="PascalApi.HttpTests.pas"/>
+        <DCCReference Include="PascalApi.OpenApiTests.pas"/>
         <BuildConfiguration Include="Base">
             <Key>Base</Key>
         </BuildConfiguration>

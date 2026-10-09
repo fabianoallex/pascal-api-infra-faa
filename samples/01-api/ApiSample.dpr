@@ -16,6 +16,7 @@
     GET  /fail/server         an unexpected exception: 500
     GET  /fail/database       the database is down: 503
     GET  /limited             rate limited: 3 requests per minute per X-Client header
+    GET  /swagger             public; Swagger UI, and /swagger/doc.json the OpenAPI document
 
   Middlewares, in order: request log (console), CORS for
   https://app.example.com, rate limit (only on /limited, keyed by the
@@ -47,7 +48,9 @@ uses
   PascalApi.Pagination,
   PascalApi.Jwt,
   PascalApi.Http,
+  PascalApi.OpenApi,
   PascalApi.Horse.Middlewares,
+  PascalApi.Horse.OpenApi,
   ApiSample.Cities in 'ApiSample.Cities.pas';
 
 var
@@ -181,23 +184,39 @@ begin
   TErrorHandlerMiddleware.Register(GCallbacks.LogError);
   THorse.Use(TLoggerMiddleware.New);
   THorse.Use(TCorsMiddleware.New('https://app.example.com'));
-  THorse.Use(TJwtMiddleware.New(GSecret, ['/health', '/auth/login']));
+  THorse.Use(TJwtMiddleware.New(GSecret, ['/health', '/auth/login', '/swagger']));
 
   GRateLimit := TRateLimitOptions.Default;
   GRateLimit.Limit := 3;
   GRateLimit.WindowSeconds := 60;
   GRateLimit.KeyExtractor := GCallbacks.ClientKey;
 
-  THorse.Get('/health', GetHealth);
-  THorse.Post('/auth/login', PostLogin);
-  THorse.Get('/me', GetMe);
-  THorse.Get('/cities', GetCities);
-  THorse.Get('/cities/:id', GetCity);
-  THorse.Post('/cities', PostCity);
-  THorse.Get('/fail/server', FailServer);
-  THorse.Get('/fail/database', FailDatabase);
+  // Routes registered and documented together. The responses here are JSON
+  // written by hand, not DTOs, so only their status codes are documented;
+  // samples/02-db documents full schemas.
+  TRouteDoc.Get('/health').Summary('Liveness').Tag('public').NoContent(200, 'Up').Register(GetHealth);
+  TRouteDoc.Post('/auth/login').Summary('Get a token (1 hour)').Tag('public')
+    .NoContent(200, '{"token": "..."}').Error(400, '"user" is missing').Register(PostLogin);
+  TRouteDoc.Get('/me').Summary('The token''s subject').Tag('auth')
+    .NoContent(200, '{"sub": "..."}').Error(401, 'No or invalid token').Register(GetMe);
+  TRouteDoc.Get('/cities').Summary('List cities').Tag('cities')
+    .QueryParam('page', '', ptInteger).QueryParam('limit', '', ptInteger)
+    .QueryParam('orderBy', 'name, -name or state')
+    .NoContent(200, 'A page of cities').Error(400, 'Invalid order field').Error(401)
+    .Register(GetCities);
+  TRouteDoc.Get('/cities/:id').Summary('One city').Tag('cities')
+    .PathParam('id', 'City id', ptInteger)
+    .NoContent(200, 'The city').Error(404).Error(401).Register(GetCity);
+  TRouteDoc.Post('/cities').Summary('Create a city').Tag('cities')
+    .Body<ICityInsert>.NoContent(201, 'The new city').Error(400).Error(401).Register(PostCity);
+  TRouteDoc.Get('/fail/server').Summary('Always 500').Tag('errors').NoMcp
+    .Error(500).Register(FailServer);
+  TRouteDoc.Get('/fail/database').Summary('Always 503').Tag('errors').NoMcp
+    .Error(503).Register(FailDatabase);
   THorse.Use('/limited', TRateLimitMiddleware.New(GRateLimit));
-  THorse.Get('/limited', GetLimited);
+  TRouteDoc.Get('/limited').Summary('3 requests a minute per X-Client').Tag('limits')
+    .NoContent(200).Error(429).Register(GetLimited);
+  TRouteDoc.Serve('/swagger', 'pascal-api-infra-faa sample 01', '1.0.0');
 
   Writeln('ApiSample listening on port ', GPort);
   THorse.Listen(GPort);

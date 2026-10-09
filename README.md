@@ -10,8 +10,8 @@ threading), [pascal-jsonmapper-faa](https://github.com/fabianoallex/pascal-jsonm
 paging). It is not a drop-in replacement for the Delphi library: DTOs map **published**
 properties, because FPC 3.2.2's RTTI sees nothing else.
 
-Version **0.2.0** (see the [changelog](CHANGELOG.md)): the core and the Horse middlewares; OpenAPI and
-MCP come later. See [docs/plan.md](docs/plan.md).
+Version **0.2.0** (see the [changelog](CHANGELOG.md)): the core and the Horse middlewares; OpenAPI is in
+the next version; MCP comes later. See [docs/plan.md](docs/plan.md).
 
 ## Contents
 
@@ -29,6 +29,8 @@ MCP come later. See [docs/plan.md](docs/plan.md).
 | `PascalApi.Crypto` | SHA-256, HMAC-SHA256, Base64url (FPC 3.2.2 has no SHA-256) |
 | `PascalApi.Jwt` | HS256 JSON Web Tokens: sign, verify (alg, signature, exp, nbf), claims |
 | `PascalApi.Horse.Middlewares` (`src/horse`) | Horse middlewares: error handler, CORS, request log, Bearer auth, JWT, rate limit |
+| `PascalApi.OpenApi` | OpenAPI 3.0.3 document from routes and DTO types; `TApiSchema.Describe` for metadata |
+| `PascalApi.Horse.OpenApi` (`src/horse`) | `TRouteDoc`: register and document a route in one call; `/swagger` UI and `/swagger/doc.json` |
 | `PascalApi.Version` | `PASCALAPI_VERSION`, for compile-time checks |
 
 ## A quick look

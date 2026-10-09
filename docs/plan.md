@@ -94,7 +94,7 @@ Error handler, CORS, request log, Bearer auth, JWT (HS256), rate limit, on Horse
 `ParseQueryInt`/`ParseQueryStr` returned `nil` for a missing parameter, and a repository testing
 `HasValue` on it crashed; they now return an absent optional (breaking, for 0.2.0).
 
-### 4. OpenAPI / Swagger — later
+### 4. OpenAPI / Swagger — done (2026-10-08)
 
 Generate the document with pascal-jsonmapper-faa's DOM instead of SwagDoc (Delphi only). The
 schema structure comes from published properties; the metadata the origin takes from attributes

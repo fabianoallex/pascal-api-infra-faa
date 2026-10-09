@@ -40,6 +40,7 @@ type
     [Test] procedure DocHint_ShowsDefault;
     [Test] procedure DocHint_TiebreakerByClientName;
     [Test] procedure DocHint_NeverShowsSqlColumns;
+    [Test] procedure DocHint_TiebreakerNotAllowed_IsLeftOut;
   end;
 
 implementation
@@ -164,6 +165,18 @@ end;
 procedure TOrderByTests.DocHint_NeverShowsSqlColumns;
 begin
   TAssert.AssertTrue(Pos('IBGE_CODE', Spec.DocHint) = 0);
+end;
+
+procedure TOrderByTests.DocHint_TiebreakerNotAllowed_IsLeftOut;
+var
+  LHint: string;
+begin
+  // CODE is a tiebreaker but not a field the client may use: its SQL must
+  // not appear in the documentation.
+  LHint := TOrderBySpec.New.Allow('name', 'NAME').Default('name').AlwaysLast('CODE').DocHint;
+  TAssert.AssertTrue('no SQL column', Pos('CODE', LHint) = 0);
+  TAssert.AssertTrue('no tiebreaker sentence', Pos('tiebreaker', LHint) = 0);
+  TAssert.AssertTrue('still lists the fields', Pos('Available fields: name.', LHint) = 1);
 end;
 
 initialization

@@ -89,6 +89,22 @@ status_is 404 "delete again"
 req GET '/cities?limit=1' ""
 body_has '"total":7' "6 seeds + Maceió"
 
+# --- OpenAPI document and Swagger UI (public)
+req GET /swagger/doc.json ""
+status_is 200 "OpenAPI document"
+body_has '"openapi":"3.0.3"' "OpenAPI document"
+body_has '"CityInsert":{"type":"object","description":"A new city"' "DTO schema with its description"
+body_has '"population":{"type":"integer","format":"int32","nullable":true' "INullInteger is nullable"
+body_has '"required":["code","name","state"]' "IOptInteger is not required"
+body_has 'Florianópolis' "UTF-8 example"
+body_has '"$ref":"#/components/schemas/Error"' "error responses"
+
+req GET /swagger ""
+status_is 200 "Swagger UI"
+body_has 'swagger-ui-dist@' "Swagger UI"
+# OPENAPI_OUT: also save the document, for a validator (tools/test_http_docker.sh).
+[ -n "$OPENAPI_OUT" ] && curl -s -o "$OPENAPI_OUT" "$BASE/swagger/doc.json"
+
 rm -rf "$T"
 echo "$CHECKS checks, $FAILS failed"
 [ "$FAILS" -eq 0 ]

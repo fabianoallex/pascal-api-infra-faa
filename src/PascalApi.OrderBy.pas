@@ -53,7 +53,7 @@ type
       FDefault: string;
       FTiebreakers: TArray<TFixed>;
     function TryFind(const AName: string; out ASql: string): Boolean;
-    function FindClientName(const ASqlExpr: string): string;
+    function TryFindClientName(const ASqlExpr: string; out AName: string): Boolean;
     function ParseExpr(const AExpr: string): string;
     function AllowedNames: string;
   public
@@ -77,7 +77,10 @@ type
     function Build(const AOrderBy: string): string;
 
     /// A description for API documentation: the fields the client may use,
-    /// the default and the tiebreaker, by client name (never the SQL).
+    /// the default and the tiebreakers that are client fields, by client name.
+    /// Never the SQL: a tiebreaker that isn't an allowed field is left out
+    /// (it used to show its SQL expression, a column name, as the origin
+    /// still does).
     function DocHint: string;
   end;
 
@@ -143,14 +146,18 @@ begin
   Result := False;
 end;
 
-function TOrderBySpec.FindClientName(const ASqlExpr: string): string;
+function TOrderBySpec.TryFindClientName(const ASqlExpr: string; out AName: string): Boolean;
 var
   I: Integer;
 begin
   for I := 0 to High(FAllowed) do
     if SameText(FAllowed[I].SqlExpr, ASqlExpr) then
-      Exit(FAllowed[I].ClientName);
-  Result := ASqlExpr;
+    begin
+      AName := FAllowed[I].ClientName;
+      Exit(True);
+    end;
+  AName := '';
+  Result := False;
 end;
 
 function TOrderBySpec.AllowedNames: string;
@@ -224,12 +231,12 @@ end;
 function TOrderBySpec.DocHint: string;
 var
   I: Integer;
-  LTies, LExample: string;
+  LTies, LExample, LName: string;
 begin
   LTies := '';
   for I := 0 to High(FTiebreakers) do
-    AppendList(LTies, FindClientName(FTiebreakers[I].SqlExpr) + ' ' +
-      DirStr(FTiebreakers[I].Dir));
+    if TryFindClientName(FTiebreakers[I].SqlExpr, LName) then
+      AppendList(LTies, LName + ' ' + DirStr(FTiebreakers[I].Dir));
 
   if FDefault <> '' then
     LExample := FDefault

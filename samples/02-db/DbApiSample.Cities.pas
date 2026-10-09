@@ -25,6 +25,7 @@ uses
   PascalDb.Paging,
   PascalDb.SqlSources,
   PascalDb.Migrations,
+  PascalApi.OrderBy,
   PascalApi.Dto;
 
 type
@@ -94,6 +95,10 @@ type
     procedure Delete(const ACode: string);
   end;
 
+/// The ordering the client may ask for (also the orderBy parameter's
+/// documentation, through DocHint).
+function CityOrderSpec: TOrderBySpec;
+
 /// Every SQL of the sample, under the SQLITE directory.
 function CitySqlSource: ISqlSource;
 
@@ -104,8 +109,9 @@ implementation
 
 uses
   SysUtils,
+  TypInfo,
   PascalJsonMapper.Mapper,
-  PascalApi.OrderBy,
+  PascalApi.OpenApi,
   PascalApi.Http;
 
 const
@@ -164,7 +170,7 @@ begin
   Result[2] := Item(3, 'MIG.0003', False);
 end;
 
-function OrderSpec: TOrderBySpec;
+function CityOrderSpec: TOrderBySpec;
 begin
   Result := TOrderBySpec.New
     .Allow('name', 'NAME')
@@ -225,7 +231,7 @@ var
   LOrder: string;
   LCount: Integer;
 begin
-  LOrder := OrderSpec.Build(AOrderBy); // before touching the database: 400 if invalid
+  LOrder := CityOrderSpec.Build(AOrderBy); // before touching the database: 400 if invalid
   LScope := FFactory.GetPool.AcquireQuery(LQuery);
   LScope.StartTransaction;
   try
@@ -340,5 +346,14 @@ end;
 initialization
   TJsonMapper.Shared.RegisterMapping<ICityInsert, TCityInsert>;
   TJsonMapper.Shared.RegisterMapping<ICity, TCity>;
+  // OpenAPI metadata the types can't tell (FPC has no attributes).
+  TApiSchema.Describe(TypeInfo(ICityInsert), 'A new city')
+    .Prop('Code').Desc('IBGE code').Example('4205407').Pattern('^[0-9]{7}$')
+    .Prop('Name').Desc('City name').Example('Florianópolis').MaxLength(100)
+    .Prop('State').Desc('Two-letter state').Example('SC').MinLength(2).MaxLength(2)
+    .Prop('Population').Desc('Inhabitants, when known').Example('537211').Minimum(0);
+  TApiSchema.Describe(TypeInfo(ICity), 'A city')
+    .Prop('Code').Desc('IBGE code').Example('4205407')
+    .Prop('Population').Desc('Inhabitants; null when unknown');
 
 end.

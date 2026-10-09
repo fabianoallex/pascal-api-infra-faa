@@ -32,7 +32,8 @@ uses
   PascalApi.FileLogTests,
   PascalApi.DtoTests,
   PascalApi.CryptoTests,
-  PascalApi.HttpTests;
+  PascalApi.HttpTests,
+  PascalApi.OpenApiTests;
 
 var
   ConsoleApp: TTestRunner;
