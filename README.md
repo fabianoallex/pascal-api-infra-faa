@@ -10,7 +10,7 @@ threading), [pascal-jsonmapper-faa](https://github.com/fabianoallex/pascal-jsonm
 paging). It is not a drop-in replacement for the Delphi library: DTOs map **published**
 properties, because FPC 3.2.2's RTTI sees nothing else.
 
-Version **0.5.0** (see the [changelog](CHANGELOG.md)): the core, the Horse middlewares, OpenAPI and an MCP
+Version **0.6.0** (see the [changelog](CHANGELOG.md)): the core, the Horse middlewares, OpenAPI and an MCP
 server (protocol 2026-07-28). See [docs/plan.md](docs/plan.md).
 
 ## Contents
@@ -23,7 +23,6 @@ server (protocol 2026-07-28). See [docs/plan.md](docs/plan.md).
 | `PascalApi.RateLimitState` | the sliding window behind rate limiting, on a monotonic clock |
 | `PascalApi.FileLog` | asynchronous file logging, one file per category, rotated by size; `TLogTruncate` |
 | `PascalApi.Dto` | marker interfaces and base classes for DTOs, including paged search and paged response |
-| `PascalApi.Messaging` | broker-agnostic consumer/publisher contracts and a registry of adapters by name |
 | `PascalApi.Text` | UTF-8 bytes ⇄ string, MD5, UTF-8-safe prefix — the same on both compilers |
 | `PascalApi.Http` | HTTP exceptions (`EValidationException`, `ENotFoundException`...), exception → status mapping, CORS, Bearer, client IP, access log line; replaceable client messages (English or Portuguese) |
 | `PascalApi.Crypto` | SHA-256, HMAC-SHA256, Base64url (FPC 3.2.2 has no SHA-256) |
@@ -64,6 +63,21 @@ the API itself, with the client's token, through every middleware.
 
 On FPC a Horse callback is a plain procedure, so each middleware keeps its settings in the unit:
 one configuration per process.
+
+## Messaging, Redis and IPC
+
+Not in this library: use the sibling libraries, same author and dual-compiler rules, sharing
+pascal-common-faa with this one. They are the first choice for an API built on
+pascal-api-infra-faa.
+
+| Need | Library | Units |
+|---|---|---|
+| Message broker (RabbitMQ / AMQP 0-9-1), or a broker embedded in the program | [pascal-amqp-faa](https://github.com/fabianoallex/pascal-amqp-faa) | `AMQP.*` |
+| Redis: cache, locks, counters, Pub/Sub, Streams | [pascal-redis-faa](https://github.com/fabianoallex/pascal-redis-faa) | `Redis.*` |
+| Inter-process: Named Pipe / Unix socket, TCP, TLS | [pascal-pipes-faa](https://github.com/fabianoallex/pascal-pipes-faa) | `Pipes.*` |
+
+How to add them to an application, minimum versions and short examples:
+[docs/related-libraries.md](docs/related-libraries.md).
 
 ## Samples
 

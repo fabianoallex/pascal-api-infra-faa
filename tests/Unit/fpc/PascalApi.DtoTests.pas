@@ -8,8 +8,7 @@
 
 { Tests for PascalApi.Dto through pascal-jsonmapper-faa: the base classes'
   published properties reach JSON, are inherited by a concrete DTO, and the
-  optional members of a paged search keep "absent" apart from a value. Also
-  PascalApi.Messaging's registry.
+  optional members of a paged search keep "absent" apart from a value.
 
   The JSON converter for the optional types is pascal-common-faa's bridge
   (PascalCommon.JsonMapper.Optionals), registered when its unit is used.
@@ -27,8 +26,7 @@ uses
   PascalCommon.JsonMapper.Optionals,
   PascalDb.Paging,
   PascalApi.Pagination,
-  PascalApi.Dto,
-  PascalApi.Messaging;
+  PascalApi.Dto;
 
 type
   ICityFind = interface(IFindPaginationDTOBase)
@@ -62,20 +60,6 @@ type
     procedure Find_ToJson_OmitsAbsentMembers;
     procedure Page_ToJson_InheritedMembers;
     procedure Page_TotalAboveInt32_RoundTrips;
-  end;
-
-  TFakeFactory = class(TInterfacedObject, IMessagingFactory)
-  public
-    function CreateConsumer(const AConfig: TMessagingConfig): IMessageConsumer;
-    function CreatePublisher(const AConfig: TMessagingConfig): IMessagePublisher;
-  end;
-
-  TMessagingTests = class(TTestCase)
-  published
-    procedure Registry_UnknownName_IsNil;
-    procedure Registry_ReturnsRegisteredFactory;
-    procedure Registry_RegisterAgain_Replaces;
-    procedure Config_Defaults;
   end;
 
 implementation
@@ -154,65 +138,9 @@ begin
   TAssert.AssertEquals(Int64(5000000000), LPage.Total);
 end;
 
-{ TFakeFactory }
-
-function TFakeFactory.CreateConsumer(const AConfig: TMessagingConfig): IMessageConsumer;
-begin
-  Result := nil;
-end;
-
-function TFakeFactory.CreatePublisher(const AConfig: TMessagingConfig): IMessagePublisher;
-begin
-  Result := nil;
-end;
-
-{ TMessagingTests }
-
-procedure TMessagingTests.Registry_UnknownName_IsNil;
-begin
-  TAssert.AssertTrue(TMessagingRegistry.GetFactory('pascalapi-test-unknown') = nil);
-end;
-
-procedure TMessagingTests.Registry_ReturnsRegisteredFactory;
-var
-  LFactory: IMessagingFactory;
-begin
-  LFactory := TFakeFactory.Create;
-  TMessagingRegistry.RegisterFactory('pascalapi-test-a', LFactory);
-  TAssert.AssertTrue(TMessagingRegistry.GetFactory('pascalapi-test-a') = LFactory);
-end;
-
-procedure TMessagingTests.Registry_RegisterAgain_Replaces;
-var
-  LFirst, LSecond: IMessagingFactory;
-begin
-  LFirst := TFakeFactory.Create;
-  LSecond := TFakeFactory.Create;
-  TMessagingRegistry.RegisterFactory('pascalapi-test-b', LFirst);
-  TMessagingRegistry.RegisterFactory('pascalapi-test-b', LSecond);
-  TAssert.AssertTrue(TMessagingRegistry.GetFactory('pascalapi-test-b') = LSecond);
-end;
-
-procedure TMessagingTests.Config_Defaults;
-var
-  LConfig: TMessagingConfig;
-begin
-  LConfig := TMessagingConfig.Create;
-  try
-    TAssert.AssertEquals('localhost', LConfig.Host);
-    TAssert.AssertEquals(5672, LConfig.Port);
-    TAssert.AssertEquals('guest', LConfig.User);
-    TAssert.AssertEquals('guest', LConfig.Password);
-    TAssert.AssertEquals('/', LConfig.VHost);
-  finally
-    LConfig.Free;
-  end;
-end;
-
 initialization
   TJsonMapper.Shared.RegisterMapping<ICityFind, TCityFind>;
   TJsonMapper.Shared.RegisterMapping<ICityPage, TCityPage>;
   RegisterTest(TDtoTests);
-  RegisterTest(TMessagingTests);
 
 end.

@@ -46,7 +46,7 @@ local and Docker test scripts, GitHub Actions workflow, submodules pinned to tag
 
 ### 2. Core without HTTP — done on FPC Windows (2026-10-08)
 
-`Text`, `Config`, `OrderBy`, `Pagination`, `RateLimitState`, `FileLog`, `Dto`, `Messaging`:
+`Text`, `Config`, `OrderBy`, `Pagination`, `RateLimitState`, `FileLog`, `Dto`, `Messaging` (removed in 0.6.0):
 106 tests, 0 leaks on FPC 3.2.2 Win64, FPC 3.2.2 Linux x86_64 (Docker, `tools/ci-test.sh`),
 Delphi 12 CE Win32 and Win64.
 
@@ -103,6 +103,15 @@ schema structure comes from published properties; the metadata the origin takes 
 must be registered in code, because FPC 3.2.2 has no attributes. Decided (user, 2026-10-08):
 **fluent**, next to the DTO's `RegisterMapping`, along the lines of
 `Describe(TOrder, 'status').Desc('...').Example('open').Enum('open,paid')`.
+
+### Messaging layer removed (2026-10-09, 0.6.0)
+
+Decided by the user: `PascalApi.Messaging` (broker-agnostic contracts and an adapter registry,
+from the origin) goes away, and the documentation points to pascal-amqp-faa for messaging, and to
+pascal-redis-faa and pascal-pipes-faa for Redis and IPC, as the first choice
+(`docs/related-libraries.md`, the top of `CLAUDE.md`, `AGENTS.md`, the README). Why: no adapter
+existed on FPC, nothing used the registry, and depending on pascal-amqp-faa in the package would
+make every API link a broker client.
 
 ### 5. MCP server — done (2026-10-09)
 

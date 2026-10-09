@@ -24,7 +24,6 @@ uses
   PascalApi.RateLimitState in '..\..\src\PascalApi.RateLimitState.pas',
   PascalApi.FileLog in '..\..\src\PascalApi.FileLog.pas',
   PascalApi.Dto in '..\..\src\PascalApi.Dto.pas',
-  PascalApi.Messaging in '..\..\src\PascalApi.Messaging.pas',
   PascalApi.Crypto in '..\..\src\PascalApi.Crypto.pas',
   PascalApi.Jwt in '..\..\src\PascalApi.Jwt.pas',
   PascalApi.Http in '..\..\src\PascalApi.Http.pas',

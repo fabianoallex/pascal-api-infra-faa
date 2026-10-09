@@ -121,7 +121,6 @@
         <DCCReference Include="..\..\src\PascalApi.RateLimitState.pas"/>
         <DCCReference Include="..\..\src\PascalApi.FileLog.pas"/>
         <DCCReference Include="..\..\src\PascalApi.Dto.pas"/>
-        <DCCReference Include="..\..\src\PascalApi.Messaging.pas"/>
         <DCCReference Include="..\..\src\PascalApi.Crypto.pas"/>
         <DCCReference Include="..\..\src\PascalApi.Jwt.pas"/>
         <DCCReference Include="..\..\src\PascalApi.Http.pas"/>

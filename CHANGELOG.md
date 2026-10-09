@@ -4,6 +4,28 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 follow [Semantic Versioning](https://semver.org/). While the version is 0.x, a minor version
 may change the API; each such change is listed here.
 
+## [0.6.0] - 2026-10-09
+
+### Removed
+
+- **`PascalApi.Messaging`** (breaking): the broker-agnostic interfaces (`IMessageConsumer`,
+  `IMessagePublisher`, `IMessageHandler`, `IMessagePayload`, `IMessagingFactory`), `TMessagingConfig`
+  and `TMessagingRegistry`. No adapter implemented them on FPC and nothing used the registry. Use
+  [pascal-amqp-faa](https://github.com/fabianoallex/pascal-amqp-faa) directly; for Redis and
+  inter-process communication, pascal-redis-faa and pascal-pipes-faa.
+
+### Added
+
+- `docs/related-libraries.md`, `AGENTS.md`, and a section at the top of `CLAUDE.md` and in the
+  README: the sibling libraries for messaging, Redis and IPC, as the first choice for an API built
+  on this one, with how to add them.
+
+### Migration
+
+An application that implemented `IMessagingFactory` keeps working by moving those interfaces into
+its own code (they are plain declarations, no behavior), or better, calls pascal-amqp-faa's
+`TAMQPConnection`/`TAMQPChannel` directly.
+
 ## [0.5.0] - 2026-10-09
 
 ### Added

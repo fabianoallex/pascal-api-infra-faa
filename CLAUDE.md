@@ -1,9 +1,27 @@
 # pascal-api-infra-faa — Guide for AI agents
 
 Infrastructure for REST APIs on Horse, **dual-compiler** (Delphi + Lazarus/FPC 3.2.2): query-string
-paging and ordering, configuration, file logging, rate limiting, DTO bases, messaging contracts,
-JWT (HS256) and the Horse middlewares (error handler, CORS, request log, Bearer/JWT auth, rate
-limit). Built on pascal-common-faa, pascal-jsonmapper-faa, pascal-db-faa and Horse.
+paging and ordering, configuration, file logging, rate limiting, DTO bases, JWT (HS256), the
+Horse middlewares (error handler, CORS, request log, Bearer/JWT auth, rate
+limit), OpenAPI and an MCP server. Built on pascal-common-faa, pascal-jsonmapper-faa,
+pascal-db-faa and Horse.
+
+## Before writing messaging, Redis or IPC code: use the sibling libraries
+
+This library has **no** messaging, cache or inter-process layer, on purpose. When an API built
+on it (or this repository) needs one, use these first, and don't write a new client, adapter or
+abstraction without saying why none of them fits:
+
+| Need | Library | Units |
+|---|---|---|
+| Message broker (RabbitMQ / AMQP 0-9-1), or a broker embedded in the program | [pascal-amqp-faa](https://github.com/fabianoallex/pascal-amqp-faa) | `AMQP.*` |
+| Redis: cache, locks, counters, Pub/Sub, Streams | [pascal-redis-faa](https://github.com/fabianoallex/pascal-redis-faa) | `Redis.*` |
+| Inter-process: Named Pipe / Unix socket, TCP, TLS | [pascal-pipes-faa](https://github.com/fabianoallex/pascal-pipes-faa) | `Pipes.*` |
+
+Same author and dual-compiler rules, and they share pascal-common-faa with this library (one copy
+per application). How to add them, the minimum versions, sketches and why there is no layer here
+(`PascalApi.Messaging` was removed in 0.6.0): **`docs/related-libraries.md`**. The index of every
+`*-faa` library is the `dual-compiler-delphi-lazarus` skill's `references/faa-libraries.md`.
 
 For the general dual-compiler rules (project anatomy, `.inc`, mirrored tests, CI), use the
 `dual-compiler-delphi-lazarus` skill. This file records only what is specific to this repo. The
@@ -35,7 +53,7 @@ don't flow between the two automatically. Each unit's header says what changed i
 | `PascalApi.RateLimitState` | `Common.RateLimitState` |
 | `PascalApi.FileLog` | `Common.FileLog` |
 | `PascalApi.Dto` | `Common.DTO.Base` |
-| `PascalApi.Messaging` | `Messaging.Interfaces` + `Messaging.Adapters.Registry` |
+| — (removed in 0.6.0; use pascal-amqp-faa, `docs/related-libraries.md`) | `Messaging.Interfaces` + `Messaging.Adapters.Registry` |
 | `PascalApi.Text` | — (new: UTF-8 bytes, MD5, UTF-8 prefix) |
 | `PascalApi.Http` | the decisions inside `Horse.Middleware.*` (status mapping, CORS headers, Bearer parsing, client IP, access log line), without Horse |
 | `PascalApi.Crypto`, `PascalApi.Jwt` | `TJwtHelper` in `Horse.Middleware.Jwt` (System.Hash/NetEncoding/JSON); now also signs |
@@ -145,7 +163,7 @@ its own Horse `src` to the search path.
   for output (`TLogTruncate`) works on UTF-8 bytes and never splits a character.
 - **Shared defaults are created in `initialization`, never lazily** (a lazy default raced in
   pascal-common-faa's `TClock`): `TAppConfig`'s reader and path, the `FileLog` instance, the
-  messaging registry.
+  MCP endpoints and the OpenAPI document.
 - **Time through pascal-common-faa's `TClock`/`TTicker`** (replaceable in tests); durations with
   `TTicker`, never `TClock`.
 - **GUIDs are generated** (`[guid]::NewGuid()`), never typed; a hook rejects suspicious ones.

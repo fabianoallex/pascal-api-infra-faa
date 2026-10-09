@@ -10,7 +10,7 @@ interface
 uses
   PascalApi.Version, PascalApi.Text, PascalApi.Config, PascalApi.OrderBy, 
   PascalApi.Pagination, PascalApi.RateLimitState, PascalApi.FileLog, 
-  PascalApi.Dto, PascalApi.Messaging, PascalApi.Crypto, PascalApi.Jwt, 
+  PascalApi.Dto, PascalApi.Crypto, PascalApi.Jwt, 
   PascalApi.Http, PascalApi.OpenApi, PascalApi.Mcp;
 
 implementation
