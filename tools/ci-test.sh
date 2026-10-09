@@ -16,6 +16,7 @@ if [ -z "${FPC_IMAGE:-}" ]; then
   docker build -q -t "$FPC_IMAGE" - <<'DOCKERFILE' >/dev/null
 FROM debian:bookworm
 RUN apt-get update && apt-get install -y --no-install-recommends fpc curl ca-certificates libsqlite3-0 python3-pip && rm -rf /var/lib/apt/lists/* && pip3 install --no-cache-dir --break-system-packages openapi-spec-validator==0.7.1 mcp==2.0.0
+RUN curl -fsSL https://github.com/prometheus/prometheus/releases/download/v2.53.0/prometheus-2.53.0.linux-amd64.tar.gz | tar -xz -C /usr/local/bin --strip-components=1 prometheus-2.53.0.linux-amd64/promtool
 DOCKERFILE
 fi
 export FPC_IMAGE

@@ -56,9 +56,10 @@ uses
 // the single copy (its own submodule and search path). This stops the build
 // with a clear message if that copy is too old.
 // 1.3.0: PascalCommon.SafeLog (PascalApi.FileLog); 1.4.0: PascalCommon.Utf8 (PascalApi.Text);
-// 1.5.0: PascalCommon.TraceContext (PascalApi.Http).
-{$IF PASCALCOMMON_VERSION < 10500}
-  {$MESSAGE FATAL 'pascal-api-infra-faa needs pascal-common-faa 1.5.0 or later'}
+// 1.5.0: PascalCommon.TraceContext (PascalApi.Http); 1.6.0: PascalCommon.Metrics
+// (PascalApi.Horse.Observability).
+{$IF PASCALCOMMON_VERSION < 10600}
+  {$MESSAGE FATAL 'pascal-api-infra-faa needs pascal-common-faa 1.6.0 or later'}
 {$IFEND}
 
 type

@@ -4,6 +4,40 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 follow [Semantic Versioning](https://semver.org/). While the version is 0.x, a minor version
 may change the API; each such change is listed here.
 
+## [0.9.0] - 2026-10-09
+
+Phase B of the observability design (`docs/observability-design.md`): metrics and health.
+
+### Added
+
+- `PascalApi.Horse.Observability` (`src/horse`):
+  - `TMetricsMiddleware.New` records `http.server.request.duration` (histogram, seconds,
+    OpenTelemetry's buckets; labels `http.request.method`, `http.route`,
+    `http.response.status_code`) and `http.server.active_requests` (up-down counter) in
+    pascal-common-faa's `PcMetrics`, or a registry given to it.
+  - `TMetricsEndpoint.Register('/metrics')`: the registry in the Prometheus text format.
+  - `THealthEndpoint`: `GET <path>/live` and `GET <path>/ready`, which runs the checks given to
+    `AddCheck` (200, or 503 when one returns False or raises; failure reasons to an optional
+    `TLogProc`, never to the client).
+- `PascalApi.Http`: `MetricMethod` (unknown methods as `_OTHER`), `MetricRoute` (the route
+  template, never the raw path; `''` on a partial match), `HealthJson` and `THealthCheckResult`.
+- Samples: both use the metrics middleware and serve `/metrics` and `/health`; sample 01 has a
+  `maintenance` readiness check switched by `PUT /maintenance`, sample 02 a `database` check
+  (`SELECT 1` through the pool). CI checks both samples' `/metrics` with Prometheus' `promtool`
+  2.53.0.
+
+### Changed
+
+- Requires **pascal-common-faa 1.6.0** (`PascalCommon.Metrics`).
+
+### Fixed
+
+- README: the version line still said 0.7.0 in the 0.8.0 release.
+
+Verified: 209 unit tests with 0 leaks, and 146 + 61 HTTP checks, on FPC 3.2.2 Win64 and Linux
+x86_64 and Delphi 12 Win32 and Win64; `promtool check metrics` on both samples' `/metrics` from
+all four builds.
+
 ## [0.8.0] - 2026-10-09
 
 Phase A of the observability design (`docs/observability-design.md`): W3C trace context and

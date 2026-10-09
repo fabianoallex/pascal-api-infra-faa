@@ -70,7 +70,7 @@ all (measured, skill `references/rtti-gotchas.md`).
 
 ## Dependencies
 
-`external/` holds the dependencies as git submodules, pinned: pascal-common-faa `v1.5.0`,
+`external/` holds the dependencies as git submodules, pinned: pascal-common-faa `v1.6.0`,
 pascal-jsonmapper-faa `v0.3.0`, pascal-db-faa `v0.12.1`, Horse `3.3.12` (`fda6fed`; until 0.4.0
 this repository used 3.3.2, `72cc45f`; pascal-dfe-broker moved to 3.3.12 on 2026-10-09, delphi-api-starter is still on 3.3.2). They are **only for this
 repository's tests**: a consumer provides its own single copy of each (submodule + search path),
@@ -149,8 +149,15 @@ its own Horse `src` to the search path.
   global `TRateLimitMiddleware` would presumably count such a request twice (not measured, not
   fixed: only routes that don't exist).
 - **Observability** (`docs/observability-design.md`): the request id is the W3C trace id
-  (`ResolveRequestTrace`, from pascal-common-faa's `PascalCommon.TraceContext`); the contracts
-  that the sibling libraries will need go to pascal-common-faa, not here.
+  (`ResolveRequestTrace`, from pascal-common-faa's `PascalCommon.TraceContext`); metrics are
+  pascal-common-faa's `PascalCommon.Metrics` (`PcMetrics`), named as OpenTelemetry names them;
+  the contracts that the sibling libraries will need go to pascal-common-faa, not here.
+- **`THorseRequest.MatchedRoute`** (the `http.route` label) is the deepest node the router
+  visited, also on a partial match (`GET /cities/1/extra` left `/cities`), and `''` when a global
+  middleware answered first (a 401 from JWT). `MetricRoute` drops a template whose segment count
+  differs from the path. Never label a metric with the raw path.
+- **Every metric needs a description**: `promtool check metrics` (run by CI on both samples'
+  `/metrics`) exits non-zero on "no help text" even when the format is right.
 - **`THorseRequest.RemoteAddr` is '' with the console provider** (fpWeb on FPC, Indy on Delphi):
   only Horse's raw providers (Epoll, IOCP, HttpSys, Daemon, LCL) call `Populate` with it. Measured
   on FPC 3.2.2/Windows (the access log showed `-`) and on Delphi 12 Win32 (a probe, 2026-10-08);
@@ -206,7 +213,7 @@ exception in a helper and assert on what it returned.
 | Delphi | open `PascalApi.groupproj`, build `PascalApi.UnitTests`, `ApiSample` and `DbApiSample` (Win32 and Win64); run the tests; start `ApiSample.exe` and run `sh tools/http_scenarios.sh 9310`; start `DbApiSample.exe 9330 --reset` and run `sh tools/http_scenarios_db.sh 9330` |
 
 The middlewares are tested in two layers: their decisions in `PascalApi.HttpTests` (no server),
-and over real HTTP by `tools/http_scenarios.sh` (curl, 122 checks) against `samples/01-api`,
+and over real HTTP by `tools/http_scenarios.sh` (curl, 146 checks) against `samples/01-api`,
 which uses every middleware. In-process servers aren't used: on FPC, Horse's `Listen` blocks in
 `THTTPApplication.Run` and there is no `StopListen`.
 

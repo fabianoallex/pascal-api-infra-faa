@@ -17,13 +17,18 @@
     GET  /fail/database       the database is down: 503
     GET  /limited             rate limited: 3 requests per minute per X-Client header
     GET  /trace               the request's trace context, as the handler sees it
+    PUT  /maintenance         {"on":true|false}; while on, /health/ready answers 503
+    GET  /metrics             public; Prometheus text (http.server.* metrics)
+    GET  /health/live         public; 200 while the process answers
+    GET  /health/ready        public; the readiness checks (here: "maintenance")
     GET  /swagger             public; Swagger UI, and /swagger/doc.json the OpenAPI document
     POST /mcp                 MCP (2026-07-28): the documented routes as tools; needs the
                               token, which each tool call passes on to the route
 
-  Middlewares, in order: request log (console), CORS for
+  Middlewares, in order: request log (console), metrics, CORS for
   https://app.example.com, rate limit (only on /limited, keyed by the
-  X-Client header), JWT (all but /health and /auth/login), and the error
+  X-Client header), JWT (all but /health, /metrics, /auth/login and
+  /swagger), and the error
   handler (THorse.OnError). tools/http_scenarios.sh checks all of this over
   HTTP with curl.
 
@@ -55,11 +60,13 @@ uses
   PascalApi.Horse.Middlewares,
   PascalApi.Horse.OpenApi,
   PascalApi.Horse.Mcp,
+  PascalApi.Horse.Observability,
   ApiSample.Cities in 'ApiSample.Cities.pas';
 
 var
   GPort: Integer;
   GSecret: string;
+  GMaintenance: Boolean;
 
 { Handlers }
 
@@ -174,13 +181,32 @@ begin
   end;
 end;
 
-{ Rate limit key and error log: methods, the portable callback form }
+// The switch behind the "maintenance" readiness check.
+procedure PutMaintenance(AReq: THorseRequest; ARes: THorseResponse; ANext: TNextProc);
+var
+  LBody, LOn: TJsonValue;
+begin
+  LBody := ParseJson(AReq.Body);
+  try
+    LOn := LBody.Find('on');
+    if (LOn = nil) or (LOn.Kind <> jkBoolean) then
+      raise EValidationException.Create('"on" (true or false) is required.');
+    GMaintenance := LOn.AsBoolean;
+  finally
+    LBody.Free;
+  end;
+  ARes.Status(204).Send('');
+end;
+
+{ Rate limit key, error log and readiness check: methods, the portable
+  callback form }
 
 type
   TSampleCallbacks = class
   public
     function ClientKey(AReq: THorseRequest): string;
     procedure LogError(const ALine: string);
+    function NotInMaintenance: Boolean;
   end;
 
 function TSampleCallbacks.ClientKey(AReq: THorseRequest): string;
@@ -193,6 +219,15 @@ end;
 procedure TSampleCallbacks.LogError(const ALine: string);
 begin
   Writeln('ERROR ', ALine);
+end;
+
+// Raises rather than returning False, so the endpoint's exception path is
+// exercised too.
+function TSampleCallbacks.NotInMaintenance: Boolean;
+begin
+  if GMaintenance then
+    raise Exception.Create('in maintenance');
+  Result := True;
 end;
 
 var
@@ -209,8 +244,9 @@ begin
 
   TErrorHandlerMiddleware.Register(GCallbacks.LogError);
   THorse.Use(TLoggerMiddleware.New);
+  THorse.Use(TMetricsMiddleware.New);
   THorse.Use(TCorsMiddleware.New('https://app.example.com'));
-  THorse.Use(TJwtMiddleware.New(GSecret, ['/health', '/auth/login', '/swagger']));
+  THorse.Use(TJwtMiddleware.New(GSecret, ['/health', '/metrics', '/auth/login', '/swagger']));
 
   GRateLimit := TRateLimitOptions.Default;
   GRateLimit.Limit := 3;
@@ -245,7 +281,12 @@ begin
   TRouteDoc.Get('/trace').Summary('The request''s trace context').Tag('trace')
     .NoContent(200, '{"requestId": "...", "traceparent": "...", "tracestate": "..."}')
     .Error(401).Register(GetTrace);
+  TRouteDoc.Put('/maintenance').Summary('Readiness switch (sample only)').Tag('health').NoMcp
+    .NoContent(204).Error(400).Error(401).Register(PutMaintenance);
   TRouteDoc.Serve('/swagger', 'pascal-api-infra-faa sample 01', '1.0.0');
+  TMetricsEndpoint.Register('/metrics');
+  THealthEndpoint.AddCheck('maintenance', GCallbacks.NotInMaintenance);
+  THealthEndpoint.Register('/health', GCallbacks.LogError);
   // After every route: the tools are the operations documented so far.
   TMcpEndpoint.Register('/mcp', 'http://127.0.0.1:' + IntToStr(GPort), 'pascal-api-sample-01', '1.0.0');
 

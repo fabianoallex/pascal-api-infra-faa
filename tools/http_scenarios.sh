@@ -1,8 +1,9 @@
 #!/bin/sh
 # Checks samples/01-api over HTTP with curl: every middleware of
 # PascalApi.Horse.Middlewares (error handler, CORS, logger's trace id,
-# JWT, rate limit) plus paging, ordering, DTO validation, OpenAPI and the
-# MCP endpoint (2026-07-28).
+# JWT, rate limit) plus paging, ordering, DTO validation, OpenAPI, the
+# MCP endpoint (2026-07-28), and metrics and health
+# (PascalApi.Horse.Observability).
 #
 #   sh tools/http_scenarios.sh [port]      (default 9310; ApiSample must be running)
 #
@@ -261,6 +262,48 @@ req GET /mcp "" -H "$AUTH"
 status_is 405 "MCP GET"
 req POST /mcp '{}' -H "$AUTH" -H 'Origin: https://evil.example'
 status_is 403 "MCP from a browser origin"
+
+# --- health (public)
+req GET /health/live ""
+status_is 200 "liveness"
+body_is '{"status":"ok"}' "liveness"
+req GET /health/ready ""
+status_is 200 "readiness"
+body_is '{"status":"ok","checks":{"maintenance":"ok"}}' "readiness"
+req PUT /maintenance '{"on":true}'
+status_is 401 "maintenance switch needs the token"
+req PUT /maintenance '{"on":1}' -H "$AUTH"
+status_is 400 "maintenance switch, not a boolean"
+req PUT /maintenance '{"on":true}' -H "$AUTH"
+status_is 204 "maintenance on"
+req GET /health/ready ""
+status_is 503 "readiness in maintenance (the check raises)"
+body_is '{"status":"fail","checks":{"maintenance":"fail"}}' "readiness in maintenance"
+req PUT /maintenance '{"on":false}' -H "$AUTH"
+req GET /health/ready ""
+status_is 200 "readiness after maintenance"
+
+# --- metrics (public), scraped after everything above
+req GET /cities/1/extra "" -H "$AUTH"
+status_is 404 "a partial route match"
+req FOO /health ""
+req GET /metrics ""
+status_is 200 "metrics"
+header_is Content-Type 'text/plain; version=0.0.4; charset=utf-8' "metrics"
+body_has '# TYPE http_server_request_duration_seconds histogram' "metrics: duration histogram"
+body_has '# HELP http_server_request_duration_seconds Duration of HTTP server requests.' "metrics: duration help"
+body_has '# TYPE http_server_active_requests gauge' "metrics: active requests"
+body_has 'http_server_active_requests{http_request_method="GET"} 1' "metrics: the scrape itself is active"
+body_has 'http_server_request_duration_seconds_count{http_request_method="GET",http_route="/cities/:id",http_response_status_code="404"}' "metrics: route template"
+body_lacks 'http_route="/cities/999"' "metrics: never the raw path"
+body_lacks 'http_route="/cities",http_response_status_code="404"' "metrics: a partial match is no route"
+body_has 'http_server_request_duration_seconds_count{http_request_method="GET",http_route="/health/ready",http_response_status_code="503"} 1' "metrics: exact count"
+body_has 'http_server_request_duration_seconds_count{http_request_method="GET",http_route="/fail/server",http_response_status_code="500"}' "metrics: status of an exception"
+body_has 'http_request_method="_OTHER"' "metrics: unknown method"
+# /no/such/route and /cities/1/extra, once each (Horse runs middlewares twice there).
+body_has 'http_server_request_duration_seconds_count{http_request_method="GET",http_route="",http_response_status_code="404"} 2' "metrics: unknown routes counted once"
+# METRICS_OUT: also save it, for promtool (tools/test_http_docker.sh).
+[ -n "$METRICS_OUT" ] && cp "$T/body" "$METRICS_OUT"
 
 rm -rf "$T"
 echo "$CHECKS checks, $FAILS failed"

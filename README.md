@@ -10,8 +10,9 @@ threading), [pascal-jsonmapper-faa](https://github.com/fabianoallex/pascal-jsonm
 paging). It is not a drop-in replacement for the Delphi library: DTOs map **published**
 properties, because FPC 3.2.2's RTTI sees nothing else.
 
-Version **0.7.0** (see the [changelog](CHANGELOG.md)): the core, the Horse middlewares, OpenAPI and an MCP
-server (protocol 2026-07-28). See [docs/plan.md](docs/plan.md).
+Version **0.9.0** (see the [changelog](CHANGELOG.md)): the core, the Horse middlewares, OpenAPI, an MCP
+server (protocol 2026-07-28), W3C trace context, metrics (Prometheus) and health endpoints.
+Observability plan: [docs/observability-design.md](docs/observability-design.md). See [docs/plan.md](docs/plan.md).
 
 ## Contents
 
@@ -24,7 +25,7 @@ server (protocol 2026-07-28). See [docs/plan.md](docs/plan.md).
 | `PascalApi.FileLog` | asynchronous file logging, one file per category, rotated by size; `TLogTruncate` |
 | `PascalApi.Dto` | marker interfaces and base classes for DTOs, including paged search and paged response |
 | `PascalApi.Text` | UTF-8 bytes ⇄ string, MD5, UTF-8-safe prefix — the same on both compilers |
-| `PascalApi.Http` | HTTP exceptions (`EValidationException`, `ENotFoundException`...), exception → status mapping, CORS, Bearer, client IP, access log line; replaceable client messages (English or Portuguese) |
+| `PascalApi.Http` | HTTP exceptions (`EValidationException`, `ENotFoundException`...), exception → status mapping, CORS, Bearer, client IP, trace context, access log line (text or JSON), metric labels, health answer; replaceable client messages (English or Portuguese) |
 | `PascalApi.Crypto` | SHA-256, HMAC-SHA256, Base64url (FPC 3.2.2 has no SHA-256) |
 | `PascalApi.Jwt` | HS256 JSON Web Tokens: sign, verify (alg, signature, exp, nbf), claims |
 | `PascalApi.Horse.Middlewares` (`src/horse`) | Horse middlewares: error handler, CORS, request log, Bearer auth, JWT, rate limit |
@@ -32,6 +33,7 @@ server (protocol 2026-07-28). See [docs/plan.md](docs/plan.md).
 | `PascalApi.Horse.OpenApi` (`src/horse`) | `TRouteDoc`: register and document a route in one call; `/swagger` UI and `/swagger/doc.json`, with the JWT/Bearer scheme taken from the auth middleware |
 | `PascalApi.Mcp` | MCP (2026-07-28): the documented routes as tools, and the JSON-RPC dispatcher |
 | `PascalApi.Horse.Mcp` (`src/horse`) | `TMcpEndpoint.Register('/mcp', ...)`: the MCP endpoint; tool calls go through the API's own middlewares |
+| `PascalApi.Horse.Observability` (`src/horse`) | `TMetricsMiddleware` (OpenTelemetry HTTP server metrics), `TMetricsEndpoint` (`/metrics`, Prometheus text), `THealthEndpoint` (`/health/live`, `/health/ready` with your checks) |
 | `PascalApi.Version` | `PASCALAPI_VERSION`, for compile-time checks |
 
 ## A quick look
@@ -39,12 +41,16 @@ server (protocol 2026-07-28). See [docs/plan.md](docs/plan.md).
 ```pascal
 TErrorHandlerMiddleware.Register(LOnError);            // {"error": ...} + status for any exception
 THorse.Use(TLoggerMiddleware.New);                      // one access line per request; X-Request-Id = W3C trace id
+THorse.Use(TMetricsMiddleware.New);                     // http.server.request.duration, .active_requests
 THorse.Use(TCorsMiddleware.New('https://app.example.com'));
-THorse.Use(TJwtMiddleware.New(TAppConfig.Get('JWT_SECRET'), ['/health', '/auth/login']));
+THorse.Use(TJwtMiddleware.New(TAppConfig.Get('JWT_SECRET'), ['/health', '/metrics', '/auth/login']));
 THorse.Use('/reports', TRateLimitMiddleware.New(60, 60));
 
 THorse.Get('/cities', GetCities);   // raise ENotFoundException / EValidationException freely;
                                     // answer with TJsonSend.Send(Res, Json) (UTF-8 on both compilers)
+TMetricsEndpoint.Register('/metrics');                  // Prometheus scrape
+THealthEndpoint.AddCheck('database', LChecks.Database); // a function: Boolean (method on FPC)
+THealthEndpoint.Register('/health');                    // /health/live, /health/ready (200 or 503)
 THorse.Listen(9000);
 ```
 
@@ -83,8 +89,8 @@ How to add them to an application, minimum versions and short examples:
 
 | Sample | Shows | Checked by |
 |---|---|---|
-| [01-api](samples/01-api/ApiSample.dpr) | every middleware (errors, CORS, log, JWT, rate limit), paging and validation, in memory | `tools/http_scenarios.sh` (122 checks) |
-| [02-db](samples/02-db/DbApiSample.dpr) | SQLite through pascal-db-faa (SQLdb on FPC, FireDAC on Delphi): migrations, paging and ordering in SQL, filters, 409 from a unique key, NULL as `null` | `tools/http_scenarios_db.sh` (56 checks) |
+| [01-api](samples/01-api/ApiSample.dpr) | every middleware (errors, CORS, log, metrics, JWT, rate limit), health, paging and validation, in memory | `tools/http_scenarios.sh` (146 checks) |
+| [02-db](samples/02-db/DbApiSample.dpr) | SQLite through pascal-db-faa (SQLdb on FPC, FireDAC on Delphi): migrations, paging and ordering in SQL, filters, 409 from a unique key, NULL as `null` | `tools/http_scenarios_db.sh` (61 checks) |
 
 Both run with one source on Delphi and Lazarus/FPC. On FPC for Windows, sample 02 needs
 sqlite.org's `sqlite3.dll` next to the executable (see `tools/test_http.sh`).

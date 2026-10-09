@@ -2,7 +2,8 @@
 
 Status: **approved (2026-10-09)**. Decisions 1, 2 and 3 taken with the user; 4, 5 and 6 as
 recommended (user, 2026-10-09). **Phase A done** (2026-10-09): part 1 in pascal-common-faa 1.5.0
-(`PascalCommon.TraceContext`), part 2 here (0.8.0; see "Phase A: what was done"). Next: phase B.
+(`PascalCommon.TraceContext`), part 2 here (0.8.0; see "Phase A: what was done"). **Phase B done** (2026-10-09, 0.9.0): pascal-common-faa 1.6.0 (`PascalCommon.Metrics`) and
+`PascalApi.Horse.Observability` here (see "Phase B: what was done"). Next: phase C.
 
 ## Goal
 
@@ -172,10 +173,10 @@ the message headers), using the contracts moved to pascal-common-faa.
 
 ## Risks and things to measure before relying on them
 
-- **Route template.** Metrics need `/orders/:id`, not `/orders/123` (cardinality). Whether
-  Horse 3.3.12 exposes the matched route on both compilers is unknown; if not, `TRouteDoc`
-  knows the documented templates and can resolve the path. Undocumented routes fall back to a
-  fixed label (`other`), never the raw path.
+- **Route template.** Metrics need `/orders/:id`, not `/orders/123` (cardinality). Settled in
+  phase B: Horse 3.3.12 has `THorseRequest.MatchedRoute`, set by the shared router code on both
+  compilers; a partial match and a request answered before routing are `''` (an empty label,
+  the semantic conventions' "absent"), never the raw path.
 - **Current span in a `threadvar`.** Horse's providers (Indy, fpWeb) run a request on one thread
   from start to end, but reuse threads: the middleware clears it in a `finally`. Across
   processes (and the MCP loopback) the header carries the context, not the thread.
@@ -221,6 +222,31 @@ the message headers), using the contracts moved to pascal-common-faa.
 - Not checked by a script: the error line's `trace_id=` and the JSON line are only in the
   samples' `server.log` (read by hand: correct). The scenario scripts don't read the server's
   output, because on Delphi the user starts the sample by hand.
+
+## Phase B: what was done (2026-10-09)
+
+- pascal-common-faa 1.6.0: `PascalCommon.Metrics` (registry, the four kinds, OpenTelemetry to
+  Prometheus name conversion, the text format writer, `PC_DURATION_BUCKETS`), checked there with
+  `promtool`.
+- Here, `PascalApi.Horse.Observability`: `TMetricsMiddleware` (the two HTTP server metrics of
+  the semantic conventions, runs once per request like the logger), `TMetricsEndpoint`,
+  `THealthEndpoint` (live/ready, checks registered at startup, a check that raises counts as
+  failed, reasons only to a `TLogProc`). `PascalApi.Http`: `MetricMethod`, `MetricRoute`,
+  `HealthJson`. Recorded by a separate middleware rather than the logger, so an application can
+  have one without the other.
+- Measured while writing it (FPC Win64, Horse 3.3.12): `MatchedRoute` is the deepest node the
+  router visited, so `GET /cities/1/extra` (no such route) left `/cities`; `MetricRoute` drops a
+  template whose segment count differs from the path (except a final `*`). A 401 from
+  `TJwtMiddleware` has `MatchedRoute = ''` (the global middleware answers before the router
+  descends). The status is final in the middleware's `finally`, also for an exception (Horse's
+  `OnError` answers inside the chain).
+- Verified: unit suite 209 tests, 0 leaks, FPC Win64 and Linux; HTTP 146 + 61 checks on FPC
+  Windows and Linux; both samples' `/metrics` pass `promtool check metrics` (2.53.0) in CI. The
+  "unknown routes counted once" check fails without the re-entry mark (checked). Delphi 12 Win32
+  and Win64: the same tests and checks pass, the partial-match check included (so `MatchedRoute`
+  behaves the same there), and `promtool` accepts their `/metrics`.
+- Not done: the pool gauges of pascal-db-faa (`TPoolSnapshot`) as metrics; a natural addition
+  for phase D or an application.
 
 ## Phase A, part 1, in pascal-common-faa (the handoff, kept for the record)
 

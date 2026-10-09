@@ -5,8 +5,9 @@
 # SQLdb adapter, which loads Debian's libsqlite3.so.0).
 #
 # Horse is used unchanged (external/horse, 3.3.12). The image needs FPC 3.2.2 and
-# curl, libsqlite3-0, openapi-spec-validator and the MCP Python SDK (mcp 2.0.0,
-# for tools/mcp_client_check.py); tools/ci-test.sh builds one.
+# curl, libsqlite3-0, openapi-spec-validator, the MCP Python SDK (mcp 2.0.0,
+# for tools/mcp_client_check.py) and Prometheus' promtool (2.53.0, for the
+# /metrics output); tools/ci-test.sh builds one.
 set -e
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 IMAGE="${FPC_IMAGE:-pascalapi-fpc322}"
@@ -35,10 +36,14 @@ MSYS_NO_PATHCONV=1 docker run --rm -v "$MOUNT:/src:ro" "$IMAGE" sh -c '
     PID=$!
     for I in 1 2 3 4 5 6 7 8 9 10; do curl -s -o /dev/null http://127.0.0.1:$3/ && break; sleep 1; done
     RC=0
-    OPENAPI_OUT=/t/openapi-$2.json sh /t/tools/$4 $3 || RC=$?
+    OPENAPI_OUT=/t/openapi-$2.json METRICS_OUT=/t/metrics-$2.txt sh /t/tools/$4 $3 || RC=$?
     # The document each sample serves, checked against the OpenAPI 3.0 spec.
     if [ $RC -eq 0 ]; then
       python3 -m openapi_spec_validator /t/openapi-$2.json || RC=$?
+    fi
+    # Its /metrics, checked by Prometheus itself (a lint warning also fails).
+    if [ $RC -eq 0 ]; then
+      promtool check metrics < /t/metrics-$2.txt || RC=$?
     fi
     # The MCP endpoint, driven by the official Python SDK (2026-07-28).
     if [ $RC -eq 0 ]; then

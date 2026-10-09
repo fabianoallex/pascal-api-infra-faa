@@ -126,7 +126,7 @@ Measured with the SDK, missed in the first reading of the specification: `server
 `tools/list` must carry `ttlMs` and `cacheScope` (cacheable results); the SDK rejects a
 `tools/list` without them.
 
-### 6. Observability — phase A done (2026-10-09), B next
+### 6. Observability — phases A and B done (2026-10-09), C next
 
 W3C trace context, Prometheus metrics, health endpoints and OpenTelemetry (OTLP/HTTP JSON)
 export, in four stages (A: trace context and correlated logs; B: metrics and health; C: spans and
@@ -139,3 +139,8 @@ Phase A (trace context and correlated logs) released as 0.8.0, verified on FPC W
 Linux and Delphi 12 Win32/Win64: the request id is the trace id, `traceparent` reaches the handler and the MCP
 tool calls, JSON access log opt-in. Found on the way: Horse runs global middlewares twice when
 no route matches (the logger now runs once per request).
+
+Phase B (metrics and health) released as 0.9.0, verified on FPC Windows and Linux and Delphi 12
+Win32/Win64:
+`PascalApi.Horse.Observability` on pascal-common-faa 1.6.0's `PascalCommon.Metrics`; CI checks
+both samples' `/metrics` with `promtool`. Found: Horse's `MatchedRoute` keeps a partial match.

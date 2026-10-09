@@ -19,6 +19,9 @@
     POST   /cities          {"code":"4205407","name":"...","state":"SC","population":123}
                             201; 409 when the code exists (the database says so), 400 invalid
     DELETE /cities/:code    204; 404 when it doesn't exist
+    GET    /metrics         Prometheus text (http.server.* metrics)
+    GET    /health/live     200 while the process answers
+    GET    /health/ready    the readiness check "database" (SELECT 1 through the pool)
     GET    /swagger         Swagger UI; /swagger/doc.json is the OpenAPI 3.0.3 document
     POST   /mcp             MCP (2026-07-28): the four routes above as tools, with the
                             schemas of their DTOs; browser origin allowed: the MCP
@@ -61,6 +64,7 @@ uses
   PascalApi.Horse.Middlewares,
   PascalApi.Horse.OpenApi,
   PascalApi.Horse.Mcp,
+  PascalApi.Horse.Observability,
   DbApiSample.Cities in 'DbApiSample.Cities.pas';
 
 var
@@ -110,6 +114,7 @@ type
   public
     procedure Error(const ALine: string);
     procedure Migration(const AEvent: TMigrationEvent);
+    function DatabaseReady: Boolean;
   end;
 
 procedure TSampleLog.Error(const ALine: string);
@@ -121,6 +126,18 @@ procedure TSampleLog.Migration(const AEvent: TMigrationEvent);
 begin
   if AEvent.Kind = mekApplied then
     Writeln('migration ', AEvent.Version, ' ', AEvent.ScriptName);
+end;
+
+// A connection from the pool answers a query. Raises when the database
+// can't be reached (the endpoint counts that as a failure).
+function TSampleLog.DatabaseReady: Boolean;
+var
+  LQuery: IQuery;
+  LScope: IScopeTransaction;
+begin
+  LScope := GFactory.GetPool.AcquireQuery(LQuery);
+  LQuery.Sql := 'SELECT 1 AS ONE';
+  Result := LQuery.Open.RecordCount = 1;
 end;
 
 function NewFactory(const ADatabaseFile: string): IDBFactory;
@@ -190,6 +207,7 @@ begin
 
     TErrorHandlerMiddleware.Register(GLog.Error);
     THorse.Use(TLoggerMiddleware.New(nil, alfJson));
+    THorse.Use(TMetricsMiddleware.New);
     // Each route registered in Horse and documented in one call.
     TRouteDoc.Get('/cities')
       .Summary('List cities, a page at a time').Tag('cities')
@@ -216,6 +234,9 @@ begin
       .NoContent(204, 'Deleted')
       .Error(404, 'No city with this code')
       .Register(DeleteCity);
+    TMetricsEndpoint.Register;
+    THealthEndpoint.AddCheck('database', GLog.DatabaseReady);
+    THealthEndpoint.Register('/health', GLog.Error);
     TRouteDoc.Serve('/swagger', 'Cities API (pascal-api-infra-faa sample 02)', '1.0.0');
     TMcpEndpoint.Register('/mcp', 'http://127.0.0.1:' + IntToStr(GPort), 'cities-api', '1.0.0',
       [], ['http://localhost:6274']);

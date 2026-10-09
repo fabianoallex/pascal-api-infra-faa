@@ -5,8 +5,8 @@
 (* The decisions behind the Horse middlewares, without Horse: which status
   and message an exception becomes, which CORS headers a request gets, what
   an Authorization header holds, which paths skip authentication, the
-  client's IP, the request's trace context and the access log line (text or
-  JSON).
+  client's IP, the request's trace context, the access log line (text or
+  JSON), the labels of the HTTP metrics and the health response.
 
   Kept apart so they are tested without a server, on both compilers; the
   middlewares (the PascalApi.Horse units) only move values between Horse's request
@@ -122,6 +122,12 @@ type
 
   TAccessLogFormat = (alfText, alfJson);
 
+  /// One readiness check's outcome, for HealthJson.
+  THealthCheckResult = record
+    Name: string;
+    Ok: Boolean;
+  end;
+
   /// The trace context of one request (W3C Trace Context): its trace id,
   /// which is also the X-Request-Id, and the span the server opens for it.
   TRequestTrace = record
@@ -194,6 +200,29 @@ function WithTraceId(const ALine, ATraceId: string): string;
 
 /// Seconds until AResetUnix, never below 0.
 function RetryAfterSeconds(AResetUnix, ANowUnix: Int64): Int64;
+
+/// The http.request.method of a metric: AMethod when it is one of the
+/// methods of RFC 9110 or PATCH (GET HEAD POST PUT DELETE CONNECT OPTIONS
+/// TRACE PATCH; case-sensitive, as HTTP methods are), else '_OTHER', as the
+/// OpenTelemetry semantic conventions ask, so a client can't create series.
+function MetricMethod(const AMethod: string): string;
+
+/// The http.route of a metric: AMatchedRoute (THorseRequest.MatchedRoute,
+/// the template, '/cities/:id'), never the raw path, so a client can't
+/// create series; '' when no route matched (an empty Prometheus label is
+/// the same as no label: the semantic conventions' "absent when unknown").
+/// Horse leaves in MatchedRoute the deepest node it visited, also when the
+/// match was partial: GET /cities/1/extra left '/cities' (measured, Horse
+/// 3.3.12, FPC Win64). So a template with a different number of segments
+/// than APath is '', unless its last segment is a wildcard ('*').
+function MetricRoute(const AMatchedRoute, APath: string): string;
+
+/// The body of a readiness answer and its status: 200 with
+/// {"status":"ok","checks":{"<name>":"ok",...}} when every check passed,
+/// 503 with "fail" in the failed ones and the top status otherwise. No
+/// check: 200 {"status":"ok","checks":{}}. Only names and ok/fail: the
+/// endpoint is usually public, so no error detail goes into it.
+function HealthJson(const AResults: array of THealthCheckResult; out AStatus: Integer): string;
 
 implementation
 
@@ -582,6 +611,92 @@ begin
     Result := ALine
   else
     Result := ALine + ' trace_id=' + ATraceId;
+end;
+
+function MetricMethod(const AMethod: string): string;
+const
+  KNOWN: array[0..8] of string = ('GET', 'HEAD', 'POST', 'PUT', 'DELETE', 'CONNECT',
+    'OPTIONS', 'TRACE', 'PATCH');
+var
+  I: Integer;
+begin
+  for I := 0 to High(KNOWN) do
+    if AMethod = KNOWN[I] then
+      Exit(AMethod);
+  Result := '_OTHER';
+end;
+
+function SegmentCount(const APath: string): Integer;
+var
+  I: Integer;
+  LInSegment: Boolean;
+begin
+  Result := 0;
+  LInSegment := False;
+  for I := 1 to Length(APath) do
+    if APath[I] = '/' then
+      LInSegment := False
+    else if not LInSegment then
+    begin
+      LInSegment := True;
+      Inc(Result);
+    end;
+end;
+
+function MetricRoute(const AMatchedRoute, APath: string): string;
+var
+  LLast: Integer;
+begin
+  Result := AMatchedRoute;
+  if Result = '' then
+    Exit;
+  LLast := Length(Result);
+  while (LLast > 0) and (Result[LLast] = '/') do
+    Dec(LLast);
+  if (LLast > 0) and (Result[LLast] = '*') then
+    Exit;
+  if SegmentCount(AMatchedRoute) <> SegmentCount(APath) then
+    Result := '';
+end;
+
+function HealthJson(const AResults: array of THealthCheckResult; out AStatus: Integer): string;
+var
+  LWriter: TJsonWriter;
+  LOk: Boolean;
+  I: Integer;
+begin
+  LOk := True;
+  for I := 0 to High(AResults) do
+    if not AResults[I].Ok then
+      LOk := False;
+  if LOk then
+    AStatus := 200
+  else
+    AStatus := 503;
+  LWriter := TJsonWriter.Create;
+  try
+    LWriter.BeginObject;
+    LWriter.Name('status');
+    if LOk then
+      LWriter.WriteString('ok')
+    else
+      LWriter.WriteString('fail');
+    LWriter.Name('checks');
+    LWriter.BeginObject;
+    for I := 0 to High(AResults) do
+    begin
+      LWriter.Name(AResults[I].Name);
+      if AResults[I].Ok then
+        LWriter.WriteString('ok')
+      else
+        LWriter.WriteString('fail');
+    end;
+    LWriter.EndObject;
+    LWriter.EndObject;
+    Result := LWriter.ToString;
+  finally
+    LWriter.Free;
+  end;
 end;
 
 function RetryAfterSeconds(AResetUnix, ANowUnix: Int64): Int64;

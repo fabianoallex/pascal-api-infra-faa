@@ -141,6 +141,16 @@ status_is 200 "MCP from the allowed origin"
 mcp server/discover "" "" -H 'Origin: http://localhost:9999'
 status_is 403 "MCP from another origin"
 
+# --- health and metrics
+req GET /health/ready ""
+status_is 200 "readiness"
+body_is '{"status":"ok","checks":{"database":"ok"}}' "readiness: the database answers"
+req GET /metrics ""
+status_is 200 "metrics"
+grep -qF 'http_route="/cities/:code"' "$T/body" && ok || fail "metrics: route template"
+grep -qF 'http_route="/cities/3550308"' "$T/body" && fail "metrics: raw path" || ok
+[ -n "$METRICS_OUT" ] && cp "$T/body" "$METRICS_OUT"
+
 rm -rf "$T"
 echo "$CHECKS checks, $FAILS failed"
 [ "$FAILS" -eq 0 ]
