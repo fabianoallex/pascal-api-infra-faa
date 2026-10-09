@@ -23,8 +23,8 @@ five blockers. Since then, three were solved by the sibling libraries:
 | FireDAC (adapter + `Common.Helpers`) | pascal-db-faa: SQLdb, Zeos and FireDAC adapters |
 | `System.JSON` | pascal-jsonmapper-faa's own DOM (`PascalJsonMapper.Json`), identical output on both compilers |
 | `TJsonMapper` on extended RTTI | pascal-jsonmapper-faa, with published properties (a convention change) |
-| Closures (`reference to`) | still open: phase 3 |
-| SwagDoc + `[SwagProp]` attributes | still open: phase 4 |
+| Closures (`reference to`) | open then; solved in phase 3 (`PASCALAPI_FUNCREFS`, named procedures for Horse) |
+| SwagDoc + `[SwagProp]` attributes | open then; solved in phase 4 (own writer, fluent `TApiSchema.Describe`) |
 
 Measured on 2026-10-08:
 - FPC 3.2.2 (`C:\lazarus4.0`) ships HMAC only for MD5 and SHA-1 (`packages/hash/src/hmac.pp`);

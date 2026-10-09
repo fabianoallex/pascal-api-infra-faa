@@ -18,6 +18,14 @@
   Register leaks its builder. Handlers are named procedures (FPC 3.2.2 has
   no anonymous methods), the same ones THorse.Get takes.
 
+  Authentication is documented from the middleware that enforces it: when
+  TJwtMiddleware.New (or TAuthMiddleware.Bearer) ran before Serve, the
+  document gets a bearer security scheme ("JWT" format for TJwtMiddleware),
+  required by every operation except those whose path the middleware
+  excludes, which get "security": []. One list of public paths, the
+  middleware's; this assumes the middleware is installed for the whole API
+  (THorse.Use(...)), not on a path prefix.
+
   Serve writes the document once and registers two routes: <base>/doc.json
   (the OpenAPI 3.0.3 document) and <base> (Swagger UI, loaded by the browser
   from unpkg, swagger-ui-dist pinned to SWAGGER_UI_VERSION: the page needs
@@ -304,10 +312,22 @@ end;
 class procedure TRouteDoc.Serve(const ABasePath, ATitle, AVersion, ADescription: string);
 var
   LCdn: string;
+  I: Integer;
 begin
   GDocument.Title := ATitle;
   GDocument.Version := AVersion;
   GDocument.Description := ADescription;
+  if TJwtMiddleware.Configured or TAuthMiddleware.Configured then
+  begin
+    GDocument.BearerAuth := True;
+    if TJwtMiddleware.Configured then
+      GDocument.BearerFormat := 'JWT';
+    for I := 0 to GDocument.Operations.Count - 1 do
+      if TJwtMiddleware.Configured then
+        GDocument.Operations[I].NoAuth := TJwtMiddleware.Excludes(GDocument.Operations[I].Path)
+      else
+        GDocument.Operations[I].NoAuth := TAuthMiddleware.Excludes(GDocument.Operations[I].Path);
+  end;
   GDocJson := GDocument.ToJson;
   LCdn := 'https://unpkg.com/swagger-ui-dist@' + SWAGGER_UI_VERSION;
   GUiHtml :=

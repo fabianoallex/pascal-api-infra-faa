@@ -97,6 +97,10 @@ type
     class function Bearer(const AValidator: TTokenValidator): THorseCallback; overload; static;
     class function Bearer(const AValidator: TTokenValidator;
       const AExcludedPrefixes: array of string): THorseCallback; overload; static;
+    /// Bearer was called (for TRouteDoc.Serve, which documents the scheme).
+    class function Configured: Boolean; static;
+    /// APath is one of the excluded prefixes' (needs no token).
+    class function Excludes(const APath: string): Boolean; static;
   end;
 
   /// Bearer authentication with an HS256 JWT (PascalApi.Jwt): signature,
@@ -109,6 +113,10 @@ type
     /// The claims of the request's token, verified again with the configured
     /// secret; nil when absent or invalid. The caller frees the result.
     class function Claims(AReq: THorseRequest): TJsonValue; static;
+    /// New was called (for TRouteDoc.Serve, which documents the scheme).
+    class function Configured: Boolean; static;
+    /// APath is one of the excluded prefixes' (needs no token).
+    class function Excludes(const APath: string): Boolean; static;
   end;
 
   TRateLimitOptions = record
@@ -385,6 +393,26 @@ begin
   GAuthValidator := AValidator;
   GAuthExcluded := CopyPrefixes(AExcludedPrefixes);
   Result := AsCallback(AuthHandler);
+end;
+
+class function TAuthMiddleware.Configured: Boolean;
+begin
+  Result := Assigned(GAuthValidator);
+end;
+
+class function TAuthMiddleware.Excludes(const APath: string): Boolean;
+begin
+  Result := PathMatchesAny(APath, GAuthExcluded);
+end;
+
+class function TJwtMiddleware.Configured: Boolean;
+begin
+  Result := GJwtSecret <> ''; // New refuses an empty secret
+end;
+
+class function TJwtMiddleware.Excludes(const APath: string): Boolean;
+begin
+  Result := PathMatchesAny(APath, GJwtExcluded);
 end;
 
 class function TJwtMiddleware.New(const ASecret: string): THorseCallback;

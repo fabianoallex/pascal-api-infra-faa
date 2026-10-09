@@ -4,6 +4,23 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 follow [Semantic Versioning](https://semver.org/). While the version is 0.x, a minor version
 may change the API; each such change is listed here.
 
+## [0.7.0] - 2026-10-09
+
+### Added
+
+- Bearer authentication in the OpenAPI document (Swagger UI's Authorize button):
+  `TApiDocument.BearerAuth`/`BearerFormat` write `components.securitySchemes.bearerAuth` and a
+  document-wide `security` requirement; `TApiOperation.NoAuth` lifts it (`"security": []`).
+  `TRouteDoc.Serve` sets them from the middleware that enforces them: when `TJwtMiddleware.New`
+  (format `JWT`) or `TAuthMiddleware.Bearer` ran before it, every operation needs the token
+  except the paths the middleware excludes. New `Configured`/`Excludes` class functions on both
+  middlewares.
+
+### Changed
+
+- Documentation: the `RemoteAddr` note (measured on Delphi too), the evaluation table in
+  `docs/plan.md`, check counts.
+
 ## [0.6.0] - 2026-10-09
 
 ### Removed

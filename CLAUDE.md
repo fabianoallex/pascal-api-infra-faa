@@ -99,6 +99,9 @@ four decisions taken with the user: `docs/openapi-design.md`. Rules that keep it
 - Metadata by Pascal property name, checked at `Describe` time (`EApiSchemaError`).
 - Both samples document their routes, and `tools/test_http_docker.sh` (CI) validates each
   document with `openapi-spec-validator`.
+- Authentication in the document comes from the middleware, never from a second list:
+  `TRouteDoc.Serve` asks `TJwtMiddleware`/`TAuthMiddleware` (`Configured`, `Excludes`) and marks
+  the excluded paths `NoAuth` (`"security": []`).
 
 ### MCP
 
@@ -136,13 +139,14 @@ its own Horse `src` to the search path.
 - **JSON goes out through `TJsonSend.Send` (UTF-8 bytes + `charset=utf-8`), never
   `Res.Send(string)`.** On Delphi, `Send(string)` goes through the web response's `Content`, which
   encodes by the Content-Type's charset: with plain `application/json`, accented text arrived
-  broken (4 of the 65 HTTP checks, Delphi 12 Win32 and Win64; FPC was fine because its string is
+  broken (4 of the 65 HTTP checks of the time, Delphi 12 Win32 and Win64; FPC was fine because its string is
   already UTF-8). The unit tests can't see this: only the HTTP scenarios on Delphi do.
-- **`THorseRequest.RemoteAddr` is '' with the console provider** (fpWeb on FPC; by reading Horse's code, Indy on Delphi too):
+- **`THorseRequest.RemoteAddr` is '' with the console provider** (fpWeb on FPC, Indy on Delphi):
   only Horse's raw providers (Epoll, IOCP, HttpSys, Daemon, LCL) call `Populate` with it. Measured
-  on FPC 3.2.2/Windows (the access log showed `-`); `RemoteAddrOf` falls back to
-  `RawWebRequest.RemoteAddr`. Delphi not measured yet. The origin uses `Req.RemoteAddr` directly,
-  so its IP rate limit probably keys every client as `unknown` there — not checked on that side.
+  on FPC 3.2.2/Windows (the access log showed `-`) and on Delphi 12 Win32 (a probe, 2026-10-08);
+  `RemoteAddrOf` falls back to `RawWebRequest.RemoteAddr`. The origin used `Req.RemoteAddr`
+  directly, so its IP rate limit keyed every client as `unknown`: fixed there in
+  delphi-api-infra-faa 0.4.1.
 
 ---
 
@@ -192,7 +196,7 @@ exception in a helper and assert on what it returned.
 | Delphi | open `PascalApi.groupproj`, build `PascalApi.UnitTests`, `ApiSample` and `DbApiSample` (Win32 and Win64); run the tests; start `ApiSample.exe` and run `sh tools/http_scenarios.sh 9310`; start `DbApiSample.exe 9330 --reset` and run `sh tools/http_scenarios_db.sh 9330` |
 
 The middlewares are tested in two layers: their decisions in `PascalApi.HttpTests` (no server),
-and over real HTTP by `tools/http_scenarios.sh` (curl, 65 checks) against `samples/01-api`,
+and over real HTTP by `tools/http_scenarios.sh` (curl, 103 checks) against `samples/01-api`,
 which uses every middleware. In-process servers aren't used: on FPC, Horse's `Listen` blocks in
 `THTTPApplication.Run` and there is no `StopListen`.
 

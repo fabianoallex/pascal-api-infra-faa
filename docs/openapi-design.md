@@ -115,5 +115,6 @@ optional interfaces are recognized by their GUIDs from `PascalCommon.Optionals`.
 
 ## Not in this phase
 
-MCP (phase 5), security schemes in the document (Bearer/JWT: small, can come right after),
-callbacks/webhooks, multiple servers.
+MCP (phase 5, done in 0.5.0), security schemes in the document (Bearer/JWT: done in 0.7.0, taken
+from the auth middleware's configuration by `TRouteDoc.Serve`), callbacks/webhooks, multiple
+servers.

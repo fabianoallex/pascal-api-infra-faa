@@ -81,6 +81,9 @@ type
     Responses: TArray<TApiResponse>;
     /// Left out of the MCP tools (phase 5); still documented.
     NoMcp: Boolean;
+    /// Needs no token: with TApiDocument.BearerAuth, written as
+    /// "security": [] (OpenAPI's way to lift the document's requirement).
+    NoAuth: Boolean;
     /// The path in OpenAPI's form.
     function OpenApiPath: string;
   end;
@@ -95,6 +98,12 @@ type
     Title: string;
     Version: string;
     Description: string;
+    /// Every operation needs "Authorization: Bearer <token>" (except the
+    /// NoAuth ones): components.securitySchemes.bearerAuth (HTTP bearer,
+    /// with BearerFormat when not empty) and a document-wide "security".
+    /// Swagger UI then shows its Authorize button.
+    BearerAuth: Boolean;
+    BearerFormat: string;
     /// AMapper nil: TJsonMapper.Shared, where DTOs are usually registered.
     constructor Create(AMapper: TJsonMapper = nil);
     destructor Destroy; override;
@@ -1165,6 +1174,12 @@ begin
     FW.EndObject;
     FW.EndObject;
   end;
+  if FDoc.BearerAuth and AOp.NoAuth then
+  begin
+    FW.Name('security');
+    FW.BeginArray;
+    FW.EndArray;
+  end;
   FW.Name('responses');
   FW.BeginObject;
   for I := 0 to High(AOp.Responses) do
@@ -1238,6 +1253,17 @@ begin
       FW.WriteString(FDoc.Description);
     end;
     FW.EndObject;
+    if FDoc.BearerAuth then
+    begin
+      FW.Name('security');
+      FW.BeginArray;
+      FW.BeginObject;
+      FW.Name('bearerAuth');
+      FW.BeginArray;
+      FW.EndArray;
+      FW.EndObject;
+      FW.EndArray;
+    end;
     FW.Name('paths');
     FW.BeginObject;
     for I := 0 to LPaths.Count - 1 do
@@ -1256,10 +1282,13 @@ begin
       FW.EndObject;
     end;
     FW.EndObject;
-    if (FSchemas.Count > 0) or FNeedsError then
+    if (FSchemas.Count > 0) or FNeedsError or FDoc.BearerAuth then
     begin
       FW.Name('components');
       FW.BeginObject;
+    end;
+    if (FSchemas.Count > 0) or FNeedsError then
+    begin
       FW.Name('schemas');
       FW.BeginObject;
       for I := 0 to FSchemas.Count - 1 do
@@ -1289,8 +1318,27 @@ begin
         FW.EndObject;
       end;
       FW.EndObject;
+    end;
+    if FDoc.BearerAuth then
+    begin
+      FW.Name('securitySchemes');
+      FW.BeginObject;
+      FW.Name('bearerAuth');
+      FW.BeginObject;
+      FW.Name('type');
+      FW.WriteString('http');
+      FW.Name('scheme');
+      FW.WriteString('bearer');
+      if FDoc.BearerFormat <> '' then
+      begin
+        FW.Name('bearerFormat');
+        FW.WriteString(FDoc.BearerFormat);
+      end;
+      FW.EndObject;
       FW.EndObject;
     end;
+    if (FSchemas.Count > 0) or FNeedsError or FDoc.BearerAuth then
+      FW.EndObject;
     FW.EndObject;
     Result := FW.ToString;
   finally

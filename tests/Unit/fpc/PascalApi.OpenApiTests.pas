@@ -146,6 +146,8 @@ type
     procedure Describe_UnknownProperty_Raises;
     procedure Describe_UnregisteredInterface_Raises;
     procedure SchemaName_DropsLeadingI;
+    procedure BearerAuth_SchemeAndRequirement;
+    procedure BearerAuth_Off_NoAuthIgnored;
   end;
 
 implementation
@@ -474,6 +476,30 @@ procedure TOpenApiTests.SchemaName_DropsLeadingI;
 begin
   TAssert.AssertEquals('Kitchen', TApiSchema.SchemaName(TypeInfo(IKitchen)));
   TAssert.AssertEquals('Part', TApiSchema.SchemaName(TypeInfo(IPart)));
+end;
+
+procedure TOpenApiTests.BearerAuth_SchemeAndRequirement;
+begin
+  FDoc.BearerAuth := True;
+  FDoc.BearerFormat := 'JWT';
+  Op('get', '/cities');
+  Op('get', '/health').NoAuth := True;
+  TAssert.AssertEquals('{"openapi":"3.0.3","info":{"title":"T","version":"1"},' +
+    '"security":[{"bearerAuth":[]}],"paths":{' +
+    '"/cities":{"get":{"responses":{"default":{"description":"Response"}}}},' +
+    '"/health":{"get":{"security":[],"responses":{"default":{"description":"Response"}}}}},' +
+    '"components":{"securitySchemes":{"bearerAuth":{"type":"http","scheme":"bearer",' +
+    '"bearerFormat":"JWT"}}}}', FDoc.ToJson);
+end;
+
+procedure TOpenApiTests.BearerAuth_Off_NoAuthIgnored;
+begin
+  Op('get', '/health').NoAuth := True;
+  AddResponse(Op('get', '/k'), 200, rkObject, TypeInfo(IPart));
+  TAssert.AssertFalse(Has(['security']));
+  TAssert.AssertFalse(Has(['paths', '/health', 'get', 'security']));
+  TAssert.AssertFalse(Has(['components', 'securitySchemes']));
+  TAssert.AssertTrue(Has(['components', 'schemas', 'Part']));
 end;
 
 initialization
