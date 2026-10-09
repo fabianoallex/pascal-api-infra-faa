@@ -15,7 +15,7 @@
     </CompilerOptions>
     <Description Value="Infrastructure for REST APIs on Horse, for Delphi and Lazarus/FPC (dual-compiler): pagination and ordering from the query string, configuration, file logging, rate limiting and middlewares. Built on pascal-common-faa, pascal-jsonmapper-faa and pascal-db-faa."/>
     <License Value="MIT"/>
-    <Version Minor="2"/>
+    <Version Minor="3"/>
     <Files>
       <Item>
         <Filename Value="..\src\pascalapi.inc"/>
