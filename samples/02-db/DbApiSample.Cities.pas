@@ -37,6 +37,14 @@ type
     function GetPopulation: IOptInteger;
   end;
 
+  /// The query string of GET /cities: page, limit, orderBy and search from
+  /// the base, plus the state filter.
+  ICityFind = interface(IFindPaginationDTOBase)
+    ['{68703148-01FA-4EC6-A0A5-529487B0AC1F}']
+    function GetState: IOptString;
+    procedure SetState(const AValue: IOptString);
+  end;
+
   ICity = interface(IResponseDTOBase)
     ['{2AD7DFDC-6A1C-4F82-8E47-3E646F5971DD}']
   end;
@@ -56,6 +64,16 @@ type
     property Name: string read FName write FName;
     property State: string read FState write FState;
     property Population: IOptInteger read FPopulation write FPopulation;
+  end;
+
+  TCityFind = class(TFindPaginationDTOBase, ICityFind)
+  private
+    FState: IOptString;
+  public
+    function GetState: IOptString;
+    procedure SetState(const AValue: IOptString);
+  published
+    property State: IOptString read FState write FState;
   end;
 
   TCity = class(TResponseDTOBase, ICity)
@@ -202,6 +220,18 @@ begin
   Result := TOptionals.Safe(FPopulation);
 end;
 
+{ TCityFind }
+
+function TCityFind.GetState: IOptString;
+begin
+  Result := TOptionals.Safe(FState);
+end;
+
+procedure TCityFind.SetState(const AValue: IOptString);
+begin
+  FState := AValue;
+end;
+
 { TCityRepository }
 
 constructor TCityRepository.Create(const AFactory: IDBFactory);
@@ -346,12 +376,19 @@ end;
 initialization
   TJsonMapper.Shared.RegisterMapping<ICityInsert, TCityInsert>;
   TJsonMapper.Shared.RegisterMapping<ICity, TCity>;
+  TJsonMapper.Shared.RegisterMapping<ICityFind, TCityFind>;
   // OpenAPI metadata the types can't tell (FPC has no attributes).
   TApiSchema.Describe(TypeInfo(ICityInsert), 'A new city')
     .Prop('Code').Desc('IBGE code').Example('4205407').Pattern('^[0-9]{7}$')
     .Prop('Name').Desc('City name').Example('Florianópolis').MaxLength(100)
     .Prop('State').Desc('Two-letter state').Example('SC').MinLength(2).MaxLength(2)
     .Prop('Population').Desc('Inhabitants, when known').Example('537211').Minimum(0);
+  TApiSchema.Describe(TypeInfo(ICityFind))
+    .Prop('Page').Desc('Page number, from 1')
+    .Prop('Limit').Desc('Cities per page (default 2, at most 50)')
+    .Prop('OrderBy').Desc(CityOrderSpec.DocHint)
+    .Prop('Search').Desc('Not used by this sample')
+    .Prop('State').Desc('Only the cities of this state (two letters)');
   TApiSchema.Describe(TypeInfo(ICity), 'A city')
     .Prop('Code').Desc('IBGE code').Example('4205407')
     .Prop('Population').Desc('Inhabitants; null when unknown');

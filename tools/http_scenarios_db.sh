@@ -98,6 +98,8 @@ body_has '"population":{"type":"integer","format":"int32","nullable":true' "INul
 body_has '"required":["code","name","state"]' "IOptInteger is not required"
 body_has 'Florianópolis' "UTF-8 example"
 body_has '"$ref":"#/components/schemas/Error"' "error responses"
+body_has '{"name":"state","in":"query","description":"Only the cities of this state (two letters)","required":false,"schema":{"type":"string"}}' "query parameter from the Find DTO"
+body_has '{"name":"page","in":"query","description":"Page number, from 1","required":false,"schema":{"type":"integer"}}' "inherited query parameter"
 
 req GET /swagger ""
 status_is 200 "Swagger UI"

@@ -6,6 +6,14 @@ may change the API; each such change is listed here.
 
 ## [Unreleased]
 
+### Added
+
+- `TRouteDocBuilder.QueryParams<I>` (and `TApiOperation.QueryDto`): one query parameter per
+  published property of a Find DTO, with the mapper's names, `IOptXxx` members not required and
+  descriptions from `TApiSchema.Describe`; inherited members (page, limit, orderBy, search from
+  `TFindPaginationDTOBase`) included, arrays and objects left out. `samples/02-db` documents its
+  list route this way.
+
 ## [0.3.0] - 2026-10-08
 
 ### Added

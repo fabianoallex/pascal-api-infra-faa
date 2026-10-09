@@ -63,10 +63,17 @@ var
 
 procedure GetCities(AReq: THorseRequest; ARes: THorseResponse; ANext: TNextProc);
 var
+  LFind: ICityFind;
   LPage: TPage<ICity>;
 begin
-  LPage := GCities.FindPage(ParseQueryStr(AReq.Query['state']), AReq.Query['orderBy'],
-    PageRequestFrom(ParseQueryInt(AReq.Query['page']), ParseQueryInt(AReq.Query['limit']), 2, 50));
+  // The query string into the Find DTO the route documents (QueryParams).
+  LFind := TCityFind.Create;
+  LFind.Page := ParseQueryInt(AReq.Query['page']);
+  LFind.Limit := ParseQueryInt(AReq.Query['limit']);
+  LFind.OrderBy := ParseQueryStr(AReq.Query['orderBy']);
+  LFind.SetState(ParseQueryStr(AReq.Query['state']));
+  LPage := GCities.FindPage(LFind.GetState, LFind.OrderBy.Value,
+    PageRequestFrom(LFind.Page, LFind.Limit, 2, 50));
   TJsonSend.Send(ARes, PageEnvelopeJson(LPage.Meta,
     TJsonMapper.Shared.Serialize<TCityArray>(LPage.Items)));
 end;
@@ -178,10 +185,7 @@ begin
     // Each route registered in Horse and documented in one call.
     TRouteDoc.Get('/cities')
       .Summary('List cities, a page at a time').Tag('cities')
-      .QueryParam('state', 'Only the cities of this state (two letters)')
-      .QueryParam('page', 'Page number, from 1', ptInteger)
-      .QueryParam('limit', 'Cities per page (default 2, at most 50)', ptInteger)
-      .QueryParam('orderBy', CityOrderSpec.DocHint)
+      .QueryParams<ICityFind>
       .ResponsePaged<ICity>(200, 'A page of cities')
       .Error(400, 'An order field that is not allowed')
       .Register(GetCities);

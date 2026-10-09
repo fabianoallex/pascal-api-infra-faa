@@ -71,6 +71,11 @@ type
     OperationId: string;
     Tags: TArray<string>;
     Params: TArray<TApiParam>;
+    /// A DTO interface whose published properties are query parameters (a
+    /// paged search's Find DTO): expanded when the document is written,
+    /// after Params, with the mapper's names; IOptXxx members are not
+    /// required; descriptions come from TApiSchema.Describe.
+    QueryDto: PTypeInfo;
     Body: PTypeInfo;
     BodyDescription: string;
     Responses: TArray<TApiResponse>;
@@ -526,6 +531,7 @@ type
     procedure WriteObjectSchema(AInterface: PTypeInfo);
     procedure WriteResponseSchema(const AResponse: TApiResponse);
     procedure WriteOperation(AOp: TApiOperation);
+    procedure AddQueryDtoParams(AQueryDto: PTypeInfo; var AParams: TArray<TApiParam>);
   public
     constructor Create(ADoc: TApiDocument; AIndent: Integer);
     destructor Destroy; override;
@@ -939,6 +945,61 @@ begin
     end;
 end;
 
+procedure TApiDocWriter.AddQueryDtoParams(AQueryDto: PTypeInfo; var AParams: TArray<TApiParam>);
+var
+  LClass: TClass;
+  LMembers: TJsonMemberArray;
+  LMeta: TApiSchemaMeta;
+  LPropMeta: TApiPropMeta;
+  LOpt: TOptionalKind;
+  LTypeInfo: PTypeInfo;
+  LBase: string;
+  LParam: TApiParam;
+  I: Integer;
+begin
+  LClass := FDoc.FMapper.FindImplClass(AQueryDto);
+  if LClass = nil then
+    raise EApiSchemaError.CreateFmt('QueryParams: %s has no class registered (call RegisterMapping first)',
+      [TypeName(AQueryDto)]);
+  LMembers := FDoc.FMapper.Members(LClass);
+  LMeta := SchemaMetaOf(AQueryDto);
+  for I := 0 to High(LMembers) do
+  begin
+    LTypeInfo := LMembers[I].TypeInfo;
+    LParam.Required := True;
+    if (LTypeInfo^.Kind = tkInterface) and FindOptional(LTypeInfo, LOpt) then
+    begin
+      LBase := LOpt.Base;
+      LParam.Required := not LOpt.Optional;
+    end
+    else if (LTypeInfo^.Kind = tkEnumeration) and not IsBooleanType(LTypeInfo) then
+      LBase := 'string'
+    else if LTypeInfo^.Kind in [tkInterface, tkDynArray, tkClass] then
+      Continue // a query string has no objects or arrays here
+    else
+      LBase := BaseOfType(LTypeInfo);
+    if (LBase = 'integer') or (LBase = 'int64') then
+      LParam.ParamType := ptInteger
+    else if (LBase = 'float') or (LBase = 'double') or (LBase = 'currency') then
+      LParam.ParamType := ptNumber
+    else if LBase = 'boolean' then
+      LParam.ParamType := ptBoolean
+    else
+      LParam.ParamType := ptString;
+    LParam.Name := LMembers[I].JsonName;
+    LParam.Location := plQuery;
+    LParam.Description := '';
+    if LMeta <> nil then
+    begin
+      LPropMeta := LMeta.PropMeta(LMembers[I].PropertyName);
+      if LPropMeta <> nil then
+        LParam.Description := LPropMeta.Description;
+    end;
+    SetLength(AParams, Length(AParams) + 1);
+    AParams[High(AParams)] := LParam;
+  end;
+end;
+
 procedure TApiDocWriter.WriteOperation(AOp: TApiOperation);
 var
   I, J, P: Integer;
@@ -947,8 +1008,10 @@ var
   LParams: TArray<TApiParam>;
   LExtra: TApiParam;
 begin
-  // Path parameters present in the path but not declared get a plain string.
   LParams := Copy(AOp.Params, 0, Length(AOp.Params));
+  if AOp.QueryDto <> nil then
+    AddQueryDtoParams(AOp.QueryDto, LParams);
+  // Path parameters present in the path but not declared get a plain string.
   LPath := AOp.OpenApiPath;
   P := Pos('{', LPath);
   while P > 0 do

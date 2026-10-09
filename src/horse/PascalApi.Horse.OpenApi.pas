@@ -62,6 +62,10 @@ type
       AType: TApiParamType = ptString): TRouteDocBuilder;
     function QueryParam(const AName: string; const ADescription: string = '';
       AType: TApiParamType = ptString; ARequired: Boolean = False): TRouteDocBuilder;
+    /// One query parameter per published property of the DTO I (a paged
+    /// search's Find DTO), named as the mapper names it; descriptions from
+    /// TApiSchema.Describe(TypeInfo(I)).
+    function QueryParams<I: IInterface>: TRouteDocBuilder;
     function Body<I: IInterface>(const ADescription: string = ''): TRouteDocBuilder;
     function Response<I: IInterface>(ACode: Integer; const ADescription: string = ''): TRouteDocBuilder;
     function ResponseArray<I: IInterface>(ACode: Integer; const ADescription: string = ''): TRouteDocBuilder;
@@ -185,6 +189,12 @@ function TRouteDocBuilder.QueryParam(const AName, ADescription: string; AType: T
   ARequired: Boolean): TRouteDocBuilder;
 begin
   AddParam(AName, ADescription, plQuery, AType, ARequired);
+  Result := Self;
+end;
+
+function TRouteDocBuilder.QueryParams<I>: TRouteDocBuilder;
+begin
+  FOp.QueryDto := TypeInfo(I);
   Result := Self;
 end;
 

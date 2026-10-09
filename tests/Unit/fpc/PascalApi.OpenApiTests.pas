@@ -37,6 +37,10 @@ type
     ['{21EA456A-1F51-4F3D-937D-81BE60505CF3}']
   end;
 
+  IFind = interface
+    ['{46B7FB9E-122D-4C82-9C1B-AEE1E1C8104D}']
+  end;
+
   IKitchen = interface
     ['{58BC8241-D29B-430C-B096-882FC6A7723D}']
   end;
@@ -50,6 +54,21 @@ type
   end;
 
   TPartArray = array of IPart;
+
+  TFind = class(TInterfacedObject, IFind)
+  private
+    FPage: IOptInteger;
+    FName: IOptString;
+    FActive: Boolean;
+    FColor: TColor;
+    FParts: TPartArray;
+  published
+    property Page: IOptInteger read FPage write FPage;
+    property Name: IOptString read FName write FName;
+    property Active: Boolean read FActive write FActive;
+    property Color: TColor read FColor write FColor;
+    property Parts: TPartArray read FParts write FParts;
+  end;
   TTagArray = array of string;
 
   TKitchen = class(TInterfacedObject, IKitchen)
@@ -123,6 +142,7 @@ type
     procedure ErrorSchema_OnlyWhenUsed;
     procedure Path_ConvertedAndUndeclaredParamsAdded;
     procedure RequestBody_AndQueryParams;
+    procedure QueryDto_ExpandsToQueryParams;
     procedure Describe_UnknownProperty_Raises;
     procedure Describe_UnregisteredInterface_Raises;
     procedure SchemaName_DropsLeadingI;
@@ -137,6 +157,7 @@ begin
   FMapper := TJsonMapper.Create;
   FMapper.RegisterMapping<IPart, TPart>;
   FMapper.RegisterMapping<IKitchen, TKitchen>;
+  FMapper.RegisterMapping<IFind, TFind>;
   FMapper.RenameMember(TPart, 'Label_', 'label');
   FDoc := TApiDocument.Create(FMapper);
   FDoc.Title := 'T';
@@ -389,6 +410,30 @@ begin
     Text(['paths', '/parts', 'post', 'parameters', '0']));
   TAssert.AssertEquals('["parts"]', Text(['paths', '/parts', 'post', 'tags']));
   TAssert.AssertEquals('Create', Text(['paths', '/parts', 'post', 'summary']));
+end;
+
+procedure TOpenApiTests.QueryDto_ExpandsToQueryParams;
+var
+  LOp: TApiOperation;
+begin
+  TApiSchema.Describe(TypeInfo(IFind), '', FMapper).Prop('Name').Desc('Part of the name');
+  LOp := Op('get', '/finds');
+  SetLength(LOp.Params, 1);
+  LOp.Params[0].Name := 'extra';
+  LOp.Params[0].Location := plQuery;
+  LOp.Params[0].ParamType := ptString;
+  LOp.Params[0].Required := False;
+  LOp.QueryDto := TypeInfo(IFind);
+  // Declared parameters first; then one per member: IOptXxx not required,
+  // a plain type required, an enumeration a string, the array left out.
+  TAssert.AssertEquals(
+    '[{"name":"extra","in":"query","required":false,"schema":{"type":"string"}},' +
+    '{"name":"page","in":"query","required":false,"schema":{"type":"integer"}},' +
+    '{"name":"name","in":"query","description":"Part of the name","required":false,"schema":{"type":"string"}},' +
+    '{"name":"active","in":"query","required":true,"schema":{"type":"boolean"}},' +
+    '{"name":"color","in":"query","required":true,"schema":{"type":"string"}}]',
+    Text(['paths', '/finds', 'get', 'parameters']));
+  TAssert.AssertFalse('a query DTO is not a component schema', Has(['components']));
 end;
 
 procedure TOpenApiTests.Describe_UnknownProperty_Raises;

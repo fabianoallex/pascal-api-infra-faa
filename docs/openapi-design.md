@@ -1,7 +1,7 @@
 # Phase 4 design: OpenAPI on both compilers
 
 Status: **approved by the user (2026-10-08), all four decisions as recommended; implemented.**
-The `.QueryParams<IFind>` addition (decision 4) is still to do.
+The `.QueryParams<IFind>` addition (decision 4) came right after, for 0.4.0.
 
 ## Goal
 
