@@ -125,3 +125,12 @@ Python SDK (`mcp` 2.0.0). Design and decisions: `docs/mcp-design.md`.
 Measured with the SDK, missed in the first reading of the specification: `server/discover` and
 `tools/list` must carry `ttlMs` and `cacheScope` (cacheable results); the SDK rejects a
 `tools/list` without them.
+
+### 6. Observability — designed (2026-10-09)
+
+W3C trace context, Prometheus metrics, health endpoints and OpenTelemetry (OTLP/HTTP JSON)
+export, in four stages (A: trace context and correlated logs; B: metrics and health; C: spans and
+OTLP; D: hooks in the sibling libraries). Decided by the user: the contracts go to
+pascal-common-faa (in order of stability; not a separate library for now), A and B first, and
+`X-Request-Id` becomes the 32-digit trace id (breaking, 0.8.0). Design, open decisions and risks:
+`docs/observability-design.md`.
