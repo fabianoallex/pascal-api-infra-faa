@@ -171,6 +171,17 @@ type
     class procedure Clear; static;
   end;
 
+/// The JSON Schema (2020-12) of the DTO AInterface, self-contained: nested
+/// DTOs inline (to a depth of 8), nullable members as "type": [T, "null"],
+/// examples as "examples". For MCP tool schemas, which can't point at the
+/// document's components.
+function ApiJsonSchema(ADoc: TApiDocument; AInterface: PTypeInfo): string;
+
+/// The parameters of AOp as the document lists them: the declared ones, the
+/// query DTO's members, then path parameters present in the path but not
+/// declared (as strings).
+function ApiOperationParams(ADoc: TApiDocument; AOp: TApiOperation): TArray<TApiParam>;
+
 implementation
 
 uses
@@ -522,26 +533,30 @@ type
     FW: TJsonWriter;
     FSchemas: TList<PTypeInfo>; // interfaces, in first-reference order
     FNeedsError: Boolean;
+    FJsonSchema: Boolean; // JSON Schema 2020-12 instead of OpenAPI 3.0 (inline, type arrays)
+    FDepth: Integer;
     procedure Collect(AInterface: PTypeInfo);
     procedure CollectType(ATypeInfo: PTypeInfo);
     procedure WriteRef(AInterface: PTypeInfo);
-    procedure WriteBaseType(const ABase: string);
+    procedure WriteBaseType(const ABase: string; ANullable: Boolean = False);
     procedure WriteTypeSchema(ATypeInfo: PTypeInfo; AMeta: TApiPropMeta; out AOptional: Boolean);
     procedure WriteExample(const ABase, AExample: string);
     procedure WriteObjectSchema(AInterface: PTypeInfo);
     procedure WriteResponseSchema(const AResponse: TApiResponse);
     procedure WriteOperation(AOp: TApiOperation);
     procedure AddQueryDtoParams(AQueryDto: PTypeInfo; var AParams: TArray<TApiParam>);
+    function BuildParams(AOp: TApiOperation): TArray<TApiParam>;
   public
-    constructor Create(ADoc: TApiDocument; AIndent: Integer);
+    constructor Create(ADoc: TApiDocument; AIndent: Integer; AJsonSchema: Boolean = False);
     destructor Destroy; override;
     function Run: string;
   end;
 
-constructor TApiDocWriter.Create(ADoc: TApiDocument; AIndent: Integer);
+constructor TApiDocWriter.Create(ADoc: TApiDocument; AIndent: Integer; AJsonSchema: Boolean);
 begin
   inherited Create;
   FDoc := ADoc;
+  FJsonSchema := AJsonSchema;
   FW := TJsonWriter.Create(AIndent);
   FSchemas := TList<PTypeInfo>.Create;
 end;
@@ -585,8 +600,19 @@ end;
 
 procedure TApiDocWriter.WriteRef(AInterface: PTypeInfo);
 begin
+  if FJsonSchema and (FDoc.FMapper.FindImplClass(AInterface) <> nil) and (FDepth < 8) then
+  begin
+    // Self-contained: the nested DTO's schema in place of the $ref.
+    Inc(FDepth);
+    try
+      WriteObjectSchema(AInterface);
+    finally
+      Dec(FDepth);
+    end;
+    Exit;
+  end;
   FW.BeginObject;
-  if FDoc.FMapper.FindImplClass(AInterface) <> nil then
+  if not FJsonSchema and (FDoc.FMapper.FindImplClass(AInterface) <> nil) then
   begin
     FW.Name('$ref');
     FW.WriteString('#/components/schemas/' + TApiSchema.SchemaName(AInterface));
@@ -600,12 +626,21 @@ begin
 end;
 
 // The "type"/"format" members for a base type name.
-procedure TApiDocWriter.WriteBaseType(const ABase: string);
+procedure TApiDocWriter.WriteBaseType(const ABase: string; ANullable: Boolean);
 
   procedure TypeAndFormat(const AType, AFormat: string);
   begin
     FW.Name('type');
-    FW.WriteString(AType);
+    if ANullable then
+    begin
+      // JSON Schema has no "nullable": null is one more type.
+      FW.BeginArray;
+      FW.WriteString(AType);
+      FW.WriteString('null');
+      FW.EndArray;
+    end
+    else
+      FW.WriteString(AType);
     if AFormat <> '' then
     begin
       FW.Name('format');
@@ -656,7 +691,13 @@ var
   LInt: Int64;
   LFloat: Double;
 begin
-  FW.Name('example');
+  if FJsonSchema then
+  begin
+    FW.Name('examples'); // JSON Schema 2020-12: an array
+    FW.BeginArray;
+  end
+  else
+    FW.Name('example');
   if (ABase = 'integer') or (ABase = 'int64') then
   begin
     if TryStrToInt64(AExample, LInt) then
@@ -678,6 +719,8 @@ begin
     FW.WriteBoolean(SameText(AExample, 'true'))
   else
     FW.WriteString(AExample);
+  if FJsonSchema then
+    FW.EndArray;
 end;
 
 // The schema object of a property of type ATypeInfo. AOptional tells the
@@ -705,7 +748,7 @@ begin
     LBase := LOpt.Base;
     AOptional := LOpt.Optional;
     LNullable := LOpt.Nullable;
-    WriteBaseType(LBase);
+    WriteBaseType(LBase, LNullable and FJsonSchema);
   end
   else if ATypeInfo^.Kind = tkDynArray then
   begin
@@ -743,7 +786,7 @@ begin
     WriteBaseType(LBase);
   end;
 
-  if LNullable then
+  if LNullable and not FJsonSchema then
   begin
     FW.Name('nullable');
     FW.WriteBoolean(True);
@@ -1000,7 +1043,7 @@ begin
   end;
 end;
 
-procedure TApiDocWriter.WriteOperation(AOp: TApiOperation);
+function TApiDocWriter.BuildParams(AOp: TApiOperation): TArray<TApiParam>;
 var
   I, J, P: Integer;
   LPath, LSeg: string;
@@ -1037,6 +1080,15 @@ begin
     LPath := Copy(LPath, J + 1, MaxInt);
     P := Pos('{', LPath);
   end;
+  Result := LParams;
+end;
+
+procedure TApiDocWriter.WriteOperation(AOp: TApiOperation);
+var
+  I: Integer;
+  LParams: TArray<TApiParam>;
+begin
+  LParams := BuildParams(AOp);
 
   FW.BeginObject;
   if Length(AOp.Tags) > 0 then
@@ -1243,6 +1295,31 @@ begin
     Result := FW.ToString;
   finally
     LPaths.Free;
+  end;
+end;
+
+function ApiJsonSchema(ADoc: TApiDocument; AInterface: PTypeInfo): string;
+var
+  LWriter: TApiDocWriter;
+begin
+  LWriter := TApiDocWriter.Create(ADoc, 0, True);
+  try
+    LWriter.WriteObjectSchema(AInterface);
+    Result := LWriter.FW.ToString;
+  finally
+    LWriter.Free;
+  end;
+end;
+
+function ApiOperationParams(ADoc: TApiDocument; AOp: TApiOperation): TArray<TApiParam>;
+var
+  LWriter: TApiDocWriter;
+begin
+  LWriter := TApiDocWriter.Create(ADoc, 0);
+  try
+    Result := LWriter.BuildParams(AOp);
+  finally
+    LWriter.Free;
   end;
 end;
 

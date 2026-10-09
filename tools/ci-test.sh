@@ -15,7 +15,7 @@ if [ -z "${FPC_IMAGE:-}" ]; then
   FPC_IMAGE=pascalapi-fpc322
   docker build -q -t "$FPC_IMAGE" - <<'DOCKERFILE' >/dev/null
 FROM debian:bookworm
-RUN apt-get update && apt-get install -y --no-install-recommends fpc curl ca-certificates libsqlite3-0 python3-pip && rm -rf /var/lib/apt/lists/* \n && pip3 install --no-cache-dir --break-system-packages openapi-spec-validator==0.7.1
+RUN apt-get update && apt-get install -y --no-install-recommends fpc curl ca-certificates libsqlite3-0 python3-pip && rm -rf /var/lib/apt/lists/* && pip3 install --no-cache-dir --break-system-packages openapi-spec-validator==0.7.1 mcp==2.0.0
 DOCKERFILE
 fi
 export FPC_IMAGE

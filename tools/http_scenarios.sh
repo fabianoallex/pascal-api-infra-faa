@@ -1,7 +1,8 @@
 #!/bin/sh
 # Checks samples/01-api over HTTP with curl: every middleware of
 # PascalApi.Horse.Middlewares (error handler, CORS, logger's request id,
-# JWT, rate limit) plus paging, ordering and DTO validation.
+# JWT, rate limit) plus paging, ordering, DTO validation, OpenAPI and the
+# MCP endpoint (2026-07-28).
 #
 #   sh tools/http_scenarios.sh [port]      (default 9310; ApiSample must be running)
 #
@@ -160,6 +161,64 @@ status_is 200 "Swagger UI"
 body_has 'swagger-ui-dist@' "Swagger UI"
 # OPENAPI_OUT: also save the document, for a validator (tools/test_http_docker.sh).
 [ -n "$OPENAPI_OUT" ] && curl -s -o "$OPENAPI_OUT" "$BASE/swagger/doc.json"
+
+# --- MCP (2026-07-28) on /mcp, behind JWT; each tool call goes back
+# through the API with the caller's token.
+META='"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}'
+# mcp METHOD PARAMS [TOOL] [extra curl args...]
+mcp() {
+  MM="$1"; MP="$2"; MN="$3"; if [ $# -ge 3 ]; then shift 3; else shift $#; fi # dash: shift past $# is fatal
+  req POST /mcp "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"$MM\",\"params\":{$META$MP}}" \
+    -H 'MCP-Protocol-Version: 2026-07-28' -H "Mcp-Method: $MM" ${MN:+-H "Mcp-Name: $MN"} "$@"
+}
+call() { mcp tools/call ",\"name\":\"$1\",\"arguments\":$2" "$1" -H "$AUTH"; }
+
+mcp server/discover ""
+status_is 401 "MCP without a token"
+mcp server/discover "" "" -H "$AUTH"
+status_is 200 "MCP discover"
+body_is '{"jsonrpc":"2.0","id":1,"result":{"resultType":"complete","ttlMs":0,"cacheScope":"private","supportedVersions":["2026-07-28"],"capabilities":{"tools":{}},"_meta":{"io.modelcontextprotocol/serverInfo":{"name":"pascal-api-sample-01","version":"1.0.0"}}}}' "MCP discover"
+mcp tools/list "" "" -H "$AUTH"
+status_is 200 "MCP tools/list"
+body_has '{"name":"get_citie","description":"One city","inputSchema":{"type":"object","properties":{"id":{"type":"integer","description":"City id"}},"required":["id"],"additionalProperties":false}}' "MCP tool with a path parameter"
+body_has '"name":"create_citie"' "MCP tool with a body"
+body_lacks 'fail' "MCP: NoMcp routes left out"
+call list_citie '{"limit":1,"orderBy":"-name"}'
+status_is 200 "MCP call, GET with a query string"
+body_has '\"limit\":1,\"total\":' "MCP call: query arguments reach the route"
+body_has '"isError":false' "MCP call"
+call list_citie '{"orderBy":"population"}'
+body_has 'Invalid order field' "MCP call: orderBy reaches the route"
+body_has '"isError":true' "MCP call: orderBy reaches the route"
+call get_citie '{"id":999}'
+body_has '"isError":true' "MCP call, route answers 404"
+body_has 'City 999 not found.' "MCP call, route answers 404"
+call list_me '{}'
+body_has '{\"sub\":\"ana\"}' "MCP call: the token is passed on"
+printf "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{$META,\"name\":\"create_citie\",\"arguments\":{\"name\":\"S\303\243o Jos\303\251\",\"state\":\"SC\",\"population\":250000}}}" > "$T/mcp.json"
+F="$T/mcp.json"; command -v cygpath >/dev/null 2>&1 && F="$(cygpath -w "$F")" # curl.exe on Windows
+req POST /mcp "@$F" -H "$AUTH" -H 'MCP-Protocol-Version: 2026-07-28' -H 'Mcp-Method: tools/call' -H 'Mcp-Name: create_citie'
+body_has "$(printf '\\"name\\":\\"S\303\243o Jos\303\251\\"')" "MCP call, POST body in UTF-8"
+call get_citie '{}'
+body_has 'Missing required argument: id' "MCP call without a required argument"
+call get_citie '{"id":1,"town":"x"}'
+body_has 'Unknown argument: town' "MCP call with an unknown argument"
+call nope '{}'
+status_is 400 "MCP unknown tool"
+body_has '"code":-32602' "MCP unknown tool"
+req POST /mcp "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\",\"params\":{$META}}" -H "$AUTH"   -H 'MCP-Protocol-Version: 2026-07-28' -H 'Mcp-Method: server/discover'
+status_is 400 "MCP header mismatch"
+body_has '"code":-32020' "MCP header mismatch"
+req POST /mcp '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"x","version":"1"}}}' -H "$AUTH"
+status_is 404 "MCP initialize (legacy)"
+body_has '2026-07-28' "MCP initialize names the version"
+req POST /mcp '{"jsonrpc":"2.0","method":"notifications/initialized"}' -H "$AUTH"
+status_is 202 "MCP notification"
+body_is '' "MCP notification"
+req GET /mcp "" -H "$AUTH"
+status_is 405 "MCP GET"
+req POST /mcp '{}' -H "$AUTH" -H 'Origin: https://evil.example'
+status_is 403 "MCP from a browser origin"
 
 rm -rf "$T"
 echo "$CHECKS checks, $FAILS failed"

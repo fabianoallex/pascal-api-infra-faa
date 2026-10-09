@@ -33,7 +33,8 @@ uses
   PascalApi.DtoTests,
   PascalApi.CryptoTests,
   PascalApi.HttpTests,
-  PascalApi.OpenApiTests;
+  PascalApi.OpenApiTests,
+  PascalApi.McpTests;
 
 var
   ConsoleApp: TTestRunner;

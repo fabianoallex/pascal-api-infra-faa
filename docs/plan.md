@@ -10,8 +10,8 @@ Offer what `delphi-api-infra-faa` offers to a Horse REST API, on Delphi **and** 
 
 - `delphi-api-infra-faa` **stays separate**, serving its existing Delphi-only consumer. This
   library doesn't replace it and isn't a drop-in for it.
-- Scope for now: **phases 1 to 3** below (the core and the middlewares). Swagger/OpenAPI and MCP
-  (phases 4 and 5) come later.
+- Scope: **phases 1 to 3** first (the core and the middlewares), then OpenAPI (phase 4, 0.3.0)
+  and MCP (phase 5, 0.5.0). All five are done.
 
 ## Evaluation (2026-10-08)
 
@@ -104,8 +104,15 @@ must be registered in code, because FPC 3.2.2 has no attributes. Decided (user, 
 **fluent**, next to the DTO's `RegisterMapping`, along the lines of
 `Describe(TOrder, 'status').Desc('...').Example('open').Enum('open,paid')`.
 
-### 5. MCP server — later
+### 5. MCP server — done (2026-10-09)
 
-Reads the model of phase 4 instead of SwagDoc's; HTTP loopback with `fphttpclient` on FPC and
-`THTTPClient` on Delphi (the pattern of pascal-dfe-broker's `DFe.Transmissor.Http.Cliente`).
-`MCP.Utils` (tool names, tag filter) is pure and moves with it.
+Protocol revision 2026-07-28 only (the user's decision: no legacy `initialize`). Reads the model
+of phase 4; tool calls by HTTP loopback (`fphttpclient` on FPC, `THTTPClient` on Delphi) through
+every middleware, with `Authorization` and `X-Forwarded-For` passed on; query arguments in the
+query string (the origin's defect fixed); results as text plus `isError`. `McpDeriveName` and
+the tag filter ported with the origin's test cases. CI drives both samples with the official
+Python SDK (`mcp` 2.0.0). Design and decisions: `docs/mcp-design.md`.
+
+Measured with the SDK, missed in the first reading of the specification: `server/discover` and
+`tools/list` must carry `ttlMs` and `cacheScope` (cacheable results); the SDK rejects a
+`tools/list` without them.

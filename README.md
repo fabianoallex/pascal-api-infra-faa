@@ -10,8 +10,8 @@ threading), [pascal-jsonmapper-faa](https://github.com/fabianoallex/pascal-jsonm
 paging). It is not a drop-in replacement for the Delphi library: DTOs map **published**
 properties, because FPC 3.2.2's RTTI sees nothing else.
 
-Version **0.4.0** (see the [changelog](CHANGELOG.md)): the core, the Horse middlewares and OpenAPI; MCP
-comes later. See [docs/plan.md](docs/plan.md).
+Version **0.5.0** (see the [changelog](CHANGELOG.md)): the core, the Horse middlewares, OpenAPI and an MCP
+server (protocol 2026-07-28). See [docs/plan.md](docs/plan.md).
 
 ## Contents
 
@@ -31,6 +31,8 @@ comes later. See [docs/plan.md](docs/plan.md).
 | `PascalApi.Horse.Middlewares` (`src/horse`) | Horse middlewares: error handler, CORS, request log, Bearer auth, JWT, rate limit |
 | `PascalApi.OpenApi` | OpenAPI 3.0.3 document from routes and DTO types; `TApiSchema.Describe` for metadata |
 | `PascalApi.Horse.OpenApi` (`src/horse`) | `TRouteDoc`: register and document a route in one call; `/swagger` UI and `/swagger/doc.json` |
+| `PascalApi.Mcp` | MCP (2026-07-28): the documented routes as tools, and the JSON-RPC dispatcher |
+| `PascalApi.Horse.Mcp` (`src/horse`) | `TMcpEndpoint.Register('/mcp', ...)`: the MCP endpoint; tool calls go through the API's own middlewares |
 | `PascalApi.Version` | `PASCALAPI_VERSION`, for compile-time checks |
 
 ## A quick look
@@ -47,6 +49,19 @@ THorse.Get('/cities', GetCities);   // raise ENotFoundException / EValidationExc
 THorse.Listen(9000);
 ```
 
+Documented routes, Swagger UI and MCP tools come from the same declarations:
+
+```pascal
+TRouteDoc.Get('/cities').Summary('List cities').Tag('cities')
+  .QueryParams<ICityFind>.ResponsePaged<ICity>(200).Register(GetCities);
+TRouteDoc.Serve('/swagger', 'Cities API', '1.0.0');
+TMcpEndpoint.Register('/mcp', 'http://127.0.0.1:9000', 'cities-api', '1.0.0');  // after every route
+```
+
+An MCP client (protocol 2026-07-28) then lists `list_citie` with a JSON Schema of its arguments
+(`state`, `page`, `limit`, `orderBy`...) and calls it: the call is a `GET /cities?state=SC` to
+the API itself, with the client's token, through every middleware.
+
 On FPC a Horse callback is a plain procedure, so each middleware keeps its settings in the unit:
 one configuration per process.
 
@@ -54,8 +69,8 @@ one configuration per process.
 
 | Sample | Shows | Checked by |
 |---|---|---|
-| [01-api](samples/01-api/ApiSample.dpr) | every middleware (errors, CORS, log, JWT, rate limit), paging and validation, in memory | `tools/http_scenarios.sh` (65 checks) |
-| [02-db](samples/02-db/DbApiSample.dpr) | SQLite through pascal-db-faa (SQLdb on FPC, FireDAC on Delphi): migrations, paging and ordering in SQL, filters, 409 from a unique key, NULL as `null` | `tools/http_scenarios_db.sh` (31 checks) |
+| [01-api](samples/01-api/ApiSample.dpr) | every middleware (errors, CORS, log, JWT, rate limit), paging and validation, in memory | `tools/http_scenarios.sh` (99 checks) |
+| [02-db](samples/02-db/DbApiSample.dpr) | SQLite through pascal-db-faa (SQLdb on FPC, FireDAC on Delphi): migrations, paging and ordering in SQL, filters, 409 from a unique key, NULL as `null` | `tools/http_scenarios_db.sh` (55 checks) |
 
 Both run with one source on Delphi and Lazarus/FPC. On FPC for Windows, sample 02 needs
 sqlite.org's `sqlite3.dll` next to the executable (see `tools/test_http.sh`).

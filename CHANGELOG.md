@@ -4,7 +4,31 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 follow [Semantic Versioning](https://semver.org/). While the version is 0.x, a minor version
 may change the API; each such change is listed here.
 
-## [Unreleased]
+## [0.5.0] - 2026-10-09
+
+### Added
+
+- MCP server (phase 5), protocol revision **2026-07-28** only (stateless, no `initialize`).
+  `PascalApi.Mcp` (pure): the routes documented with `TRouteDoc` become tools (name from the
+  `operationId`, else the origin's `McpDeriveName`; JSON Schema 2020-12 input schema flattening
+  path, query and body arguments, with the DTOs' metadata; description with the returned
+  fields), and the JSON-RPC dispatcher (`server/discover`, `tools/list`, `tools/call`; `_meta`
+  and `MCP-Protocol-Version`/`Mcp-Method`/`Mcp-Name` header checks, with the revision's error
+  codes and HTTP statuses). `src/horse/PascalApi.Horse.Mcp`: `TMcpEndpoint.Register(path,
+  baseUrl, name, version[, tags[, allowedOrigins]])`; a tool call is an HTTP request to the API
+  itself (fphttpclient / THTTPClient), so every middleware applies, with the caller's
+  `Authorization` and address (`X-Forwarded-For`) passed on; `Origin` checked (403). Both
+  samples expose `/mcp`; CI drives them with the official MCP Python SDK (`mcp` 2.0.0,
+  `tools/mcp_client_check.py`). Design: `docs/mcp-design.md`.
+- `PascalApi.OpenApi`: `ApiJsonSchema` (a DTO as a self-contained JSON Schema 2020-12: nested
+  DTOs inline, `"type":[T,"null"]` for nullable members, `examples`) and `ApiOperationParams`
+  (an operation's parameters, the Find DTO's expanded).
+
+### Fixed (compared with delphi-api-infra-faa's MCP server)
+
+- A GET tool's arguments go to the query string; the origin put them in a JSON body that GET
+  doesn't send, so filters, page and order never reached the route.
+- The caller's `Authorization` header is passed on, so tools of a JWT-protected API work.
 
 ### Changed
 

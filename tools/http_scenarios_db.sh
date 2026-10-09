@@ -1,7 +1,8 @@
 #!/bin/sh
 # Checks samples/02-db over HTTP with curl: migrations, paging and ordering
 # in SQL, the state filter, 404, validation, 409 from the database's unique
-# key, NULL to JSON null, delete.
+# key, NULL to JSON null, delete, OpenAPI, and MCP tools with the DTOs'
+# schemas.
 #
 #   sh tools/http_scenarios_db.sh [port]   (default 9330; DbApiSample must be
 #                                          running, started with --reset)
@@ -28,6 +29,7 @@ fail() { CHECKS=$((CHECKS + 1)); FAILS=$((FAILS + 1)); echo "FAIL: $1"; }
 status_is() { [ "$(cat "$T/status")" = "$1" ] && ok || fail "$2: status $(cat "$T/status"), expected $1 (body: $(cat "$T/body"))"; }
 body_is()   { [ "$(cat "$T/body")" = "$1" ] && ok || fail "$2: body $(cat "$T/body"), expected $1"; }
 body_has()  { grep -qF -- "$1" "$T/body" && ok || fail "$2: body lacks $1 (body: $(cat "$T/body"))"; }
+body_lacks(){ grep -qF -- "$1" "$T/body" && fail "$2: body has $1" || ok; }
 
 # --- paging and ordering in SQL (6 seed rows from migration 3)
 req GET '/cities?limit=2' ""
@@ -106,6 +108,37 @@ status_is 200 "Swagger UI"
 body_has 'swagger-ui-dist@' "Swagger UI"
 # OPENAPI_OUT: also save the document, for a validator (tools/test_http_docker.sh).
 [ -n "$OPENAPI_OUT" ] && curl -s -o "$OPENAPI_OUT" "$BASE/swagger/doc.json"
+
+# --- MCP (2026-07-28) on /mcp: the tools carry the DTOs' schemas, and a
+# GET tool's arguments reach the route as a query string.
+META='"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}'
+# mcp METHOD PARAMS [TOOL] [extra curl args...]
+mcp() {
+  MM="$1"; MP="$2"; MN="$3"; if [ $# -ge 3 ]; then shift 3; else shift $#; fi # dash: shift past $# is fatal
+  req POST /mcp "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"$MM\",\"params\":{$META$MP}}" \
+    -H 'MCP-Protocol-Version: 2026-07-28' -H "Mcp-Method: $MM" ${MN:+-H "Mcp-Name: $MN"} "$@"
+}
+call() { mcp tools/call ",\"name\":\"$1\",\"arguments\":$2" "$1"; }
+
+mcp tools/list ""
+status_is 200 "MCP tools/list"
+body_has '"state":{"type":"string","description":"Only the cities of this state (two letters)"}' "MCP: query argument from the Find DTO"
+body_has '"code":{"type":"string","description":"IBGE code","examples":["4205407"],"pattern":"^[0-9]{7}$"}' "MCP: body argument with its metadata"
+body_has '"required":["code","name","state"],"additionalProperties":false' "MCP: body's required members"
+body_has 'Returns a page (page, limit, total, totalPages, hasNext, hasPrev, items) whose items have: code (string, IBGE code)' "MCP: description with the returned fields"
+call list_citie '{"state":"SP","limit":50}'
+status_is 200 "MCP call with a filter"
+body_has '\"total\":2,' "MCP call: the state filter reached the route"
+body_lacks 'Florian' "MCP call: the state filter reached the route"
+call create_citie '{"code":"123","name":"X","state":"SC"}'
+body_has '"isError":true' "MCP call, invalid data"
+call get_citie '{"code":"3550308"}'
+body_has '\"code\":\"3550308\"' "MCP call with a path argument"
+body_has '"isError":false' "MCP call with a path argument"
+mcp server/discover "" "" -H 'Origin: http://localhost:6274'
+status_is 200 "MCP from the allowed origin"
+mcp server/discover "" "" -H 'Origin: http://localhost:9999'
+status_is 403 "MCP from another origin"
 
 rm -rf "$T"
 echo "$CHECKS checks, $FAILS failed"

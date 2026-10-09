@@ -82,6 +82,23 @@ four decisions taken with the user: `docs/openapi-design.md`. Rules that keep it
 - Both samples document their routes, and `tools/test_http_docker.sh` (CI) validates each
   document with `openapi-spec-validator`.
 
+### MCP
+
+`PascalApi.Mcp` (pure, tested in `PascalApi.McpTests` with a fake executor) builds the tools
+from `TApiDocument` and answers JSON-RPC; `src/horse/PascalApi.Horse.Mcp` (`TMcpEndpoint`) is the
+endpoint and the HTTP executor. Design and decisions: `docs/mcp-design.md`.
+
+- Protocol revision **2026-07-28 only**, stateless (decided by the user): `initialize` is an
+  unknown method (404, naming the version). Don't add legacy support without asking.
+- The official Python SDK (`mcp` 2.0.0, `tools/mcp_client_check.py`, run by CI) is the
+  reference: it caught `ttlMs`/`cacheScope` missing from `tools/list`. After changing the wire
+  format, run `tools/ci-test.sh`.
+- Tool calls go back through the API over HTTP (all middlewares apply), so the provider must be
+  threaded (Horse's are). The endpoint registers after every `TRouteDoc` route: the catalog is
+  built once, in `Register`.
+- The scenario scripts run under dash in CI: `shift N` past `$#` is fatal there (not in Git
+  Bash).
+
 ### Horse
 
 The core package (`src/`) doesn't use Horse; only `src/horse/PascalApi.Horse.Middlewares` does,

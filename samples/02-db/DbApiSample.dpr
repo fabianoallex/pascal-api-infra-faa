@@ -20,6 +20,9 @@
                             201; 409 when the code exists (the database says so), 400 invalid
     DELETE /cities/:code    204; 404 when it doesn't exist
     GET    /swagger         Swagger UI; /swagger/doc.json is the OpenAPI 3.0.3 document
+    POST   /mcp             MCP (2026-07-28): the four routes above as tools, with the
+                            schemas of their DTOs; browser origin allowed: the MCP
+                            Inspector's (http://localhost:6274)
 
   On startup the migrations run (TDBMigrationEngine): SCHEMA_MIGRATIONS,
   CITIES and seed rows; a second start applies nothing. tools/http_scenarios_db.sh
@@ -53,6 +56,7 @@ uses
   PascalApi.OpenApi,
   PascalApi.Horse.Middlewares,
   PascalApi.Horse.OpenApi,
+  PascalApi.Horse.Mcp,
   DbApiSample.Cities in 'DbApiSample.Cities.pas';
 
 var
@@ -209,6 +213,8 @@ begin
       .Error(404, 'No city with this code')
       .Register(DeleteCity);
     TRouteDoc.Serve('/swagger', 'Cities API (pascal-api-infra-faa sample 02)', '1.0.0');
+    TMcpEndpoint.Register('/mcp', 'http://127.0.0.1:' + IntToStr(GPort), 'cities-api', '1.0.0',
+      [], ['http://localhost:6274']);
 
     Writeln('DbApiSample listening on port ', GPort);
     THorse.Listen(GPort);

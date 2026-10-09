@@ -17,6 +17,8 @@
     GET  /fail/database       the database is down: 503
     GET  /limited             rate limited: 3 requests per minute per X-Client header
     GET  /swagger             public; Swagger UI, and /swagger/doc.json the OpenAPI document
+    POST /mcp                 MCP (2026-07-28): the documented routes as tools; needs the
+                              token, which each tool call passes on to the route
 
   Middlewares, in order: request log (console), CORS for
   https://app.example.com, rate limit (only on /limited, keyed by the
@@ -51,6 +53,7 @@ uses
   PascalApi.OpenApi,
   PascalApi.Horse.Middlewares,
   PascalApi.Horse.OpenApi,
+  PascalApi.Horse.Mcp,
   ApiSample.Cities in 'ApiSample.Cities.pas';
 
 var
@@ -217,6 +220,8 @@ begin
   TRouteDoc.Get('/limited').Summary('3 requests a minute per X-Client').Tag('limits')
     .NoContent(200).Error(429).Register(GetLimited);
   TRouteDoc.Serve('/swagger', 'pascal-api-infra-faa sample 01', '1.0.0');
+  // After every route: the tools are the operations documented so far.
+  TMcpEndpoint.Register('/mcp', 'http://127.0.0.1:' + IntToStr(GPort), 'pascal-api-sample-01', '1.0.0');
 
   Writeln('ApiSample listening on port ', GPort);
   THorse.Listen(GPort);
