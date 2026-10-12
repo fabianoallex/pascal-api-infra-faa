@@ -34,8 +34,7 @@ Observability plan: [docs/observability-design.md](docs/observability-design.md)
 | `PascalApi.Horse.OpenApi` (`src/horse`) | `TRouteDoc`: register and document a route in one call; `/swagger` UI and `/swagger/doc.json`, with the JWT/Bearer scheme taken from the auth middleware |
 | `PascalApi.Mcp` | MCP (2026-07-28): the documented routes as tools, and the JSON-RPC dispatcher |
 | `PascalApi.Horse.Mcp` (`src/horse`) | `TMcpEndpoint.Register('/mcp', ...)`: the MCP endpoint; tool calls go through the API's own middlewares |
-| `PascalApi.Tracing` | spans with a current span per thread, sampling, batch export on a thread of its own (unstable API until phase D of the observability plan) |
-| `PascalApi.Otlp` | OTLP/HTTP JSON for traces and `TOtlpHttpExporter`, configured by the standard `OTEL_*` variables |
+| `PascalApi.Otlp` | OTLP/HTTP JSON for traces and `TOtlpHttpExporter` (an `IPcSpanExporter` for pascal-common-faa's `PascalCommon.Tracing`), configured by the standard `OTEL_*` variables |
 | `PascalApi.Horse.Observability` (`src/horse`) | `TMetricsMiddleware` (OpenTelemetry HTTP server metrics), `TMetricsEndpoint` (`/metrics`, Prometheus text), `THealthEndpoint` (`/health/live`, `/health/ready` with your checks) |
 | `PascalApi.Version` | `PASCALAPI_VERSION`, for compile-time checks |
 
@@ -54,7 +53,7 @@ THorse.Get('/cities', GetCities);   // raise ENotFoundException / EValidationExc
 TMetricsEndpoint.Register('/metrics');                  // Prometheus scrape
 THealthEndpoint.AddCheck('database', LChecks.Database); // a function: Boolean (method on FPC)
 THealthEndpoint.Register('/health');                    // /health/live, /health/ready (200 or 503)
-TTracing.Start(TTracingOptions.FromEnvironment('cities-api', '1.0.0'),
+TPcTracing.Start(TPcTracingOptions.FromEnvironment('cities-api', '1.0.0', ReadAppConfig),
   TOtlpHttpExporter.FromEnvironment);                   // spans to an OpenTelemetry collector
 THorse.Listen(9000);
 ```

@@ -8,7 +8,9 @@
 
 { Tests for PascalApi.Otlp: the OTLP/HTTP JSON body of a batch of spans,
   byte for byte (ids as hex, enums as numbers, 64-bit integers as strings,
-  typed attribute values), the resource attributes and the traces endpoint.
+  typed attribute values), the resource attributes, the traces endpoint,
+  the 'key=value' lists of the OTEL_* variables and ReadAppConfig as the
+  lookup of TPcTracingOptions.FromEnvironment.
   The body is also checked by a real OpenTelemetry Collector in CI
   (tools/test_http_docker.sh).
 
@@ -19,9 +21,12 @@ interface
 
 uses
   fpcunit, testregistry,
+  Classes,
   SysUtils,
+  PascalApi.Text,
+  PascalApi.Config,
   PascalApi.Http,
-  PascalApi.Tracing,
+  PascalCommon.Tracing,
   PascalApi.Otlp,
   PascalApi.Version;
 
@@ -32,11 +37,21 @@ type
     procedure TracesJson_RootSpan_NoParentNoMessage;
     procedure Resource_ExtraAttributesAddAndReplace;
     procedure Endpoint_TracesThenBaseThenDefault;
+    procedure KeyValueList_TrimsDecodesSkips;
+    procedure TracingOptions_ReadAppConfig_ReadsTheConfig;
   end;
 
 implementation
 
-function Attr(const AKey: string; AType: TSpanAttributeType): TSpanAttribute;
+var
+  GFakeEnv: TStringList;
+
+function FakeEnvironment(const AName: string): string;
+begin
+  Result := GFakeEnv.Values[AName];
+end;
+
+function Attr(const AKey: string; AType: TPcSpanAttributeType): TPcSpanAttribute;
 begin
   Result.Key := AKey;
   Result.ValueType := AType;
@@ -46,7 +61,7 @@ begin
   Result.BoolValue := False;
 end;
 
-function SampleSpan: TSpanData;
+function SampleSpan: TPcSpanData;
 begin
   Result.TraceId := '4bf92f3577b34da6a3ce929d0e0e4736';
   Result.SpanId := 'b7ad6b7169203331';
@@ -87,7 +102,7 @@ end;
 
 procedure TOtlpTests.TracesJson_FullSpan;
 var
-  LSpans: TSpanDataArray;
+  LSpans: TPcSpanDataArray;
 begin
   LSpans := nil;
   SetLength(LSpans, 1);
@@ -102,12 +117,12 @@ begin
     '{"key":"ratio","value":{"doubleValue":0.5}},' +
     '{"key":"cached","value":{"boolValue":true}}],' +
     '"status":{"message":"say \"no\"","code":2}}]}]}]}',
-    OtlpTracesJson(TTracingOptions.Default('svc', '1.2.3'), LSpans));
+    OtlpTracesJson(TPcTracingOptions.Default('svc', '1.2.3'), LSpans));
 end;
 
 procedure TOtlpTests.TracesJson_RootSpan_NoParentNoMessage;
 var
-  LSpans: TSpanDataArray;
+  LSpans: TPcSpanDataArray;
 begin
   LSpans := nil;
   SetLength(LSpans, 1);
@@ -122,15 +137,15 @@ begin
     ',"spans":[{"traceId":"4bf92f3577b34da6a3ce929d0e0e4736","spanId":"b7ad6b7169203331",' +
     '"name":"GET /cities/:id","kind":3,"startTimeUnixNano":"1767323045678000000",' +
     '"endTimeUnixNano":"1767323045680500000","attributes":[],"status":{"code":0}}]}]}]}',
-    OtlpTracesJson(TTracingOptions.Default('svc', '1.2.3'), LSpans));
+    OtlpTracesJson(TPcTracingOptions.Default('svc', '1.2.3'), LSpans));
 end;
 
 procedure TOtlpTests.Resource_ExtraAttributesAddAndReplace;
 var
-  O: TTracingOptions;
+  O: TPcTracingOptions;
   L: TArray<THttpHeader>;
 begin
-  O := TTracingOptions.Default('svc', '1.2.3');
+  O := TPcTracingOptions.Default('svc', '1.2.3');
   O.ResourceAttributes := 'deployment.environment=test, service.name=other';
   L := OtlpResourceAttributes(O);
   TAssert.AssertEquals(5, Length(L));
@@ -138,7 +153,7 @@ begin
   TAssert.AssertEquals('other', L[0].Value);
   TAssert.AssertEquals('deployment.environment', L[4].Name);
   TAssert.AssertEquals('test', L[4].Value);
-  O := TTracingOptions.Default('svc', '');
+  O := TPcTracingOptions.Default('svc', '');
   TAssert.AssertEquals(3, Length(OtlpResourceAttributes(O)));
 end;
 
@@ -147,6 +162,55 @@ begin
   TAssert.AssertEquals('http://c:4318/custom', OtlpTracesEndpoint(' http://c:4318/custom ', 'http://b:4318'));
   TAssert.AssertEquals('http://b:4318/v1/traces', OtlpTracesEndpoint('', 'http://b:4318/'));
   TAssert.AssertEquals('http://localhost:4318/v1/traces', OtlpTracesEndpoint('', ''));
+end;
+
+procedure TOtlpTests.KeyValueList_TrimsDecodesSkips;
+var
+  L: TArray<THttpHeader>;
+  B: TBytes;
+begin
+  L := ParseKeyValueList('a=b, c = d ,bad,=x,e=%41%C3%A3,f=1=2');
+  TAssert.AssertEquals(4, Length(L));
+  TAssert.AssertEquals('a', L[0].Name);
+  TAssert.AssertEquals('b', L[0].Value);
+  TAssert.AssertEquals('c', L[1].Name);
+  TAssert.AssertEquals('d', L[1].Value);
+  TAssert.AssertEquals('e', L[2].Name);
+  // 'A' and U+00E3, from percent-encoded UTF-8.
+  B := PaStringToUtf8Bytes(L[2].Value);
+  TAssert.AssertEquals(3, Length(B));
+  TAssert.AssertEquals($41, B[0]);
+  TAssert.AssertEquals($C3, B[1]);
+  TAssert.AssertEquals($A3, B[2]);
+  TAssert.AssertEquals('1=2', L[3].Value);
+  TAssert.AssertEquals(0, Length(ParseKeyValueList('')));
+end;
+
+// pascal-common-faa reads the OTEL_* variables; through ReadAppConfig they
+// come from TAppConfig (the .env file, then the environment reader).
+procedure TOtlpTests.TracingOptions_ReadAppConfig_ReadsTheConfig;
+var
+  LSavedEnvPath: string;
+  O: TPcTracingOptions;
+begin
+  LSavedEnvPath := TAppConfig.EnvFilePath;
+  GFakeEnv := TStringList.Create;
+  try
+    TAppConfig.SetEnvFile('pascalapi_otlp_no_such.env');
+    TAppConfig.SetEnvironmentReader(FakeEnvironment);
+    GFakeEnv.Values['OTEL_SERVICE_NAME'] := 'from-config';
+    GFakeEnv.Values['OTEL_BSP_SCHEDULE_DELAY'] := '200';
+    O := TPcTracingOptions.FromEnvironment('default-name', '1.0', ReadAppConfig);
+    TAssert.AssertEquals('from-config', O.ServiceName);
+    TAssert.AssertEquals('1.0', O.ServiceVersion);
+    TAssert.AssertEquals(200, O.FlushIntervalMs);
+    TAssert.AssertEquals('from-config', ReadAppConfig('OTEL_SERVICE_NAME'));
+    TAssert.AssertEquals('', ReadAppConfig('PASCALAPI_NO_SUCH_VARIABLE'));
+  finally
+    TAppConfig.SetEnvironmentReader(nil);
+    TAppConfig.SetEnvFile(LSavedEnvPath);
+    FreeAndNil(GFakeEnv);
+  end;
 end;
 
 initialization

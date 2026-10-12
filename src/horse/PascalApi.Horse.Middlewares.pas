@@ -93,9 +93,9 @@ type
   /// A handler reads them as AReq.Headers['X-Request-Id'] and
   /// AReq.Headers['traceparent'] (e.g. for its own FileLog lines).
   ///
-  /// It opens the request's server span (PascalApi.Tracing) with those ids,
-  /// the current span while the handler runs, so TTracing.StartSpan in the
-  /// handler makes a child of it. When TTracing is started, a new trace is
+  /// It opens the request's server span (PascalCommon.Tracing) with those ids,
+  /// the current span while the handler runs, so TPcTracing.StartSpan in the
+  /// handler makes a child of it. When TPcTracing is started, a new trace is
   /// sampled by its ratio (the traceparent's flag says so) and the span is
   /// exported with the HTTP semantic-convention attributes; named
   /// '<method> <route>' ('<method>' when no route matched), status error
@@ -166,7 +166,7 @@ uses
   PascalApi.Jwt,
   PascalApi.RateLimitState,
   PascalApi.Text,
-  PascalApi.Tracing;
+  PascalCommon.Tracing;
 
 type
   TStringArray = array of string;
@@ -330,7 +330,7 @@ var
   LLine, LIp, LRoute, LMethod: string;
   LStart: UInt64;
   LHeaders: THorseList;
-  LSpan: ISpan;
+  LSpan: IPcSpan;
 begin
   // When no route matches, Horse 3.3.12 runs the router again with '/*'
   // (Horse.Core.RouterTree, DoExecuteInternal), so global middlewares run
@@ -346,8 +346,8 @@ begin
   LTrace := ResolveRequestTrace(AReq.Headers['traceparent'], AReq.Headers['tracestate'],
     AReq.Headers['X-Request-Id']);
   // A new trace: the ratio decides (a parent's flag is kept as it came).
-  if (LTrace.ParentSpanId = '') and TTracing.Enabled then
-    LTrace.Sampled := TTracing.ShouldSample(LTrace.TraceId);
+  if (LTrace.ParentSpanId = '') and TPcTracing.Enabled then
+    LTrace.Sampled := TPcTracing.ShouldSample(LTrace.TraceId);
   // Set before Next, so they are there even when the handler raises. The
   // dictionary ignores case: these replace the incoming headers.
   LHeaders.AddOrSetValue('X-Request-Id', LTrace.TraceId);
@@ -360,7 +360,7 @@ begin
   LMethod := MetricMethod(AReq.Method);
   if LMethod = '_OTHER' then
     LMethod := 'HTTP'; // the span name the semantic conventions give an unknown method
-  LSpan := TTracing.StartSpanWith(LTrace.TraceId, LTrace.SpanId, LTrace.ParentSpanId,
+  LSpan := TPcTracing.StartSpanWith(LTrace.TraceId, LTrace.SpanId, LTrace.ParentSpanId,
     LTrace.TraceState, LTrace.Sampled, LMethod, skServer);
   LStart := PcTickMs;
   try

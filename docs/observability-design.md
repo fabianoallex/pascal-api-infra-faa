@@ -4,7 +4,8 @@ Status: **approved (2026-10-09)**. Decisions 1, 2 and 3 taken with the user; 4, 
 recommended (user, 2026-10-09). **Phase A done** (2026-10-09): part 1 in pascal-common-faa 1.5.0
 (`PascalCommon.TraceContext`), part 2 here (0.8.0; see "Phase A: what was done"). **Phase B done** (2026-10-09, 0.9.0): pascal-common-faa 1.6.0 (`PascalCommon.Metrics`) and
 `PascalApi.Horse.Observability` here (see "Phase B: what was done"). **Phase C done** (2026-10-09,
-0.10.0; see "Phase C: what was done"). Next: phase D.
+0.10.0; see "Phase C: what was done"). **Phase D done** (2026-10-12, 0.11.0; see "Phase D: what
+was done").
 
 ## Goal
 
@@ -222,6 +223,31 @@ the message headers), using the contracts moved to pascal-common-faa.
 - Not checked by a script: the error line's `trace_id=` and the JSON line are only in the
   samples' `server.log` (read by hand: correct). The scenario scripts don't read the server's
   output, because on Delphi the user starts the sample by hand.
+
+## Phase D: what was done (2026-10-12)
+
+Each step in its own repository, then this one moved onto them:
+
+- pascal-common-faa 1.7.0: `PascalCommon.Tracing`, the tracer, span and exporter contracts of
+  phase C with the `Pc` prefixes (`TPcTracing`, `IPcSpan`, `IPcSpanExporter`...), new GUIDs,
+  `StartSpanFromParent` for a message consumer, and the tests. 1.8.0: `StartDetachedSpan` and
+  `StartChildSpan`, found by pascal-db-faa (a transaction may end on another thread; a span that
+  is the thread's current one and is freed elsewhere left a dangling pointer, measured).
+- pascal-db-faa 0.13.0: a client span per statement of a pooled query, a detached
+  `transaction` span with its statements as children, a `pool wait` span.
+- pascal-redis-faa 0.2.0: a client span per command, pipeline or `MULTI`, and `pool wait`.
+- pascal-amqp-faa 0.2.0: `publish` (producer) and `process` (consumer) spans, with
+  `traceparent`/`tracestate` in the message headers, so a consumer continues the producer's
+  trace.
+- Here (0.11.0): `PascalApi.Tracing` removed; `PascalApi.Otlp`, the logger and the MCP executor
+  on `PascalCommon.Tracing`; `ParseKeyValueList` moved to `PascalApi.Otlp`; `TLogProc` is
+  `TPcLogProc`; `ReadAppConfig` so `FromEnvironment` still sees the `.env`. Sample 02 got the
+  database spans with no code change, and `tools/otlp_check.py` checks them: `SELECT` under the
+  server span, committed `transaction` spans with their statements as children.
+- Verified: 215 unit tests, 0 leaks, and HTTP 146 + 61 checks on FPC Win64 and Linux and
+  Delphi 12 Win32 and Win64; the collector in CI accepted every batch (206 spans) and every check passed.
+- Not done: Redis and AMQP aren't in either sample, so their spans are checked only in their own
+  repositories; the pool gauges (`TPoolSnapshot`) as metrics.
 
 ## Phase C: what was done (2026-10-09)
 

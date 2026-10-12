@@ -70,8 +70,8 @@ all (measured, skill `references/rtti-gotchas.md`).
 
 ## Dependencies
 
-`external/` holds the dependencies as git submodules, pinned: pascal-common-faa `v1.6.0`,
-pascal-jsonmapper-faa `v0.3.0`, pascal-db-faa `v0.12.1`, Horse `3.3.12` (`fda6fed`; until 0.4.0
+`external/` holds the dependencies as git submodules, pinned: pascal-common-faa `v1.8.0`,
+pascal-jsonmapper-faa `v0.3.0`, pascal-db-faa `v0.13.0`, Horse `3.3.12` (`fda6fed`; until 0.4.0
 this repository used 3.3.2, `72cc45f`; pascal-dfe-broker moved to 3.3.12 on 2026-10-09, delphi-api-starter is still on 3.3.2). They are **only for this
 repository's tests**: a consumer provides its own single copy of each (submodule + search path),
 never `pascal-api-infra-faa/external/...`. Clone with `git submodule update --init` (no
@@ -156,13 +156,15 @@ its own Horse `src` to the search path.
   visited, also on a partial match (`GET /cities/1/extra` left `/cities`), and `''` when a global
   middleware answered first (a 401 from JWT). `MetricRoute` drops a template whose segment count
   differs from the path. Never label a metric with the raw path.
-- **Spans** (`PascalApi.Tracing`, unstable until phase D): the logger opens the server span; a
-  handler's `TTracing.StartSpan` is its child. The current span is a per-thread pointer (Delphi
-  doesn't finalize managed threadvars). In tests, never compare `TTracing.Current` inline: the
-  temporary interface keeps the span alive until the end of the procedure (it broke
-  `UnfinishedSpan_Freed_ClearsCurrent` on FPC); read it in a helper. CI checks the spans with a
-  real OpenTelemetry Collector (`tools/otlp_check.py`); after changing the OTLP JSON, run
-  `tools/ci-test.sh`.
+- **Spans** are pascal-common-faa's `PascalCommon.Tracing` (`TPcTracing`, `IPcSpan`; they
+  were `PascalApi.Tracing` here until 0.11.0, moved in phase D so pascal-db-faa, -redis-faa and
+  -amqp-faa can join the trace). This repository keeps only the exporter (`PascalApi.Otlp`) and
+  the spans it opens: the logger's server span (a handler's `TPcTracing.StartSpan` is its child)
+  and the MCP executor's client span. Tracing tests live in pascal-common-faa; the current span
+  is a per-thread pointer there. `TPcTracingOptions.FromEnvironment` reads only the process
+  environment: pass `ReadAppConfig` (`PascalApi.Config`) to keep the `.env`. CI checks the spans
+  with a real OpenTelemetry Collector (`tools/otlp_check.py`, including sample 02's database
+  spans from pascal-db-faa); after changing the OTLP JSON, run `tools/ci-test.sh`.
 - **Every metric needs a description**: `promtool check metrics` (run by CI on both samples'
   `/metrics`) exits non-zero on "no help text" even when the format is right.
 - **`THorseRequest.RemoteAddr` is '' with the console provider** (fpWeb on FPC, Indy on Delphi):

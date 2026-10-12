@@ -35,7 +35,6 @@ uses
   PascalApi.HttpTests,
   PascalApi.OpenApiTests,
   PascalApi.McpTests,
-  PascalApi.TracingTests,
   PascalApi.OtlpTests;
 
 var

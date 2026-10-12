@@ -46,6 +46,11 @@ type
     class function GetBool(const AKey: string; ADefault: Boolean = False): Boolean; static;
   end;
 
+/// TAppConfig.Get(AName, ''), as a plain function: the lookup for
+/// TPcTracingOptions.FromEnvironment (pascal-common-faa), so the OTEL_*
+/// variables can come from the .env file too.
+function ReadAppConfig(const AName: string): string;
+
 implementation
 
 uses
@@ -157,6 +162,11 @@ begin
     Result := ADefault
   else
     Result := (LValue = 'true') or (LValue = '1') or (LValue = 'yes');
+end;
+
+function ReadAppConfig(const AName: string): string;
+begin
+  Result := TAppConfig.Get(AName, '');
 end;
 
 initialization

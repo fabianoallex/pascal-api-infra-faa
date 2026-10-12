@@ -3,10 +3,10 @@ unit PascalApi.Otlp;
 {$I pascalapi.inc}
 
 (* OpenTelemetry's OTLP over HTTP with JSON encoding, for traces: the request
-  body (pure, OtlpTracesJson) and an ISpanExporter that POSTs it
+  body (pure, OtlpTracesJson) and an IPcSpanExporter that POSTs it
   (TOtlpHttpExporter).
 
-    TTracing.Start(TTracingOptions.FromEnvironment('cities-api', '1.0.0'),
+    TPcTracing.Start(TPcTracingOptions.FromEnvironment('cities-api', '1.0.0', ReadAppConfig),
       TOtlpHttpExporter.FromEnvironment, LOnError);
 
   The JSON follows the OTLP specification's JSON mapping: trace and span ids
@@ -33,7 +33,7 @@ interface
 uses
   SysUtils,
   PascalApi.Http,
-  PascalApi.Tracing;
+  PascalCommon.Tracing;
 
 const
   OTLP_DEFAULT_TRACES_ENDPOINT = 'http://localhost:4318/v1/traces';
@@ -44,16 +44,21 @@ const
 /// The resource attributes: service.name, service.version (when not ''),
 /// telemetry.sdk.name and telemetry.sdk.version, then the pairs of
 /// AOptions.ResourceAttributes (one that repeats a key above replaces it).
-function OtlpResourceAttributes(const AOptions: TTracingOptions): TArray<THttpHeader>;
+function OtlpResourceAttributes(const AOptions: TPcTracingOptions): TArray<THttpHeader>;
 
 /// The body of POST /v1/traces for ASpans.
-function OtlpTracesJson(const AOptions: TTracingOptions; const ASpans: TSpanDataArray): string;
+function OtlpTracesJson(const AOptions: TPcTracingOptions; const ASpans: TPcSpanDataArray): string;
+
+/// The pairs of 'key=value,key=value' (OTEL_RESOURCE_ATTRIBUTES and
+/// OTEL_EXPORTER_OTLP_HEADERS): trimmed, '%XX' decoded; pairs without '=' or
+/// with an empty key are skipped.
+function ParseKeyValueList(const AText: string): TArray<THttpHeader>;
 
 /// The traces endpoint from the OTEL_EXPORTER_OTLP_* values (see the header).
 function OtlpTracesEndpoint(const ATracesEndpoint, ABaseEndpoint: string): string;
 
 type
-  TOtlpHttpExporter = class(TInterfacedObject, ISpanExporter)
+  TOtlpHttpExporter = class(TInterfacedObject, IPcSpanExporter)
   private
     FEndpoint: string;
     FHeaders: TArray<THttpHeader>;
@@ -63,7 +68,7 @@ type
       ATimeoutMs: Integer = OTLP_DEFAULT_TIMEOUT_MS);
     /// Endpoint, headers and timeout from the OTEL_EXPORTER_OTLP_* variables.
     class function FromEnvironment: TOtlpHttpExporter; static;
-    function ExportSpans(const ASpans: TSpanDataArray; out AError: string): Boolean;
+    function ExportSpans(const ASpans: TPcSpanDataArray; out AError: string): Boolean;
     property Endpoint: string read FEndpoint;
   end;
 
@@ -84,10 +89,96 @@ uses
 
 const
   // SpanKind and StatusCode of opentelemetry/proto/trace/v1/trace.proto.
-  SPAN_KIND_CODES: array[TSpanKind] of Integer = (1, 2, 3, 4, 5);
-  STATUS_CODES: array[TSpanStatus] of Integer = (0, 1, 2);
+  SPAN_KIND_CODES: array[TPcSpanKind] of Integer = (1, 2, 3, 4, 5);
+  STATUS_CODES: array[TPcSpanStatus] of Integer = (0, 1, 2);
 
-function OtlpResourceAttributes(const AOptions: TTracingOptions): TArray<THttpHeader>;
+function HexDigit(C: Char; out AValue: Integer): Boolean;
+begin
+  Result := True;
+  if (C >= '0') and (C <= '9') then
+    AValue := Ord(C) - Ord('0')
+  else if (C >= 'a') and (C <= 'f') then
+    AValue := Ord(C) - Ord('a') + 10
+  else if (C >= 'A') and (C <= 'F') then
+    AValue := Ord(C) - Ord('A') + 10
+  else
+    Result := False;
+end;
+
+// '%XX' sequences decoded as UTF-8 bytes; a malformed one is kept as is, and
+// so is the whole text when the result isn't valid UTF-8.
+function PercentDecode(const AText: string): string;
+var
+  LBytes: TBytes;
+  LCount, I, LHigh, LLow: Integer;
+  LUtf8: TBytes;
+begin
+  if Pos('%', AText) = 0 then
+    Exit(AText);
+  LUtf8 := PaStringToUtf8Bytes(AText);
+  LBytes := nil;
+  SetLength(LBytes, Length(LUtf8));
+  LCount := 0;
+  I := 0;
+  while I < Length(LUtf8) do
+  begin
+    if (LUtf8[I] = Ord('%')) and (I + 2 < Length(LUtf8)) and HexDigit(Char(LUtf8[I + 1]), LHigh)
+      and HexDigit(Char(LUtf8[I + 2]), LLow) then
+    begin
+      LBytes[LCount] := LHigh * 16 + LLow;
+      Inc(I, 3);
+    end
+    else
+    begin
+      LBytes[LCount] := LUtf8[I];
+      Inc(I);
+    end;
+    Inc(LCount);
+  end;
+  SetLength(LBytes, LCount);
+  try
+    Result := PaUtf8BytesToString(LBytes, 'a percent-encoded value');
+  except
+    on ETextEncodingException do
+      Result := AText;
+  end;
+end;
+
+function ParseKeyValueList(const AText: string): TArray<THttpHeader>;
+var
+  LRest, LPair, LKey: string;
+  LComma, LEquals, LCount: Integer;
+begin
+  Result := nil;
+  LCount := 0;
+  LRest := AText;
+  while LRest <> '' do
+  begin
+    LComma := Pos(',', LRest);
+    if LComma > 0 then
+    begin
+      LPair := Copy(LRest, 1, LComma - 1);
+      Delete(LRest, 1, LComma);
+    end
+    else
+    begin
+      LPair := LRest;
+      LRest := '';
+    end;
+    LEquals := Pos('=', LPair);
+    if LEquals = 0 then
+      Continue;
+    LKey := Trim(PercentDecode(Copy(LPair, 1, LEquals - 1)));
+    if LKey = '' then
+      Continue;
+    SetLength(Result, LCount + 1);
+    Result[LCount].Name := LKey;
+    Result[LCount].Value := Trim(PercentDecode(Copy(LPair, LEquals + 1, MaxInt)));
+    Inc(LCount);
+  end;
+end;
+
+function OtlpResourceAttributes(const AOptions: TPcTracingOptions): TArray<THttpHeader>;
 var
   LList: TArray<THttpHeader>;
   LExtra: TArray<THttpHeader>;
@@ -127,7 +218,7 @@ begin
   Result := LList;
 end;
 
-procedure WriteKeyValue(AWriter: TJsonWriter; const AKey: string; const AAttribute: TSpanAttribute);
+procedure WriteKeyValue(AWriter: TJsonWriter; const AKey: string; const AAttribute: TPcSpanAttribute);
 begin
   AWriter.BeginObject;
   AWriter.Name('key');
@@ -162,7 +253,7 @@ end;
 
 procedure WriteStringKeyValue(AWriter: TJsonWriter; const AKey, AValue: string);
 var
-  LAttribute: TSpanAttribute;
+  LAttribute: TPcSpanAttribute;
 begin
   LAttribute.Key := AKey;
   LAttribute.ValueType := satString;
@@ -173,7 +264,7 @@ begin
   WriteKeyValue(AWriter, AKey, LAttribute);
 end;
 
-procedure WriteSpan(AWriter: TJsonWriter; const ASpan: TSpanData);
+procedure WriteSpan(AWriter: TJsonWriter; const ASpan: TPcSpanData);
 var
   I: Integer;
 begin
@@ -218,7 +309,7 @@ begin
   AWriter.EndObject;
 end;
 
-function OtlpTracesJson(const AOptions: TTracingOptions; const ASpans: TSpanDataArray): string;
+function OtlpTracesJson(const AOptions: TPcTracingOptions; const ASpans: TPcSpanDataArray): string;
 var
   LWriter: TJsonWriter;
   LResource: TArray<THttpHeader>;
@@ -303,7 +394,7 @@ end;
 
 {$IFDEF FPC}
 
-function TOtlpHttpExporter.ExportSpans(const ASpans: TSpanDataArray; out AError: string): Boolean;
+function TOtlpHttpExporter.ExportSpans(const ASpans: TPcSpanDataArray; out AError: string): Boolean;
 var
   LClient: TFPHTTPClient;
   LSent: TBytesStream;
@@ -311,7 +402,7 @@ var
   I, LStatus: Integer;
 begin
   LClient := TFPHTTPClient.Create(nil);
-  LSent := TBytesStream.Create(PaStringToUtf8Bytes(OtlpTracesJson(TTracing.Options, ASpans)));
+  LSent := TBytesStream.Create(PaStringToUtf8Bytes(OtlpTracesJson(TPcTracing.Options, ASpans)));
   LReceived := TBytesStream.Create;
   try
     LClient.ConnectTimeout := FTimeoutMs;
@@ -338,7 +429,7 @@ end;
 
 {$ELSE}
 
-function TOtlpHttpExporter.ExportSpans(const ASpans: TSpanDataArray; out AError: string): Boolean;
+function TOtlpHttpExporter.ExportSpans(const ASpans: TPcSpanDataArray; out AError: string): Boolean;
 var
   LClient: THTTPClient;
   LRequest: IHTTPRequest;
@@ -347,7 +438,7 @@ var
   I, LStatus: Integer;
 begin
   LClient := THTTPClient.Create;
-  LSent := TBytesStream.Create(PaStringToUtf8Bytes(OtlpTracesJson(TTracing.Options, ASpans)));
+  LSent := TBytesStream.Create(PaStringToUtf8Bytes(OtlpTracesJson(TPcTracing.Options, ASpans)));
   try
     LClient.ConnectionTimeout := FTimeoutMs;
     LClient.ResponseTimeout := FTimeoutMs;

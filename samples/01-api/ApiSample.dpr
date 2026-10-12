@@ -37,7 +37,7 @@
 
   Tracing: when OTEL_EXPORTER_OTLP_ENDPOINT is set (e.g.
   http://localhost:4318), every request's span goes to that OpenTelemetry
-  collector (PascalApi.Tracing, PascalApi.Otlp); GET /trace adds a child
+  collector (PascalCommon.Tracing, PascalApi.Otlp); GET /trace adds a child
   span. CI checks what the collector received (tools/otlp_check.py). *)
 
 {$IFDEF FPC}{$MODE DELPHI}{$H+}{$ENDIF}
@@ -66,7 +66,7 @@ uses
   PascalApi.Horse.OpenApi,
   PascalApi.Horse.Mcp,
   PascalApi.Horse.Observability,
-  PascalApi.Tracing,
+  PascalCommon.Tracing,
   PascalApi.Otlp,
   ApiSample.Cities in 'ApiSample.Cities.pas';
 
@@ -171,10 +171,10 @@ end;
 procedure GetTrace(AReq: THorseRequest; ARes: THorseResponse; ANext: TNextProc);
 var
   LWriter: TJsonWriter;
-  LSpan: ISpan;
+  LSpan: IPcSpan;
 begin
   // A child of the request's server span (the current one).
-  LSpan := TTracing.StartSpan('build trace answer');
+  LSpan := TPcTracing.StartSpan('build trace answer');
   LWriter := TJsonWriter.Create;
   try
     LSpan.SetAttribute('sample.answer', 'trace');
@@ -255,7 +255,7 @@ begin
   GCallbacks := TSampleCallbacks.Create;
 
   if TAppConfig.Get('OTEL_EXPORTER_OTLP_ENDPOINT', '') <> '' then
-    TTracing.Start(TTracingOptions.FromEnvironment('pascal-api-sample-01', '1.0.0'),
+    TPcTracing.Start(TPcTracingOptions.FromEnvironment('pascal-api-sample-01', '1.0.0', ReadAppConfig),
       TOtlpHttpExporter.FromEnvironment, GCallbacks.LogError);
   TErrorHandlerMiddleware.Register(GCallbacks.LogError);
   THorse.Use(TLoggerMiddleware.New);

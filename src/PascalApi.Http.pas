@@ -32,14 +32,14 @@
 interface
 
 uses
-  SysUtils;
+  SysUtils,
+  PascalCommon.Tracing;
 
 type
-  {$IFDEF PASCALAPI_FUNCREFS}
-  TLogProc = reference to procedure(const ALine: string);
-  {$ELSE}
-  TLogProc = procedure(const ALine: string) of object;
-  {$ENDIF}
+  /// A log sink (reference to procedure on Delphi, of object on FPC). The
+  /// same type as pascal-common-faa's TPcLogProc, so a TLogProc goes to
+  /// TPcTracing.Start as it is.
+  TLogProc = TPcLogProc;
 
   /// An HTTP error: the status code it is answered with and a message that
   /// is safe to send to the client.

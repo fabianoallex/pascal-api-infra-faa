@@ -39,8 +39,12 @@ git submodule add https://github.com/fabianoallex/pascal-amqp-faa external/pasca
   which an application of this library already has: keep **one** copy for all of them.
 - **Lazarus:** require the library's `.lpk`; point its `pascal_common_faa` requirement at the
   application's copy (the same one `pascal_api_infra_faa.lpk` uses).
-- Minimum pascal-common-faa: 1.1.3 (AMQP), 1.2 (Redis), 1.0 (Pipes); this library requires
-  1.6.0, so an application of it meets all three.
+- Minimum pascal-common-faa: 1.8.0 for pascal-amqp-faa 0.2.0 and pascal-redis-faa 0.2.0 (their
+  spans, `PascalCommon.Tracing`), 1.0 for Pipes; this library requires 1.7.0, so pin 1.8.0 when
+  the application has either of them (pascal-db-faa 0.13.0 needs 1.8.0 too). Their spans join
+  the API's trace on their own once `TPcTracing.Start` runs: a Redis command or a publish made in
+  a handler is a child of the request's server span, and an AMQP consumer continues the
+  producer's trace from the message's `traceparent`.
 - Callbacks in all three are `procedure ... of object` (FPC 3.2.2 has no anonymous methods):
   write a method of a class of yours, as for this library's middlewares.
 

@@ -148,3 +148,9 @@ both samples' `/metrics` with `promtool`. Found: Horse's `MatchedRoute` keeps a 
 Phase C (spans and OTLP export) released as 0.10.0, verified on FPC Windows and Linux and
 Delphi 12 Win32/Win64: `PascalApi.Tracing` (unstable until phase D) and `PascalApi.Otlp`; CI runs an
 OpenTelemetry Collector next to the samples and checks the spans it received.
+
+Phase D (the sibling libraries join the trace) prepared as 0.11.0 on 2026-10-12, after
+pascal-common-faa 1.7.0/1.8.0 (`PascalCommon.Tracing`), pascal-db-faa 0.13.0, pascal-redis-faa
+0.2.0 and pascal-amqp-faa 0.2.0: `PascalApi.Tracing` removed (breaking), the submodules on
+common v1.8.0 and db v0.13.0, `ReadAppConfig` for the `.env`; CI checks sample 02's database
+spans under the request. Verified on FPC Windows and Linux and Delphi 12 Win32/Win64.

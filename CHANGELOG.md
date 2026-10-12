@@ -4,6 +4,46 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 follow [Semantic Versioning](https://semver.org/). While the version is 0.x, a minor version
 may change the API; each such change is listed here.
 
+## [0.11.0] - 2026-10-12
+
+Phase D of the observability design (`docs/observability-design.md`): the span contracts moved
+to pascal-common-faa 1.7.0 (`PascalCommon.Tracing`), so pascal-db-faa 0.13.0, pascal-redis-faa
+0.2.0 and pascal-amqp-faa 0.2.0 open spans that join an API's trace without depending on this
+library.
+
+### Removed (breaking)
+
+- `PascalApi.Tracing` (announced as unstable in 0.10.0). Use pascal-common-faa's
+  `PascalCommon.Tracing`: `TTracing` is `TPcTracing`, `ISpan` is `IPcSpan`, `ISpanExporter` is
+  `IPcSpanExporter`, `TSpanData` is `TPcSpanData`, `TTracingOptions` is `TPcTracingOptions`,
+  `UnixNanoOfLocal` is `PcUnixNanoOfLocal`, and so on (the name map is in pascal-common-faa's
+  `docs/migrating.md`). `TOtlpHttpExporter` implements `IPcSpanExporter`.
+
+### Changed
+
+- `TPcTracingOptions.FromEnvironment(AName, AVersion)` reads only the process environment;
+  `TTracingOptions.FromEnvironment` read through `TAppConfig`, so a `.env` file counted. To keep
+  that, pass the new `ReadAppConfig` (`PascalApi.Config`) as the lookup:
+  `TPcTracingOptions.FromEnvironment('cities-api', '1.0.0', ReadAppConfig)`. Both samples do.
+- `TLogProc` (`PascalApi.Http`) is now declared as pascal-common-faa's `TPcLogProc` (same
+  signature), so it goes to `TPcTracing.Start` as it is.
+- `ParseKeyValueList` moved from `PascalApi.Tracing` to `PascalApi.Otlp` (only the exporter uses
+  it).
+- Requires pascal-common-faa **1.7.0** or later (`PascalApi.Dto`, `MinVersion` in the `.lpk`).
+  pascal-db-faa 0.13.0, pascal-redis-faa 0.2.0 and pascal-amqp-faa 0.2.0 require 1.8.0; the
+  submodules here are pascal-common-faa v1.8.0 and pascal-db-faa v0.13.0.
+
+### Added
+
+- `ReadAppConfig` (`PascalApi.Config`): `TAppConfig.Get(AName, '')` as a plain function.
+- CI: `tools/otlp_check.py` checks pascal-db-faa's spans from sample 02 (no code change there):
+  `SELECT` client spans with `db.system.name` `sqlite` under the request's server span, and
+  committed `transaction` spans with their statements as children.
+
+Verified: 215 unit tests with 0 leaks and 146 + 61 HTTP checks on FPC 3.2.2 Win64 and Linux
+x86_64 and Delphi 12 Win32 and Win64; on Linux (CI), an OpenTelemetry Collector accepted every batch and
+`tools/otlp_check.py` passed, the new database checks included.
+
 ## [0.10.0] - 2026-10-09
 
 Phase C of the observability design (`docs/observability-design.md`): spans exported to an

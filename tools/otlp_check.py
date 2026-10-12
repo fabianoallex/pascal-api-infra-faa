@@ -6,8 +6,8 @@
 Run by tools/test_http_docker.sh after tools/http_scenarios.sh and
 tools/http_scenarios_db.sh, with the samples exporting to the collector.
 What it checks follows those scripts' requests: the trace id they send in
-traceparent (4bf92f...), the MCP tool call, a 500, the not-sampled request
-and sample 02's routes. Exit code 0 only if every check passed.
+traceparent (4bf92f...), the MCP tool call, a 500, the not-sampled request,
+sample 02's routes and the spans pascal-db-faa (0.13.0) opens under them. Exit code 0 only if every check passed.
 """
 import json
 import sys
@@ -110,6 +110,26 @@ def main():
     # Sample 02: route templates.
     check(any(s["name"] == "GET /cities/:code" for s in s02), "sample 02: GET /cities/:code")
     check(not any("/cities/3550308" in s["name"] for s in spans), "never a raw path in a span name")
+
+    # Sample 02: pascal-db-faa's spans join the request's trace (PascalCommon.Tracing).
+    by_id = {s["spanId"]: s for s in s02}
+
+    def parent(s):
+        return by_id.get(s.get("parentSpanId", ""))
+
+    stmts = [s for s in s02 if s["kind"] == 3 and s["_attrs"].get("db.system.name") == "sqlite"]
+    check(len(stmts) > 0, "sample 02: db statement spans (client, db.system.name sqlite)")
+    selects = [s for s in stmts if s["name"] == "SELECT"]
+    check(any(parent(s) is not None and parent(s)["kind"] == 2 and parent(s)["traceId"] == s["traceId"]
+              for s in selects), "sample 02: a SELECT span is a child of a server span")
+    check(all(s["_attrs"].get("db.query.text") for s in stmts), "sample 02: db.query.text on every statement")
+    txs = [s for s in s02 if s["name"] == "transaction" and s["kind"] == 1]
+    commits = [t for t in txs if t["_attrs"].get("pascaldb.transaction.outcome") == "commit"]
+    check(len(commits) > 0, "sample 02: committed transaction spans")
+    check(any(parent(t) is not None and parent(t)["kind"] == 2 for t in commits),
+          "sample 02: a transaction span is a child of a server span")
+    check(any(any(s.get("parentSpanId") == t["spanId"] for s in stmts) for t in commits),
+          "sample 02: statements inside a transaction are its children")
 
     print("%d failed" % failures)
     sys.exit(1 if failures else 0)

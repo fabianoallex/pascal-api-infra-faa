@@ -21,7 +21,7 @@
   direct call would: the incoming Authorization header, the caller's
   address (as X-Forwarded-For) and the trace context (traceparent and
   tracestate) are passed on. With TLoggerMiddleware in use, each call is a
-  client span (PascalApi.Tracing) under the MCP request's server span, and
+  client span (PascalCommon.Tracing) under the MCP request's server span, and
   the call's traceparent names it: MCP request -> tool call -> the route's
   own server span, one trace. The endpoint is a route like
   any other: behind TJwtMiddleware unless the application excludes it. The
@@ -85,7 +85,7 @@ uses
   {$ENDIF}
   PascalApi.Text,
   PascalApi.Http,
-  PascalApi.Tracing,
+  PascalCommon.Tracing,
   PascalApi.OpenApi,
   PascalApi.Horse.Middlewares,
   PascalApi.Horse.OpenApi;
@@ -229,13 +229,13 @@ end;
 function TMcpHttpExecutor.Execute(const AMethod, APathAndQuery, ABody: string;
   const AForward: TMcpForward; out AStatus: Integer): string;
 var
-  LSpan: ISpan;
+  LSpan: IPcSpan;
   LForward: TMcpForward;
 begin
   // No current span (no TLoggerMiddleware): pass the caller's context on.
-  if TTracing.Current = nil then
+  if TPcTracing.Current = nil then
     Exit(Send(AMethod, APathAndQuery, ABody, AForward, AStatus));
-  LSpan := TTracing.StartSpan(AMethod, skClient);
+  LSpan := TPcTracing.StartSpan(AMethod, skClient);
   try
     LSpan.SetAttribute('http.request.method', MetricMethod(AMethod));
     LSpan.SetAttribute('url.full', FBaseUrl + APathAndQuery);

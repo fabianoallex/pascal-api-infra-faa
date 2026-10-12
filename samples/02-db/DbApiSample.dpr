@@ -66,7 +66,7 @@ uses
   PascalApi.Horse.OpenApi,
   PascalApi.Horse.Mcp,
   PascalApi.Horse.Observability,
-  PascalApi.Tracing,
+  PascalCommon.Tracing,
   PascalApi.Otlp,
   DbApiSample.Cities in 'DbApiSample.Cities.pas';
 
@@ -209,7 +209,7 @@ begin
     GCities := TCityRepository.Create(GFactory);
 
     if TAppConfig.Get('OTEL_EXPORTER_OTLP_ENDPOINT', '') <> '' then
-      TTracing.Start(TTracingOptions.FromEnvironment('cities-api', '1.0.0'),
+      TPcTracing.Start(TPcTracingOptions.FromEnvironment('cities-api', '1.0.0', ReadAppConfig),
         TOtlpHttpExporter.FromEnvironment, GLog.Error);
     TErrorHandlerMiddleware.Register(GLog.Error);
     THorse.Use(TLoggerMiddleware.New(nil, alfJson));
