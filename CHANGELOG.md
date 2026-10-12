@@ -4,6 +4,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 follow [Semantic Versioning](https://semver.org/). While the version is 0.x, a minor version
 may change the API; each such change is listed here.
 
+## [Unreleased]
+
+### Changed
+
+- `external/pascal-db-faa` on v0.14.0, whose connection pool records OpenTelemetry's
+  `db.client.connection.*` metrics on `PcMetrics` by itself: sample 02's `/metrics` shows them
+  with no change in this library. `tools/http_scenarios_db.sh` checks them (65 checks): the
+  connection count by state (`idle`, `used`) of the pool `sqlite`, `db_client_connection_max` 5,
+  and the `db_client_connection_wait_time_seconds` count growing with the requests.
+- CI: `tools/promtool_check.sh` runs `promtool check metrics` and accepts one lint warning
+  only, the `_count` suffix of `db_client_connection_count` (the OpenTelemetry name; promtool
+  2.53 can't turn that rule off). A format error or any other lint warning still fails.
+
 ## [0.11.0] - 2026-10-12
 
 Phase D of the observability design (`docs/observability-design.md`): the span contracts moved

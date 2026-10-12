@@ -5,8 +5,8 @@ recommended (user, 2026-10-09). **Phase A done** (2026-10-09): part 1 in pascal-
 (`PascalCommon.TraceContext`), part 2 here (0.8.0; see "Phase A: what was done"). **Phase B done** (2026-10-09, 0.9.0): pascal-common-faa 1.6.0 (`PascalCommon.Metrics`) and
 `PascalApi.Horse.Observability` here (see "Phase B: what was done"). **Phase C done** (2026-10-09,
 0.10.0; see "Phase C: what was done"). **Phase D done** (2026-10-12, 0.11.0; see "Phase D: what
-was done"). Next, agreed with the user: pool metrics in pascal-db-faa (see
-"Pool metrics in pascal-db-faa (the handoff)").
+was done"). **Pool metrics done** (2026-10-12, pascal-db-faa 0.14.0; see "Pool
+metrics in pascal-db-faa (the handoff)" and its "What was done").
 
 ## Goal
 
@@ -315,6 +315,19 @@ don't fix them; `PC_DURATION_BUCKETS` (pascal-common-faa) unless measuring says 
   grew after the scenarios' requests. CI already runs `promtool check metrics` on it.
 - A line in the README's observability part and in this section ("what was done").
 - Verified the usual way: FPC Windows and Linux (`tools/ci-test.sh`), Delphi 12 Win32/Win64.
+
+**What was done (2026-10-12):** pascal-db-faa 0.14.0 records the metrics of the table and
+`pascaldb.client.connection.created` / `.closed` (by `pascaldb.close.reason`), with
+`IDatabaseConfig.PoolName` (default: the `db.system.name`); measured there at a few hundred
+nanoseconds per acquire + release, so there is no switch. Here: the submodule moved, and
+`tools/http_scenarios_db.sh` checks sample 02's series (pool `sqlite`: count by state, max 5,
+`wait_time` count growing), 65 checks. Found by this repository's CI: `promtool check metrics`
+rejects `db_client_connection_count` ("non-histogram and non-summary metrics should not have
+`_count` suffix"), a naming lint against the OpenTelemetry name itself, not a format error.
+Decided with the user: keep the name and accept that one warning (`tools/promtool_check.sh`;
+promtool exits 3 for lint, 1 for format errors, and 2.53 has no switch for one rule).
+Verified: 215 unit tests, 0 leaks, and HTTP 146 + 65 checks on FPC Win64 and Linux and Delphi
+12 Win32 and Win64 (FireDAC's SQLite pool is labelled `sqlite` too).
 
 ## Phase C: what was done (2026-10-09)
 

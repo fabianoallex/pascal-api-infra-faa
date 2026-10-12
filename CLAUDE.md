@@ -71,7 +71,7 @@ all (measured, skill `references/rtti-gotchas.md`).
 ## Dependencies
 
 `external/` holds the dependencies as git submodules, pinned: pascal-common-faa `v1.8.0`,
-pascal-jsonmapper-faa `v0.3.0`, pascal-db-faa `v0.13.0`, Horse `3.3.12` (`fda6fed`; until 0.4.0
+pascal-jsonmapper-faa `v0.3.0`, pascal-db-faa `v0.14.0`, Horse `3.3.12` (`fda6fed`; until 0.4.0
 this repository used 3.3.2, `72cc45f`; pascal-dfe-broker moved to 3.3.12 on 2026-10-09, delphi-api-starter is still on 3.3.2). They are **only for this
 repository's tests**: a consumer provides its own single copy of each (submodule + search path),
 never `pascal-api-infra-faa/external/...`. Clone with `git submodule update --init` (no
@@ -166,7 +166,10 @@ its own Horse `src` to the search path.
   with a real OpenTelemetry Collector (`tools/otlp_check.py`, including sample 02's database
   spans from pascal-db-faa); after changing the OTLP JSON, run `tools/ci-test.sh`.
 - **Every metric needs a description**: `promtool check metrics` (run by CI on both samples'
-  `/metrics`) exits non-zero on "no help text" even when the format is right.
+  `/metrics`) exits non-zero on "no help text" even when the format is right. One lint is
+  accepted on purpose, through `tools/promtool_check.sh`: the `_count` suffix of pascal-db-faa's
+  `db_client_connection_count` (the OpenTelemetry name, kept by the user's decision). Don't widen
+  that exception to other names without asking.
 - **`THorseRequest.RemoteAddr` is '' with the console provider** (fpWeb on FPC, Indy on Delphi):
   only Horse's raw providers (Epoll, IOCP, HttpSys, Daemon, LCL) call `Populate` with it. Measured
   on FPC 3.2.2/Windows (the access log showed `-`) and on Delphi 12 Win32 (a probe, 2026-10-08);

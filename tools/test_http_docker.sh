@@ -59,9 +59,10 @@ MSYS_NO_PATHCONV=1 docker run --rm --network "$NAME" -v "$NAME:/otel:ro" -v "$MO
     if [ $RC -eq 0 ]; then
       python3 -m openapi_spec_validator /t/openapi-$2.json || RC=$?
     fi
-    # Its /metrics, checked by Prometheus itself (a lint warning also fails).
+    # Its /metrics, checked by Prometheus itself (a lint warning also fails,
+    # but one: see tools/promtool_check.sh).
     if [ $RC -eq 0 ]; then
-      promtool check metrics < /t/metrics-$2.txt || RC=$?
+      sh /t/tools/promtool_check.sh /t/metrics-$2.txt || RC=$?
     fi
     # The MCP endpoint, driven by the official Python SDK (2026-07-28).
     if [ $RC -eq 0 ]; then

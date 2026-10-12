@@ -1,8 +1,8 @@
 #!/bin/sh
 # Checks samples/02-db over HTTP with curl: migrations, paging and ordering
 # in SQL, the state filter, 404, validation, 409 from the database's unique
-# key, NULL to JSON null, delete, OpenAPI, and MCP tools with the DTOs'
-# schemas.
+# key, NULL to JSON null, delete, OpenAPI, MCP tools with the DTOs'
+# schemas, and the pool metrics pascal-db-faa (0.14.0) records.
 #
 #   sh tools/http_scenarios_db.sh [port]   (default 9330; DbApiSample must be
 #                                          running, started with --reset)
@@ -30,6 +30,12 @@ status_is() { [ "$(cat "$T/status")" = "$1" ] && ok || fail "$2: status $(cat "$
 body_is()   { [ "$(cat "$T/body")" = "$1" ] && ok || fail "$2: body $(cat "$T/body"), expected $1"; }
 body_has()  { grep -qF -- "$1" "$T/body" && ok || fail "$2: body lacks $1 (body: $(cat "$T/body"))"; }
 body_lacks(){ grep -qF -- "$1" "$T/body" && fail "$2: body has $1" || ok; }
+# Sum of a metric's samples in a Prometheus text file (every label set).
+metric_sum() { awk -v n="$1" '$1 == n || index($1, n "{") == 1 { s += $NF } END { printf "%d", s }' "$2"; }
+
+# Acquires so far (the sample's startup and migrations), to compare at the end.
+curl -s -o "$T/metrics0" "$BASE/metrics"
+WAIT_COUNT0=$(metric_sum db_client_connection_wait_time_seconds_count "$T/metrics0")
 
 # --- paging and ordering in SQL (6 seed rows from migration 3)
 req GET '/cities?limit=2' ""
@@ -149,6 +155,12 @@ req GET /metrics ""
 status_is 200 "metrics"
 grep -qF 'http_route="/cities/:code"' "$T/body" && ok || fail "metrics: route template"
 grep -qF 'http_route="/cities/3550308"' "$T/body" && fail "metrics: raw path" || ok
+# Pool metrics (pascal-db-faa): the pool isn't named, so it is the db.system.name.
+grep '^db_client_connection_count{' "$T/body" | grep 'state="idle"' | grep -qF 'pool_name="sqlite"'   && ok || fail "metrics: pool connections, state idle, pool sqlite"
+grep '^db_client_connection_count{' "$T/body" | grep -qF 'state="used"'   && ok || fail "metrics: pool connections, state used"
+grep '^db_client_connection_max{' "$T/body" | grep -q ' 5$'   && ok || fail "metrics: db_client_connection_max is the sample's PoolMaxConnections (5)"
+WAIT_COUNT=$(metric_sum db_client_connection_wait_time_seconds_count "$T/body")
+[ "$WAIT_COUNT" -gt "$WAIT_COUNT0" ] && ok   || fail "metrics: wait_time count grew with the requests ($WAIT_COUNT0 -> $WAIT_COUNT)"
 [ -n "$METRICS_OUT" ] && cp "$T/body" "$METRICS_OUT"
 
 rm -rf "$T"

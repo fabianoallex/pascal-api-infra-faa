@@ -94,7 +94,7 @@ How to add them to an application, minimum versions and short examples:
 | Sample | Shows | Checked by |
 |---|---|---|
 | [01-api](samples/01-api/ApiSample.dpr) | every middleware (errors, CORS, log, metrics, JWT, rate limit), health, paging and validation, in memory | `tools/http_scenarios.sh` (146 checks) |
-| [02-db](samples/02-db/DbApiSample.dpr) | SQLite through pascal-db-faa (SQLdb on FPC, FireDAC on Delphi): migrations, paging and ordering in SQL, filters, 409 from a unique key, NULL as `null` | `tools/http_scenarios_db.sh` (61 checks) |
+| [02-db](samples/02-db/DbApiSample.dpr) | SQLite through pascal-db-faa (SQLdb on FPC, FireDAC on Delphi): migrations, paging and ordering in SQL, filters, 409 from a unique key, NULL as `null` | `tools/http_scenarios_db.sh` (65 checks; also the pool metrics pascal-db-faa records) |
 
 Both run with one source on Delphi and Lazarus/FPC. On FPC for Windows, sample 02 needs
 sqlite.org's `sqlite3.dll` next to the executable (see `tools/test_http.sh`).

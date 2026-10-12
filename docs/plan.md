@@ -158,3 +158,8 @@ spans under the request. Verified on FPC Windows and Linux and Delphi 12 Win32/W
 Next (agreed 2026-10-12): pool metrics recorded by pascal-db-faa on `PcMetrics`, with
 OpenTelemetry's `db.client.connection.*` names; the handoff is in `docs/observability-design.md`
 ("Pool metrics in pascal-db-faa"). Redis and AMQP spans stay out of this repository's samples.
+
+Pool metrics done on 2026-10-12: pascal-db-faa 0.14.0 records them; here the submodule moved
+and `tools/http_scenarios_db.sh` checks them (65 checks). `promtool` rejects the OpenTelemetry
+name `db_client_connection_count` (its `_count` lint); the user chose to accept that one warning
+in CI (`tools/promtool_check.sh`). No release: no library code changed.
