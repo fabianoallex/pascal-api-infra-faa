@@ -5,7 +5,8 @@ recommended (user, 2026-10-09). **Phase A done** (2026-10-09): part 1 in pascal-
 (`PascalCommon.TraceContext`), part 2 here (0.8.0; see "Phase A: what was done"). **Phase B done** (2026-10-09, 0.9.0): pascal-common-faa 1.6.0 (`PascalCommon.Metrics`) and
 `PascalApi.Horse.Observability` here (see "Phase B: what was done"). **Phase C done** (2026-10-09,
 0.10.0; see "Phase C: what was done"). **Phase D done** (2026-10-12, 0.11.0; see "Phase D: what
-was done").
+was done"). Next, agreed with the user: pool metrics in pascal-db-faa (see
+"Pool metrics in pascal-db-faa (the handoff)").
 
 ## Goal
 
@@ -247,7 +248,73 @@ Each step in its own repository, then this one moved onto them:
 - Verified: 215 unit tests, 0 leaks, and HTTP 146 + 61 checks on FPC Win64 and Linux and
   Delphi 12 Win32 and Win64; the collector in CI accepted every batch (206 spans) and every check passed.
 - Not done: Redis and AMQP aren't in either sample, so their spans are checked only in their own
-  repositories; the pool gauges (`TPoolSnapshot`) as metrics.
+  repositories (decided with the user, 2026-10-12: not in this repository's samples; the
+  end-to-end chain belongs in the first real API with a queue); the pool gauges
+  (`TPoolSnapshot`) as metrics, handed off in the next section.
+
+## Pool metrics in pascal-db-faa (the handoff)
+
+Agreed with the user on 2026-10-12, after phase D. To be done in a session opened in
+pascal-db-faa (its CLAUDE.md, hooks and test layout apply): a minor release there (0.14.0),
+then this repository bumps the submodule and adds the checks. Nothing here is decided beyond
+what the user agreed to (the place and the names); the rest is a proposal for that session.
+
+Why: `/metrics` shows the HTTP server but not the pool, and an exhausted pool (requests waiting
+for a connection, then `EPoolTimeoutException`) is the usual way such an API stalls in
+production. `TPoolSnapshot` already counts most of it.
+
+**Where (agreed):** in pascal-db-faa, recorded by the pool itself on pascal-common-faa's
+`PcMetrics`, the same way its spans are opened on `PascalCommon.Tracing`. Any application then
+gets them on its `/metrics` with nothing to configure; this library adds no pool code.
+
+**Names (agreed): OpenTelemetry's database client connection metrics**, which the Prometheus
+writer of `PascalCommon.Metrics` converts as it does the HTTP ones (`db_client_connection_count`...):
+
+| Metric | Kind (`PcMetrics`) | Unit | Labels | From |
+|---|---|---|---|---|
+| `db.client.connection.count` | up-down counter | `{connection}` | `db.client.connection.state` = `idle` / `used`, pool name | `PoolSize` and `ActiveConnections - PoolSize` |
+| `db.client.connection.max` | up-down counter (or gauge) | `{connection}` | pool name | `MaxConnections` |
+| `db.client.connection.idle.min` | up-down counter (or gauge) | `{connection}` | pool name | `IniConnections` |
+| `db.client.connection.pending_requests` | up-down counter | `{request}` | pool name | acquires waiting now (where the `pool wait` span is open) |
+| `db.client.connection.timeouts` | counter | `{timeout}` | pool name | `TotalTimeouts` |
+| `db.client.connection.wait_time` | histogram | `s` | pool name | the acquire's wait (the `pool wait` span's duration; 0 when it didn't wait) |
+| `db.client.connection.create_time` | histogram | `s` | pool name | a physical connection's open |
+| `db.client.connection.use_time` | histogram | `s` | pool name | acquire to release |
+
+Every metric needs a description (`promtool` rejects "no help text", see CLAUDE.md). Durations
+from `TTicker`/`PcTickUs`, never the wall clock. Histogram buckets: the semantic conventions
+don't fix them; `PC_DURATION_BUCKETS` (pascal-common-faa) unless measuring says otherwise.
+
+**Proposals for that session (not decided):**
+
+- **Pool name.** The conventions require `db.client.connection.pool.name`, and a process may
+  have more than one pool. `TConnectionPool` has no name today: an optional constructor
+  argument (as `ADbSystem` in 0.13.0), defaulting to something stable (the `db.system.name`, or
+  `default`), passed by `TDBFactory`. Never a connection string (it may hold a password).
+- **Set where the value changes, not on scrape.** `PcMetrics` has no callback gauge (read in
+  1.6.0: values are set, not observed), so the pool updates the series at acquire, release,
+  create, discard and idle sweep. The alternative, a "before scrape" hook in
+  `TMetricsEndpoint` that copies a `TPoolSnapshot`, would put pool code in this library and
+  only work through it: rejected unless the first one turns out to cost too much.
+- **Cost when nobody scrapes.** Spans are free while `TPcTracing.Enabled` is false; metrics
+  have no such switch. Measure the per-acquire cost of the updates (a series lookup and an
+  atomic set or a histogram observe) under the pool's existing concurrency tests; if it shows,
+  look up the series once per pool (keep the `TPcGaugeSeries`/histogram series objects) or add
+  an opt-out.
+- `TotalCreated`, `TotalDiscarded`, `TotalIdleSwept` have no standard metric: as counters under
+  a `pascaldb.` prefix if wanted (`pascaldb.pool.connections.discarded`...), as the spans do with
+  `pascaldb.*` attributes.
+- Minimum pascal-common-faa stays 1.8.0 (`PascalCommon.Metrics` is 1.6.0).
+
+**Then here (pascal-api-infra-faa):**
+
+- Bump `external/pascal-db-faa`; nothing to change in `src/`.
+- `tools/http_scenarios_db.sh`: sample 02's `/metrics` has `db_client_connection_count` with
+  `state="idle"` and `state="used"`, `db_client_connection_max` equal to the sample's
+  `PoolMaxConnections` (5), and a `db_client_connection_wait_time` histogram whose `_count`
+  grew after the scenarios' requests. CI already runs `promtool check metrics` on it.
+- A line in the README's observability part and in this section ("what was done").
+- Verified the usual way: FPC Windows and Linux (`tools/ci-test.sh`), Delphi 12 Win32/Win64.
 
 ## Phase C: what was done (2026-10-09)
 
