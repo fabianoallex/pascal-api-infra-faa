@@ -126,7 +126,7 @@ Measured with the SDK, missed in the first reading of the specification: `server
 `tools/list` must carry `ttlMs` and `cacheScope` (cacheable results); the SDK rejects a
 `tools/list` without them.
 
-### 6. Observability — phases A, B and C done (2026-10-09), D next
+### 6. Observability — done: phases A, B and C (2026-10-09), D and pool metrics (2026-10-12)
 
 W3C trace context, Prometheus metrics, health endpoints and OpenTelemetry (OTLP/HTTP JSON)
 export, in four stages (A: trace context and correlated logs; B: metrics and health; C: spans and

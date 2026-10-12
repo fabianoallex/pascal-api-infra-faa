@@ -377,8 +377,8 @@ Verified: 215 unit tests, 0 leaks, and HTTP 146 + 65 checks on FPC Win64 and Lin
   "unknown routes counted once" check fails without the re-entry mark (checked). Delphi 12 Win32
   and Win64: the same tests and checks pass, the partial-match check included (so `MatchedRoute`
   behaves the same there), and `promtool` accepts their `/metrics`.
-- Not done: the pool gauges of pascal-db-faa (`TPoolSnapshot`) as metrics; a natural addition
-  for phase D or an application.
+- Not done then: the pool gauges of pascal-db-faa (`TPoolSnapshot`) as metrics. Done on
+  2026-10-12 in pascal-db-faa 0.14.0 (see "Pool metrics in pascal-db-faa").
 
 ## Phase A, part 1, in pascal-common-faa (the handoff, kept for the record)
 
