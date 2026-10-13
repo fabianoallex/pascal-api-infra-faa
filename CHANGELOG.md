@@ -6,6 +6,13 @@ may change the API; each such change is listed here.
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-10-13
+
+Multi-tenancy, opt-in (`docs/multitenancy-design.md`): ten decisions taken with the user, proven
+first in a sample (`samples/03-tenants`) on both compilers, then moved to the library. An
+application that doesn't use the two new units sees no change: samples 01 and 02 pass their
+scenarios unchanged.
+
 ### Added
 
 - `PascalApi.Tenancy` and `src/horse/PascalApi.Horse.Tenancy`: multi-tenancy, opt-in (no other
@@ -19,10 +26,9 @@ may change the API; each such change is listed here.
   by default, after `TJwtMiddleware`; `Current(AReq)`). Tested in `PascalApi.TenancyTests`
   (24 tests); sample 03 now uses them.
 - `TApiMessages`: `TenantMissing`, `TenantUnknown`, `TenantSuspended` (English and Portuguese).
-- `samples/03-tenants` (`TenantApiSample`): the first step of `docs/multitenancy-design.md`, all
-  of it in the sample, nothing in the library yet. The tenant comes from the token's
-  `tenant_id` claim; dedicated tenants get a database each, the others share one, and every
-  row carries `TENANT_ID`. `tools/http_scenarios_tenants.sh` (57 checks) tries one tenant's
+- `samples/03-tenants` (`TenantApiSample`): a multi-tenant API on the units above. The tenant
+  comes from the token's `tenant_id` claim; dedicated tenants get a database each, the others
+  share one, and every row carries `TENANT_ID`. `tools/http_scenarios_tenants.sh` (57 checks) tries one tenant's
   token on another's rows in both modes, and checks the 401/403 answers for a removed, missing
   or suspended tenant; it runs in `tools/test_http.sh` and in CI. Measured on the way: a
   forgotten bind of `:TENANT_ID` is a silent 404 on SQLdb/SQLite (so `TTenantFilter.Prepare`
@@ -38,6 +44,10 @@ may change the API; each such change is listed here.
 - CI: `tools/promtool_check.sh` runs `promtool check metrics` and accepts one lint warning
   only, the `_count` suffix of `db_client_connection_count` (the OpenTelemetry name; promtool
   2.53 can't turn that rule off). A format error or any other lint warning still fails.
+
+Verified: 239 unit tests with 0 leaks on FPC 3.2.2 Win64 and Linux x86_64 and Delphi 12 CE Win32
+and Win64; HTTP scenarios 146 (sample 01) + 65 (sample 02) + 57 (sample 03) on FPC Windows and
+Linux, and sample 03's 57 on Delphi Win32 and Win64.
 
 ## [0.11.0] - 2026-10-12
 

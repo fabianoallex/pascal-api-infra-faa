@@ -10,9 +10,10 @@ threading), [pascal-jsonmapper-faa](https://github.com/fabianoallex/pascal-jsonm
 paging). It is not a drop-in replacement for the Delphi library: DTOs map **published**
 properties, because FPC 3.2.2's RTTI sees nothing else.
 
-Version **0.10.0** (see the [changelog](CHANGELOG.md)): the core, the Horse middlewares, OpenAPI, an MCP
-server (protocol 2026-07-28), W3C trace context, metrics (Prometheus), health endpoints and
-spans exported to an OpenTelemetry collector (OTLP).
+Version **0.12.0** (see the [changelog](CHANGELOG.md)): the core, the Horse middlewares, OpenAPI, an MCP
+server (protocol 2026-07-28), W3C trace context, metrics (Prometheus), health endpoints,
+spans exported to an OpenTelemetry collector (OTLP), and opt-in multi-tenancy
+([docs/multitenancy-design.md](docs/multitenancy-design.md)).
 Observability plan: [docs/observability-design.md](docs/observability-design.md). See [docs/plan.md](docs/plan.md).
 
 ## Contents
