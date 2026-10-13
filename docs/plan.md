@@ -163,3 +163,12 @@ Pool metrics done on 2026-10-12: pascal-db-faa 0.14.0 records them; here the sub
 and `tools/http_scenarios_db.sh` checks them (65 checks). `promtool` rejects the OpenTelemetry
 name `db_client_connection_count` (its `_count` lint); the user chose to accept that one warning
 in CI (`tools/promtool_check.sh`). No release: no library code changed.
+
+### 7. Multi-tenancy — design approved, not implemented (2026-10-13)
+
+Opt-in support for multi-tenant APIs, decided outside the database: tenant resolution (JWT claim
+first), an explicit tenant context, a catalog, and one data-scope contract with two shipped
+modes (database per tenant, shared database with `tenant_id`; not schema per tenant), with
+repositories that always filter by `tenant_id`. Ten decisions taken with the user; one waits on
+a measurement in pascal-db-faa (pool metrics after a pool closes). First as
+`samples/03-tenants`, then promoted. Design: `docs/multitenancy-design.md`.
