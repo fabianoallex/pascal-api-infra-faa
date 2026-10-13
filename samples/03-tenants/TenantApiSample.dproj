@@ -65,7 +65,6 @@
         <DelphiCompile Include="$(MainSource)">
             <MainSource>MainSource</MainSource>
         </DelphiCompile>
-        <DCCReference Include="TenantApiSample.Tenancy.pas"/>
         <DCCReference Include="TenantApiSample.Cities.pas"/>
         <BuildConfiguration Include="Base">
             <Key>Base</Key>

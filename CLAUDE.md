@@ -120,6 +120,24 @@ endpoint and the HTTP executor. Design and decisions: `docs/mcp-design.md`.
 - The scenario scripts run under dash in CI: `shift N` past `$#` is fatal there (not in Git
   Bash).
 
+### Multi-tenancy
+
+`PascalApi.Tenancy` (pure, tested in `PascalApi.TenancyTests` with pascal-db-faa's
+`TMockDBFactory` and a manual ticker) and `src/horse/PascalApi.Horse.Tenancy`
+(`TTenantMiddleware`), proven first in `samples/03-tenants`. Design and the ten decisions taken
+with the user: `docs/multitenancy-design.md`.
+
+- **Opt-in**: no other unit uses them; an application without tenants sees no change (the
+  samples 01/02 scenarios pass unchanged).
+- **The tenant comes only from the token's claim** (`tenant_id`, not `tid`: Entra ID uses that).
+  Don't add a header/host/path source without the user (decision 5: later, on a real case).
+- **Every repository query goes through `TTenantFilter.Prepare`**: an unbound `:TENANT_ID` is a
+  silent 404 on SQLdb/SQLite (measured), so the condition and its parameter are set together.
+- Pools are named by mode, never by tenant (metric cardinality); pools sharing a name add up
+  and a freed pool gives its series back (pascal-db-faa 0.14.0's `PoolMetricsTests`).
+- The cross-tenant checks of `tools/http_scenarios_tenants.sh` are the safety net: a change to
+  the tenancy or to sample 03 runs them (`tools/test_http.sh`, CI).
+
 ### Horse
 
 The core package (`src/`) doesn't use Horse; only `src/horse/PascalApi.Horse.Middlewares` does,
@@ -194,6 +212,8 @@ its own Horse `src` to the search path.
 - **Text that leaves the process is UTF-8, measured in bytes on both compilers** (`PascalApi.Text`).
   `Length` counts UTF-16 units on Delphi and bytes on FPC, so anything that cuts or sizes text
   for output (`TLogTruncate`) works on UTF-8 bytes and never splits a character.
+- **A `finalization` needs an `initialization` before it on Delphi** (even empty); FPC accepts
+  it alone, so only the Delphi build catches it (`PascalApi.Horse.Tenancy`).
 - **Shared defaults are created in `initialization`, never lazily** (a lazy default raced in
   pascal-common-faa's `TClock`): `TAppConfig`'s reader and path, the `FileLog` instance, the
   MCP endpoints and the OpenAPI document.

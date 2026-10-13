@@ -77,6 +77,10 @@
         <Filename Value="..\src\PascalApi.Otlp.pas"/>
         <UnitName Value="PascalApi.Otlp"/>
       </Item>
+      <Item>
+        <Filename Value="..\src\PascalApi.Tenancy.pas"/>
+        <UnitName Value="PascalApi.Tenancy"/>
+      </Item>
     </Files>
     <RequiredPkgs>
       <Item>

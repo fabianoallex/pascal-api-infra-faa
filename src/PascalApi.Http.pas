@@ -83,6 +83,9 @@ type
     TokenBadFormat: string;
     TokenInvalid: string;
     RateLimited: string;               // Format: %d = seconds to wait
+    TenantMissing: string;             // PascalApi.Tenancy: the token names no tenant
+    TenantUnknown: string;             // the token's tenant was removed
+    TenantSuspended: string;
     class function English: TApiMessages; static;
     class function Portuguese: TApiMessages; static;
     /// The messages in use. Assign once, at startup.
@@ -284,6 +287,9 @@ begin
   Result.TokenBadFormat := 'Invalid format. Use: Authorization: Bearer <token>';
   Result.TokenInvalid := 'Invalid or expired token.';
   Result.RateLimited := 'Rate limit exceeded. Try again in %d second(s).';
+  Result.TenantMissing := 'The token names no tenant.';
+  Result.TenantUnknown := 'The token''s tenant no longer exists.';
+  Result.TenantSuspended := 'This tenant is suspended.';
 end;
 
 class function TApiMessages.Portuguese: TApiMessages;
@@ -304,6 +310,9 @@ begin
   Result.TokenBadFormat := 'Formato inválido. Use: Authorization: Bearer <token>';
   Result.TokenInvalid := 'Token inválido ou expirado.';
   Result.RateLimited := 'Limite de requisições excedido. Tente novamente em %d segundo(s).';
+  Result.TenantMissing := 'O token não informa o tenant.';
+  Result.TenantUnknown := 'O tenant do token não existe mais.';
+  Result.TenantSuspended := 'Este tenant está suspenso.';
 end;
 
 { Error mapping }

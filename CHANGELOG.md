@@ -8,6 +8,17 @@ may change the API; each such change is listed here.
 
 ### Added
 
+- `PascalApi.Tenancy` and `src/horse/PascalApi.Horse.Tenancy`: multi-tenancy, opt-in (no other
+  unit uses them), promoted from `samples/03-tenants` (`docs/multitenancy-design.md`).
+  `TConfigTenantCatalog` (tenants from one configuration string), `TTenantDataResolver` (an
+  `IDBFactory` per database: `tenant_<id>` for a dedicated tenant, `shared` for the others,
+  created on first use under a lock, pools named `dedicated`/`shared`; with `AIdleSeconds`, a
+  database no request asked for in that time is dropped), `TTenantFilter.Prepare`,
+  `CheckTenant`, `TenantIdFromClaims`, `TenantRejection` (401 no tenant or a removed one, 403
+  suspended with `"code":"tenant_suspended"`), and `TTenantMiddleware` (the claim `tenant_id`
+  by default, after `TJwtMiddleware`; `Current(AReq)`). Tested in `PascalApi.TenancyTests`
+  (24 tests); sample 03 now uses them.
+- `TApiMessages`: `TenantMissing`, `TenantUnknown`, `TenantSuspended` (English and Portuguese).
 - `samples/03-tenants` (`TenantApiSample`): the first step of `docs/multitenancy-design.md`, all
   of it in the sample, nothing in the library yet. The tenant comes from the token's
   `tenant_id` claim; dedicated tenants get a database each, the others share one, and every

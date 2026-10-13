@@ -94,7 +94,7 @@ $PY -c '
 import socket, sys
 s = socket.create_connection(("127.0.0.1", int(sys.argv[1])))
 s.sendall(("GET /tenant HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer " + sys.argv[2] +
-  "\r\n:sample-tenant: initech\r\nConnection: close\r\n\r\n").encode())
+  "\r\n:pascalapi-tenant: initech\r\nConnection: close\r\n\r\n").encode())
 d = b""
 while True:
   c = s.recv(65536)

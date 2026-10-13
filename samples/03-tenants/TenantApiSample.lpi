@@ -59,10 +59,6 @@
         <IsPartOfProject Value="True"/>
       </Unit>
       <Unit>
-        <Filename Value="TenantApiSample.Tenancy.pas"/>
-        <IsPartOfProject Value="True"/>
-      </Unit>
-      <Unit>
         <Filename Value="TenantApiSample.Cities.pas"/>
         <IsPartOfProject Value="True"/>
       </Unit>

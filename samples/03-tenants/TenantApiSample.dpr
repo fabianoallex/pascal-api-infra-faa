@@ -17,8 +17,10 @@
   before the server listens (never on a tenant's first request). --reset
   deletes the files first.
 
-  The tenant of a request is the token's claim TENANT_CLAIM (by default
-  tenant_id; not tid, which Microsoft Entra ID uses for its own tenant).
+  The tenancy is the library's (PascalApi.Tenancy, PascalApi.Horse.Tenancy;
+  it lived in this sample until it was proven). The tenant of a request is
+  the token's claim TENANT_CLAIM (by default tenant_id; not tid, which
+  Microsoft Entra ID uses for its own tenant), read by TTenantMiddleware.
   Nothing else names it: a header or a body field naming another tenant is
   ignored. A token with no tenant, or one the catalog doesn't have (removed
   after the token was issued), is 401; a suspended tenant is 403 with
@@ -51,7 +53,6 @@ uses
   {$ENDIF}
   SysUtils,
   Horse,
-  Horse.Callback,
   PascalCommon.Optionals,
   PascalJsonMapper.Json,
   PascalJsonMapper.Mapper,
@@ -70,20 +71,13 @@ uses
   PascalApi.Horse.Middlewares,
   PascalApi.Horse.OpenApi,
   PascalApi.Horse.Observability,
-  TenantApiSample.Tenancy in 'TenantApiSample.Tenancy.pas',
+  PascalApi.Tenancy,
+  PascalApi.Horse.Tenancy,
   TenantApiSample.Cities in 'TenantApiSample.Cities.pas';
 
 const
   DEFAULT_TENANTS =
     'acme=dedicated;globex=dedicated;initech=shared;umbrella=shared;soylent=shared,suspended';
-  // Where the tenant middleware leaves the request's tenant for the handlers
-  // (the logger marks a request the same way). HTTP doesn't allow ':' in a
-  // header name, but fpWeb accepts a raw line ":sample-tenant: initech"
-  // (measured, FPC 3.2.2/Windows): what keeps it harmless is that the
-  // middleware overwrites the mark on every request it lets through, and
-  // only those reach CurrentTenant.
-  TENANT_KEY = ':sample-tenant';
-  SUSPENDED_JSON = '{"error":"This tenant is suspended.","code":"tenant_suspended"}';
 
 var
   GSecret, GClaim, GDataDir: string;
@@ -92,7 +86,15 @@ var
 
 { Tenancy }
 
-function NewTenantFactory(const ADatabaseKey, APoolName: string): IDBFactory;
+type
+  // The resolver's callback is a method on FPC (PASCALAPI_FUNCREFS: "of
+  // object" there, "reference to" on Delphi).
+  TSampleDatabases = class
+  public
+    function NewFactory(const ADatabaseKey, APoolName: string): IDBFactory;
+  end;
+
+function TSampleDatabases.NewFactory(const ADatabaseKey, APoolName: string): IDBFactory;
 var
   LConfig: IDatabaseConfig; // an interface variable, never a class one (pascal-db-faa's rule)
   LFile: string;
@@ -126,68 +128,9 @@ begin
   {$ENDIF}
 end;
 
-// The tenant the middleware resolved. A route that the middleware skipped
-// (an excluded prefix) has none: asking for it there is a bug, a 500.
-function CurrentTenant(AReq: THorseRequest): TTenantInfo;
-begin
-  if not GCatalog.Find(AReq.Headers[TENANT_KEY], Result) then
-    raise Exception.Create('No tenant on this request: is the route excluded from the token?');
-end;
-
 function CitiesOf(AReq: THorseRequest): TCityRepository;
 begin
-  Result := TCityRepository.Create(GResolver.ScopeFor(CurrentTenant(AReq)));
-end;
-
-// THorse.Use takes a THorseCallback, a record on FPC: "Result := AProc" would
-// read as a call there, so FPC gets the address (as PascalApi.Horse.Middlewares
-// does).
-function AsTenantCallback(AProc: THorseCallbackProc): THorseCallback;
-begin
-  {$IFDEF FPC}
-  Result := @AProc;
-  {$ELSE}
-  Result := AProc;
-  {$ENDIF}
-end;
-
-// After TJwtMiddleware, so the token is valid here: the tenant comes from its
-// claim, checked against the catalog. Paths the JWT middleware excludes
-// need no tenant either.
-procedure TenantHandler(AReq: THorseRequest; ARes: THorseResponse; ANext: TNextProc);
-var
-  LClaims, LValue: TJsonValue;
-  LId: string;
-  LInfo: TTenantInfo;
-begin
-  if TJwtMiddleware.Excludes(AReq.PathInfo) then
-  begin
-    ANext();
-    Exit;
-  end;
-  LId := '';
-  LClaims := TJwtMiddleware.Claims(AReq);
-  try
-    if LClaims <> nil then
-    begin
-      LValue := LClaims.Find(GClaim);
-      if (LValue <> nil) and (LValue.Kind = jkString) then
-        LId := LValue.AsString;
-    end;
-  finally
-    LClaims.Free;
-  end;
-  case CheckTenant(GCatalog, LId, LInfo) of
-    tcNoTenant:
-      TJsonSend.Send(ARes, ErrorJson('The token names no tenant.'), 401);
-    tcUnknown:
-      TJsonSend.Send(ARes, ErrorJson('The token''s tenant no longer exists.'), 401);
-    tcSuspended:
-      TJsonSend.Send(ARes, SUSPENDED_JSON, 403);
-  else
-    AReq.Headers.Dictionary.AddOrSetValue(TENANT_KEY, LInfo.Id);
-    ANext();
-  end;
+  Result := TCityRepository.Create(GResolver.ScopeFor(TTenantMiddleware.Current(AReq)));
 end;
 
 { Handlers }
@@ -208,6 +151,7 @@ var
   LWriter: TJsonWriter;
   LTenant, LUser, LClaims: string;
   LInfo: TTenantInfo;
+  LStatus: Integer;
 begin
   LBody := ParseJson(AReq.Body);
   try
@@ -223,7 +167,7 @@ begin
   case CheckTenant(GCatalog, LTenant, LInfo) of
     tcSuspended:
       begin
-        TJsonSend.Send(ARes, SUSPENDED_JSON, 403);
+        TJsonSend.Send(ARes, TenantRejection(tcSuspended, LStatus), LStatus);
         Exit;
       end;
     tcOk: ;
@@ -261,7 +205,7 @@ var
   LInfo: TTenantInfo;
   LWriter: TJsonWriter;
 begin
-  LInfo := CurrentTenant(AReq);
+  LInfo := TTenantMiddleware.Current(AReq);
   LWriter := TJsonWriter.Create;
   try
     LWriter.BeginObject;
@@ -393,6 +337,7 @@ end;
 
 var
   GLog: TSampleLog;
+  GDatabases: TSampleDatabases;
   GPort, I: Integer;
   GReset: Boolean;
 
@@ -410,21 +355,22 @@ begin
   GDataDir := IncludeTrailingPathDelimiter(ExpandFileName(
     TAppConfig.Get('DATA_DIR', ExtractFilePath(ParamStr(0)))));
   GSecret := TAppConfig.Get('JWT_SECRET', 'development-secret-change-me');
-  GClaim := TAppConfig.Get('TENANT_CLAIM', 'tenant_id');
+  GClaim := TAppConfig.Get('TENANT_CLAIM', TENANT_DEFAULT_CLAIM);
 
   GLog := TSampleLog.Create;
+  GDatabases := TSampleDatabases.Create;
   try
     GCatalog := TConfigTenantCatalog.Create(TAppConfig.Get('TENANTS', DEFAULT_TENANTS));
     if GReset then
       DeleteDatabases;
-    GResolver := TTenantDataResolver.Create(NewTenantFactory);
+    GResolver := TTenantDataResolver.Create(GDatabases.NewFactory);
     MigrateAll(GLog);
 
     TErrorHandlerMiddleware.Register(GLog.Error);
     THorse.Use(TLoggerMiddleware.New(nil, alfJson));
     THorse.Use(TMetricsMiddleware.New);
     THorse.Use(TJwtMiddleware.New(GSecret, ['/health', '/metrics', '/auth/login', '/swagger']));
-    THorse.Use(AsTenantCallback(TenantHandler));
+    THorse.Use(TTenantMiddleware.New(GCatalog, GClaim));
     TRouteDoc.Post('/auth/login').Summary('Get a token for one tenant (1 hour)').Tag('public')
       .NoContent(200, '{"token": "..."}')
       .Error(400, '"tenant" or "user" is missing')
@@ -470,6 +416,7 @@ begin
   finally
     GResolver := nil;
     GCatalog := nil;
+    GDatabases.Free;
     GLog.Free;
   end;
 end.

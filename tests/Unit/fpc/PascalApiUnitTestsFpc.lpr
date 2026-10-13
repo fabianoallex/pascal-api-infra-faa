@@ -35,7 +35,8 @@ uses
   PascalApi.HttpTests,
   PascalApi.OpenApiTests,
   PascalApi.McpTests,
-  PascalApi.OtlpTests;
+  PascalApi.OtlpTests,
+  PascalApi.TenancyTests;
 
 var
   ConsoleApp: TTestRunner;

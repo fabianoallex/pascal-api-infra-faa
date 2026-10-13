@@ -164,7 +164,7 @@ and `tools/http_scenarios_db.sh` checks them (65 checks). `promtool` rejects the
 name `db_client_connection_count` (its `_count` lint); the user chose to accept that one warning
 in CI (`tools/promtool_check.sh`). No release: no library code changed.
 
-### 7. Multi-tenancy — design approved; sample 03 done (2026-10-13)
+### 7. Multi-tenancy — done in the library (2026-10-13)
 
 Opt-in support for multi-tenant APIs, decided outside the database: tenant resolution (JWT claim
 first), an explicit tenant context, a catalog, and one data-scope contract with two shipped
@@ -177,3 +177,9 @@ a measurement in pascal-db-faa (pool metrics after a pool closes). First as
 checks, with the cross-tenant attempts in both modes) and on Delphi 12 Win32/Win64. It changed
 two details: the data scope carries the `IDBFactory` (the repository needs its `SqlLoader`), and
 the filter is set by one call (a forgotten bind is a silent 404 on SQLdb/SQLite).
+
+Promoted the same day: `PascalApi.Tenancy` and `src/horse/PascalApi.Horse.Tenancy`, with
+`PascalApi.TenancyTests` (24 tests) and idle databases dropped (`AIdleSeconds`), safe for the
+metrics because a freed pool gives its series back (already tested in pascal-db-faa 0.14.0).
+The keyed pool registry stayed in the resolver (no second consumer for pascal-db-faa). Verified
+on FPC Windows and Linux and Delphi 12 Win32/Win64 (239 tests, 0 leaks; sample 03, 57 checks).

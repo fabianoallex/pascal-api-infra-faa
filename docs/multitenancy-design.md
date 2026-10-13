@@ -1,9 +1,11 @@
 # Design: multi-tenant APIs on this library
 
-Status: **approved; `samples/03-tenants` done and verified on FPC (Windows and Linux) and
-Delphi 12 (Win32 and Win64) (2026-10-13)**. All ten decisions taken with the user; decision 9 still waits on one
-measurement in pascal-db-faa ("To measure before relying on it"). What the sample measured
-changed decisions 2 and 8 in detail ("Sample 03: what was done").
+Status: **approved and implemented (2026-10-13)**: `samples/03-tenants` proved the design on FPC
+(Windows and Linux) and Delphi 12 (Win32 and Win64), then the tenancy moved to the library
+(`PascalApi.Tenancy`, `PascalApi.Horse.Tenancy`; "Promotion to the library"). All ten
+decisions taken with the user; what the sample measured changed decisions 2 and 8 in detail
+("Sample 03: what was done"), and decision 9's open question turned out already answered in
+pascal-db-faa.
 
 ## Goal
 
@@ -162,9 +164,12 @@ nothing.
 Read in pascal-db-faa 0.14.0: the pool's metrics are up-down counters (`TPcUpDownCounterSeries`),
 so pools sharing a name add up (`max` the sum of maxima, `used` the sum in use), which is the
 right aggregate: **measured** in sample 03, two dedicated pools of 5 show
-`db_client_connection_max{pool_name="dedicated"} 10`. **Not measured:** whether a pool that is closed (evicted when idle, or a
-tenant deprovisioned) subtracts what it added. If it doesn't, the gauges only grow; this must
-be measured, and fixed in pascal-db-faa if needed, before this decision is relied on.
+`db_client_connection_max{pool_name="dedicated"} 10`. A pool that is freed (evicted when idle, or a tenant deprovisioned) gives back what it added:
+its destructor subtracts `idle`, `max` and `idle.min` (nothing is `used`: each connection
+wrapper holds a reference to the pool), and pascal-db-faa 0.14.0 tests exactly this case
+(`PoolMetricsTests`: `Destroy_GivesTheSeriesBack`, and `TwoPoolsWithTheSameName_AddUp`, where
+freeing one of two pools named alike leaves the other's `max`). First listed here as "not
+measured"; found answered on 2026-10-13, so idle databases can be dropped.
 
 ### 10. The library connects to tenant databases; it doesn't create them (user, 2026-10-13)
 
@@ -246,15 +251,16 @@ demand.
    shared database, tenant from the JWT, catalog from configuration. It proves the design on
    both compilers before anything becomes library API.
 2. Then promoted:
-   - resolution, context, middleware, catalog and resolver contracts → this repository;
-   - the keyed pool registry → pascal-db-faa, next to `TDBRegistry` and the pool;
+   - resolution, context, middleware, catalog and resolver contracts → this repository (done);
+   - the keyed pool registry → pascal-db-faa, next to `TDBRegistry` and the pool: **not done**.
+     It stayed inside `TTenantDataResolver` (a dictionary, a lock and the idle sweep, ~60
+     lines) because the resolver is its only user; moving it means a pascal-db-faa release for
+     no second consumer. Revisit when one appears;
    - `ITenantContext` → pascal-common-faa, once pascal-redis-faa or pascal-amqp-faa need it (the
-     path tracing took in phase D).
+     path tracing took in phase D). For now the context is the `TTenantInfo` record.
 
 ## To measure before relying on it
 
-- **Pool metrics after a pool closes** (decision 9): in pascal-db-faa, whether a closed
-  `TConnectionPool` subtracts its up-down counters.
 - **The access log sees the tenant**: the logger runs first and writes after the chain returns,
   so a tenant set later should be visible to it; verify on both compilers.
 - **Horse's `Sessions`** as the carrier of `ITenantContext`, against the request mark: does it
@@ -310,6 +316,27 @@ Mutation checks, run once by hand on FPC Windows and reverted:
 Not covered yet: the access log and spans with `tenant.id`, the rate limit by tenant,
 eviction of idle pools (waits on decision 9's measurement), unit tests of the tenancy pieces
 (they come with the promotion to the library).
+
+## Promotion to the library: what was done (2026-10-13)
+
+- `src/PascalApi.Tenancy.pas` (in the package): the sample's unit, plus `TenantIdFromClaims`
+  and `TenantRejection` (the middleware's decisions, testable without a server), the factory
+  callback as `PASCALAPI_FUNCREFS` (`reference to` on Delphi, `of object` on FPC: the sample's
+  plain function became a method), the messages in `TApiMessages` (`TenantMissing`,
+  `TenantUnknown`, `TenantSuspended`, English and Portuguese), and idle eviction
+  (`AIdleSeconds`, default 0 = keep; checked at most once a second, on a request, through
+  `TTicker`).
+- `src/horse/PascalApi.Horse.Tenancy.pas`: `TTenantMiddleware.New(ACatalog[, AClaimName])`,
+  `Current`/`TryCurrent`, `Configured`; the mark is `:pascalapi-tenant`.
+- `PascalApi.TenancyTests`: 24 tests (catalog, claim, refusals in both languages, key and pool
+  names, resolver with a manual ticker, `Prepare` against `TMockDBFactory`). 239 tests, 0 leaks,
+  on FPC Windows and Linux.
+- Sample 03 uses the library; `TenantApiSample.Tenancy` deleted. Its 57 checks pass unchanged
+  except the raw-header check, now on `:pascalapi-tenant`.
+
+Verified on Delphi 12 Win32 and Win64 too: 239 tests, 0 leaks, and sample 03's 57 checks. The
+first Delphi build failed on `PascalApi.Horse.Tenancy`: a `finalization` with no
+`initialization` before it, which FPC accepts and Delphi doesn't (fixed by the user).
 
 ## Not in this design
 

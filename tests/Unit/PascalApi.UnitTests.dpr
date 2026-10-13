@@ -30,6 +30,7 @@ uses
   PascalApi.OpenApi in '..\..\src\PascalApi.OpenApi.pas',
   PascalApi.Mcp in '..\..\src\PascalApi.Mcp.pas',
   PascalApi.Otlp in '..\..\src\PascalApi.Otlp.pas',
+  PascalApi.Tenancy in '..\..\src\PascalApi.Tenancy.pas',
   PascalApi.DUnitXCompat in 'PascalApi.DUnitXCompat.pas',
   PascalApi.VersionTests in 'PascalApi.VersionTests.pas',
   PascalApi.ConfigTests in 'PascalApi.ConfigTests.pas',
@@ -42,7 +43,8 @@ uses
   PascalApi.HttpTests in 'PascalApi.HttpTests.pas',
   PascalApi.OpenApiTests in 'PascalApi.OpenApiTests.pas',
   PascalApi.McpTests in 'PascalApi.McpTests.pas',
-  PascalApi.OtlpTests in 'PascalApi.OtlpTests.pas';
+  PascalApi.OtlpTests in 'PascalApi.OtlpTests.pas',
+  PascalApi.TenancyTests in 'PascalApi.TenancyTests.pas';
 
 var
   runner: ITestRunner;

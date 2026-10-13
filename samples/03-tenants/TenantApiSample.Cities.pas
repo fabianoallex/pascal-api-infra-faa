@@ -31,7 +31,7 @@ uses
   PascalDb.SqlSources,
   PascalDb.Migrations,
   PascalApi.Dto,
-  TenantApiSample.Tenancy;
+  PascalApi.Tenancy;
 
 type
   ICityInsert = interface(IInsertDTOBase)
