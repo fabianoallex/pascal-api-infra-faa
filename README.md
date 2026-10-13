@@ -95,8 +95,9 @@ How to add them to an application, minimum versions and short examples:
 |---|---|---|
 | [01-api](samples/01-api/ApiSample.dpr) | every middleware (errors, CORS, log, metrics, JWT, rate limit), health, paging and validation, in memory | `tools/http_scenarios.sh` (146 checks) |
 | [02-db](samples/02-db/DbApiSample.dpr) | SQLite through pascal-db-faa (SQLdb on FPC, FireDAC on Delphi): migrations, paging and ordering in SQL, filters, 409 from a unique key, NULL as `null` | `tools/http_scenarios_db.sh` (65 checks; also the pool metrics pascal-db-faa records) |
+| [03-tenants](samples/03-tenants/TenantApiSample.dpr) | multi-tenant: the tenant from a JWT claim, a database per tenant and a shared one with `TENANT_ID`, 401/403 for a removed or suspended tenant; the first step of [docs/multitenancy-design.md](docs/multitenancy-design.md) | `tools/http_scenarios_tenants.sh` (57 checks, most of them one tenant trying another's rows) |
 
-Both run with one source on Delphi and Lazarus/FPC. On FPC for Windows, sample 02 needs
+All run with one source on Delphi and Lazarus/FPC. On FPC for Windows, samples 02 and 03 need
 sqlite.org's `sqlite3.dll` next to the executable (see `tools/test_http.sh`).
 
 ## Using it

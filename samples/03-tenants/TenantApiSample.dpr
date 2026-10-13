@@ -1,0 +1,475 @@
+﻿program TenantApiSample;
+
+(* Sample 03: a multi-tenant Horse API, the first step of
+  docs/multitenancy-design.md. SQLite through pascal-db-faa (SQLdb on FPC,
+  FireDAC on Delphi). One source for Delphi (TenantApiSample.dproj) and
+  Lazarus/FPC (TenantApiSample.lpi).
+
+    TenantApiSample [port] [--reset]       (default port 9350)
+
+  The tenants come from TENANTS (environment or .env), by default
+
+    acme=dedicated;globex=dedicated;initech=shared;umbrella=shared;soylent=shared,suspended
+
+  A dedicated tenant has its own database file, tenant_<id>.sqlite; the
+  others share shared.sqlite. Every file sits in DATA_DIR (by default next to
+  the executable) and gets the same migrations on startup, every tenant's,
+  before the server listens (never on a tenant's first request). --reset
+  deletes the files first.
+
+  The tenant of a request is the token's claim TENANT_CLAIM (by default
+  tenant_id; not tid, which Microsoft Entra ID uses for its own tenant).
+  Nothing else names it: a header or a body field naming another tenant is
+  ignored. A token with no tenant, or one the catalog doesn't have (removed
+  after the token was issued), is 401; a suspended tenant is 403 with
+  "code":"tenant_suspended".
+
+  Routes:
+    POST   /auth/login     public; {"tenant":"acme","user":"ana"} -> {"token":"..."}
+                           (HS256, 1 hour, no password: a sample). 404 for an
+                           unknown tenant, the same for every name; 403 suspended
+    GET    /tenant         the caller's tenant and its mode
+    GET    /cities         the tenant's cities, by name
+    GET    /cities/:code   404 when the tenant has none with this code
+    POST   /cities         {"code":"4205407","name":"...","state":"SC","population":123}
+                           201; 409 when the tenant already has the code
+    DELETE /cities/:code   204; 404 when the tenant has none with this code
+    GET    /metrics        Prometheus text; the pools are named dedicated and shared
+    GET    /health/live    200 while the process answers
+    GET    /swagger        Swagger UI; /swagger/doc.json is the OpenAPI document
+
+  tools/http_scenarios_tenants.sh checks all of this over HTTP, the
+  cross-tenant attempts first among them. *)
+
+{$IFDEF FPC}{$MODE DELPHI}{$H+}{$ENDIF}
+{$APPTYPE CONSOLE}
+
+uses
+  {$IFDEF UNIX}
+  cthreads,
+  cwstring,
+  {$ENDIF}
+  SysUtils,
+  Horse,
+  Horse.Callback,
+  PascalCommon.Optionals,
+  PascalJsonMapper.Json,
+  PascalJsonMapper.Mapper,
+  PascalCommon.JsonMapper.Optionals,
+  PascalDb.Interfaces,
+  PascalDb.Migrations,
+  PascalDb.Adapter.Base,
+  {$IFDEF FPC}
+  PascalDb.Adapter.SQLdb,
+  {$ELSE}
+  PascalDb.Adapter.FireDAC,
+  {$ENDIF}
+  PascalApi.Config,
+  PascalApi.Jwt,
+  PascalApi.Http,
+  PascalApi.Horse.Middlewares,
+  PascalApi.Horse.OpenApi,
+  PascalApi.Horse.Observability,
+  TenantApiSample.Tenancy in 'TenantApiSample.Tenancy.pas',
+  TenantApiSample.Cities in 'TenantApiSample.Cities.pas';
+
+const
+  DEFAULT_TENANTS =
+    'acme=dedicated;globex=dedicated;initech=shared;umbrella=shared;soylent=shared,suspended';
+  // Where the tenant middleware leaves the request's tenant for the handlers
+  // (the logger marks a request the same way). HTTP doesn't allow ':' in a
+  // header name, but fpWeb accepts a raw line ":sample-tenant: initech"
+  // (measured, FPC 3.2.2/Windows): what keeps it harmless is that the
+  // middleware overwrites the mark on every request it lets through, and
+  // only those reach CurrentTenant.
+  TENANT_KEY = ':sample-tenant';
+  SUSPENDED_JSON = '{"error":"This tenant is suspended.","code":"tenant_suspended"}';
+
+var
+  GSecret, GClaim, GDataDir: string;
+  GCatalog: ITenantCatalog;
+  GResolver: ITenantDataResolver;
+
+{ Tenancy }
+
+function NewTenantFactory(const ADatabaseKey, APoolName: string): IDBFactory;
+var
+  LConfig: IDatabaseConfig; // an interface variable, never a class one (pascal-db-faa's rule)
+  LFile: string;
+begin
+  LFile := GDataDir + ADatabaseKey + '.sqlite';
+  LConfig := TDatabaseConfig.Create;
+  {$IFDEF FPC}
+  LConfig.ConnectionParams.Values['ConnectorType'] := 'SQLite3';
+  LConfig.ConnectionParams.Values['DatabaseName'] := LFile;
+  {$IFDEF UNIX}
+  LConfig.ConnectionParams.Values['ClientLibrary'] := TAppConfig.Get('SQLITE_CLIENT', 'libsqlite3.so.0');
+  {$ELSE}
+  LConfig.ConnectionParams.Values['ClientLibrary'] := TAppConfig.Get('SQLITE_CLIENT', '');
+  {$ENDIF}
+  {$ELSE}
+  LConfig.ConnectionParams.Values['DriverID'] := 'SQLite';
+  LConfig.ConnectionParams.Values['Database'] := LFile;
+  {$ENDIF}
+  LConfig.SQLDialect := 'SQLite';
+  LConfig.SQLDirectory := 'SQLITE';
+  LConfig.SqlSource := CitySqlSource;
+  LConfig.PoolName := APoolName;
+  LConfig.PoolIniConnections := 1;
+  LConfig.PoolMaxConnections := 5;
+  LConfig.PoolWaitMaxAttemps := 50;
+  LConfig.PoolWaitMilliseconds := 100;
+  {$IFDEF FPC}
+  Result := TSQLdbFactory.Create(LConfig);
+  {$ELSE}
+  Result := TFDFactory.Create(LConfig);
+  {$ENDIF}
+end;
+
+// The tenant the middleware resolved. A route that the middleware skipped
+// (an excluded prefix) has none: asking for it there is a bug, a 500.
+function CurrentTenant(AReq: THorseRequest): TTenantInfo;
+begin
+  if not GCatalog.Find(AReq.Headers[TENANT_KEY], Result) then
+    raise Exception.Create('No tenant on this request: is the route excluded from the token?');
+end;
+
+function CitiesOf(AReq: THorseRequest): TCityRepository;
+begin
+  Result := TCityRepository.Create(GResolver.ScopeFor(CurrentTenant(AReq)));
+end;
+
+// THorse.Use takes a THorseCallback, a record on FPC: "Result := AProc" would
+// read as a call there, so FPC gets the address (as PascalApi.Horse.Middlewares
+// does).
+function AsTenantCallback(AProc: THorseCallbackProc): THorseCallback;
+begin
+  {$IFDEF FPC}
+  Result := @AProc;
+  {$ELSE}
+  Result := AProc;
+  {$ENDIF}
+end;
+
+// After TJwtMiddleware, so the token is valid here: the tenant comes from its
+// claim, checked against the catalog. Paths the JWT middleware excludes
+// need no tenant either.
+procedure TenantHandler(AReq: THorseRequest; ARes: THorseResponse; ANext: TNextProc);
+var
+  LClaims, LValue: TJsonValue;
+  LId: string;
+  LInfo: TTenantInfo;
+begin
+  if TJwtMiddleware.Excludes(AReq.PathInfo) then
+  begin
+    ANext();
+    Exit;
+  end;
+  LId := '';
+  LClaims := TJwtMiddleware.Claims(AReq);
+  try
+    if LClaims <> nil then
+    begin
+      LValue := LClaims.Find(GClaim);
+      if (LValue <> nil) and (LValue.Kind = jkString) then
+        LId := LValue.AsString;
+    end;
+  finally
+    LClaims.Free;
+  end;
+  case CheckTenant(GCatalog, LId, LInfo) of
+    tcNoTenant:
+      TJsonSend.Send(ARes, ErrorJson('The token names no tenant.'), 401);
+    tcUnknown:
+      TJsonSend.Send(ARes, ErrorJson('The token''s tenant no longer exists.'), 401);
+    tcSuspended:
+      TJsonSend.Send(ARes, SUSPENDED_JSON, 403);
+  else
+    AReq.Headers.Dictionary.AddOrSetValue(TENANT_KEY, LInfo.Id);
+    ANext();
+  end;
+end;
+
+{ Handlers }
+
+function StringMember(ABody: TJsonValue; const AName: string): string;
+var
+  LValue: TJsonValue;
+begin
+  LValue := ABody.Find(AName);
+  if (LValue = nil) or (LValue.Kind <> jkString) or (LValue.AsString = '') then
+    raise EValidationException.Create(Format('"%s" is required.', [AName]));
+  Result := LValue.AsString;
+end;
+
+procedure PostLogin(AReq: THorseRequest; ARes: THorseResponse; ANext: TNextProc);
+var
+  LBody: TJsonValue;
+  LWriter: TJsonWriter;
+  LTenant, LUser, LClaims: string;
+  LInfo: TTenantInfo;
+begin
+  LBody := ParseJson(AReq.Body);
+  try
+    if LBody.Kind <> jkObject then
+      raise EValidationException.Create('The body must be a JSON object.');
+    LTenant := StringMember(LBody, 'tenant');
+    LUser := StringMember(LBody, 'user');
+  finally
+    LBody.Free;
+  end;
+  // Before a token exists, the tenant is a name anyone can try: one answer
+  // for every unknown name, so the answers don't list the customers.
+  case CheckTenant(GCatalog, LTenant, LInfo) of
+    tcSuspended:
+      begin
+        TJsonSend.Send(ARes, SUSPENDED_JSON, 403);
+        Exit;
+      end;
+    tcOk: ;
+  else
+    raise ENotFoundException.Create('Tenant not found.');
+  end;
+  LWriter := TJsonWriter.Create;
+  try
+    LWriter.BeginObject;
+    LWriter.Name('sub');
+    LWriter.WriteString(LUser);
+    LWriter.Name(GClaim);
+    LWriter.WriteString(LInfo.Id);
+    LWriter.Name('exp');
+    LWriter.WriteInt64(TJwt.UnixNow + 3600);
+    LWriter.EndObject;
+    LClaims := LWriter.ToString;
+  finally
+    LWriter.Free;
+  end;
+  LWriter := TJsonWriter.Create;
+  try
+    LWriter.BeginObject;
+    LWriter.Name('token');
+    LWriter.WriteString(TJwt.SignHS256(LClaims, GSecret));
+    LWriter.EndObject;
+    TJsonSend.Send(ARes, LWriter.ToString);
+  finally
+    LWriter.Free;
+  end;
+end;
+
+procedure GetTenant(AReq: THorseRequest; ARes: THorseResponse; ANext: TNextProc);
+var
+  LInfo: TTenantInfo;
+  LWriter: TJsonWriter;
+begin
+  LInfo := CurrentTenant(AReq);
+  LWriter := TJsonWriter.Create;
+  try
+    LWriter.BeginObject;
+    LWriter.Name('tenant');
+    LWriter.WriteString(LInfo.Id);
+    LWriter.Name('mode');
+    LWriter.WriteString(PoolNameOf(LInfo));
+    LWriter.EndObject;
+    TJsonSend.Send(ARes, LWriter.ToString);
+  finally
+    LWriter.Free;
+  end;
+end;
+
+procedure GetCities(AReq: THorseRequest; ARes: THorseResponse; ANext: TNextProc);
+var
+  LCities: TCityRepository;
+begin
+  LCities := CitiesOf(AReq);
+  try
+    TJsonSend.Send(ARes, TJsonMapper.Shared.Serialize<TCityArray>(LCities.List));
+  finally
+    LCities.Free;
+  end;
+end;
+
+procedure GetCity(AReq: THorseRequest; ARes: THorseResponse; ANext: TNextProc);
+var
+  LCities: TCityRepository;
+begin
+  LCities := CitiesOf(AReq);
+  try
+    TJsonSend.Send(ARes, TJsonMapper.Shared.ToJson<ICity>(LCities.FindByCode(AReq.Params['code'])));
+  finally
+    LCities.Free;
+  end;
+end;
+
+procedure PostCity(AReq: THorseRequest; ARes: THorseResponse; ANext: TNextProc);
+var
+  LCities: TCityRepository;
+begin
+  LCities := CitiesOf(AReq);
+  try
+    TJsonSend.Send(ARes, TJsonMapper.Shared.ToJson<ICity>(
+      LCities.Insert(TJsonMapper.Shared.FromJson<ICityInsert>(AReq.Body))), 201);
+  finally
+    LCities.Free;
+  end;
+end;
+
+procedure DeleteCity(AReq: THorseRequest; ARes: THorseResponse; ANext: TNextProc);
+var
+  LCities: TCityRepository;
+begin
+  LCities := CitiesOf(AReq);
+  try
+    LCities.Delete(AReq.Params['code']);
+  finally
+    LCities.Free;
+  end;
+  ARes.Status(204).Send('');
+end;
+
+{ Setup }
+
+type
+  TSampleLog = class
+  public
+    procedure Error(const ALine: string);
+    procedure Migration(const AEvent: TMigrationEvent);
+  end;
+
+procedure TSampleLog.Error(const ALine: string);
+begin
+  Writeln('ERROR ', ALine);
+end;
+
+procedure TSampleLog.Migration(const AEvent: TMigrationEvent);
+begin
+  if AEvent.Kind = mekApplied then
+    Writeln('migration ', AEvent.Version, ' ', AEvent.ScriptName);
+end;
+
+// Every tenant's database, once each (the shared one serves several), at
+// startup: a tenant's first request never waits for a migration.
+procedure MigrateAll(ALog: TSampleLog);
+var
+  LTenants: TArray<TTenantInfo>;
+  LDone, LKey: string;
+  LEngine: TDBMigrationEngine;
+  I: Integer;
+begin
+  LTenants := GCatalog.All;
+  LDone := '|';
+  for I := 0 to High(LTenants) do
+  begin
+    LKey := DatabaseKeyOf(LTenants[I]);
+    if Pos('|' + LKey + '|', LDone) > 0 then
+      Continue;
+    LDone := LDone + LKey + '|';
+    LEngine := TDBMigrationEngine.Create(GResolver.ScopeFor(LTenants[I]).Factory, ALog.Migration);
+    try
+      LEngine.Execute(CityMigrations);
+      Writeln('database ', LKey, ' at version ', LEngine.CurrentVersion);
+    finally
+      LEngine.Free;
+    end;
+  end;
+end;
+
+// --reset. A file another process holds open (another instance on the same
+// DATA_DIR) can't be deleted on Windows: stop instead of starting on old data
+// (seen: a second Delphi Win64 instance kept the first one's rows).
+procedure DeleteDatabases;
+var
+  LTenants: TArray<TTenantInfo>;
+  LFile: string;
+  I: Integer;
+begin
+  LTenants := GCatalog.All;
+  for I := 0 to High(LTenants) do
+  begin
+    LFile := GDataDir + DatabaseKeyOf(LTenants[I]) + '.sqlite';
+    if FileExists(LFile) and not DeleteFile(LFile) then
+      raise Exception.CreateFmt('--reset: can''t delete %s (another instance using it?)', [LFile]);
+  end;
+end;
+
+var
+  GLog: TSampleLog;
+  GPort, I: Integer;
+  GReset: Boolean;
+
+begin
+  {$IFDEF FPC}
+  SetMultiByteConversionCodePage(CP_UTF8);
+  {$ENDIF}
+  GPort := 9350;
+  GReset := False;
+  for I := 1 to ParamCount do
+    if ParamStr(I) = '--reset' then
+      GReset := True
+    else
+      GPort := StrToIntDef(ParamStr(I), GPort);
+  GDataDir := IncludeTrailingPathDelimiter(ExpandFileName(
+    TAppConfig.Get('DATA_DIR', ExtractFilePath(ParamStr(0)))));
+  GSecret := TAppConfig.Get('JWT_SECRET', 'development-secret-change-me');
+  GClaim := TAppConfig.Get('TENANT_CLAIM', 'tenant_id');
+
+  GLog := TSampleLog.Create;
+  try
+    GCatalog := TConfigTenantCatalog.Create(TAppConfig.Get('TENANTS', DEFAULT_TENANTS));
+    if GReset then
+      DeleteDatabases;
+    GResolver := TTenantDataResolver.Create(NewTenantFactory);
+    MigrateAll(GLog);
+
+    TErrorHandlerMiddleware.Register(GLog.Error);
+    THorse.Use(TLoggerMiddleware.New(nil, alfJson));
+    THorse.Use(TMetricsMiddleware.New);
+    THorse.Use(TJwtMiddleware.New(GSecret, ['/health', '/metrics', '/auth/login', '/swagger']));
+    THorse.Use(AsTenantCallback(TenantHandler));
+    TRouteDoc.Post('/auth/login').Summary('Get a token for one tenant (1 hour)').Tag('public')
+      .NoContent(200, '{"token": "..."}')
+      .Error(400, '"tenant" or "user" is missing')
+      .Error(403, 'The tenant is suspended')
+      .Error(404, 'No such tenant')
+      .Register(PostLogin);
+    TRouteDoc.Get('/tenant').Summary('The caller''s tenant and its mode').Tag('tenant')
+      .NoContent(200, '{"tenant": "acme", "mode": "dedicated"}')
+      .Error(401, 'No token, or its tenant no longer exists')
+      .Error(403, 'The tenant is suspended')
+      .Register(GetTenant);
+    TRouteDoc.Get('/cities')
+      .Summary('The tenant''s cities, by name').Tag('cities')
+      .ResponseArray<ICity>(200, 'The cities')
+      .Error(401, 'No token, or its tenant no longer exists')
+      .Error(403, 'The tenant is suspended')
+      .Register(GetCities);
+    TRouteDoc.Get('/cities/:code')
+      .Summary('One city of the tenant').Tag('cities')
+      .PathParam('code', 'IBGE code (7 digits)')
+      .Response<ICity>(200)
+      .Error(404, 'The tenant has no city with this code')
+      .Register(GetCity);
+    TRouteDoc.Post('/cities')
+      .Summary('Create a city in the tenant').Tag('cities')
+      .Body<ICityInsert>
+      .Response<ICity>(201, 'Created')
+      .Error(400, 'Invalid data')
+      .Error(409, 'The tenant already has a city with this code')
+      .Register(PostCity);
+    TRouteDoc.Delete('/cities/:code')
+      .Summary('Delete a city of the tenant').Tag('cities')
+      .PathParam('code', 'IBGE code (7 digits)')
+      .NoContent(204, 'Deleted')
+      .Error(404, 'The tenant has no city with this code')
+      .Register(DeleteCity);
+    TMetricsEndpoint.Register;
+    THealthEndpoint.Register('/health', GLog.Error);
+    TRouteDoc.Serve('/swagger', 'Cities API, multi-tenant (pascal-api-infra-faa sample 03)', '1.0.0');
+
+    Writeln('TenantApiSample listening on port ', GPort);
+    THorse.Listen(GPort);
+  finally
+    GResolver := nil;
+    GCatalog := nil;
+    GLog.Free;
+  end;
+end.

@@ -3,11 +3,12 @@
 # its HTTP scenarios against it:
 #   samples/01-api  -> tools/http_scenarios.sh     (middlewares)
 #   samples/02-db   -> tools/http_scenarios_db.sh  (SQLite through pascal-db-faa)
+#   samples/03-tenants -> tools/http_scenarios_tenants.sh (multi-tenant, SQLite)
 #
-# samples/02-db on FPC loads sqlite3.dll, and it must be sqlite.org's build
+# samples/02-db and 03-tenants on FPC load sqlite3.dll, and it must be sqlite.org's build
 # (pascal-db-faa's gotcha 23: Python's lacks the column metadata functions).
 # The script copies SQLITE_DLL, or .deps/sqlite3.dll (git-ignored), next to
-# the executable; without either, it skips sample 02.
+# the executable; without either, it skips samples 02 and 03.
 #
 # For a Delphi build, skip the build: start the .exe from samples\0N-*\Win32
 # (or Win64)\Debug and run the matching scenarios script with its port.
@@ -44,9 +45,14 @@ run samples/01-api ApiSample.exe 9310 http_scenarios.sh
 echo "== samples/02-db"
 DLL="${SQLITE_DLL:-.deps/sqlite3.dll}"
 if [ ! -f "$DLL" ]; then
-  echo "skipped: no sqlite.org sqlite3.dll (set SQLITE_DLL or put one in .deps/sqlite3.dll)"
+  echo "skipped (02 and 03): no sqlite.org sqlite3.dll (set SQLITE_DLL or put one in .deps/sqlite3.dll)"
   exit 0
 fi
 build samples/02-db DbApiSample.lpi
 cp "$DLL" samples/02-db/sqlite3.dll
 run samples/02-db DbApiSample.exe 9330 http_scenarios_db.sh --reset
+
+echo "== samples/03-tenants"
+build samples/03-tenants TenantApiSample.lpi
+cp "$DLL" samples/03-tenants/sqlite3.dll
+run samples/03-tenants TenantApiSample.exe 9350 http_scenarios_tenants.sh --reset

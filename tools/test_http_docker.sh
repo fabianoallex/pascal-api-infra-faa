@@ -1,8 +1,10 @@
 #!/bin/sh
-# Builds samples/01-api and samples/02-db with plain fpc on Linux (Docker),
-# starts each one and runs its HTTP scenarios (tools/http_scenarios.sh, the
-# middlewares; tools/http_scenarios_db.sh, SQLite through pascal-db-faa's
-# SQLdb adapter, which loads Debian's libsqlite3.so.0).
+# Builds samples/01-api, samples/02-db and samples/03-tenants with plain fpc
+# on Linux (Docker), starts each one and runs its HTTP scenarios
+# (tools/http_scenarios.sh, the middlewares; tools/http_scenarios_db.sh,
+# SQLite through pascal-db-faa's SQLdb adapter, which loads Debian's
+# libsqlite3.so.0; tools/http_scenarios_tenants.sh, multi-tenant). Sample 03
+# has no MCP endpoint and exports no spans.
 #
 # Horse is used unchanged (external/horse, 3.3.12). The image needs FPC 3.2.2 and
 # curl, libsqlite3-0, openapi-spec-validator, the MCP Python SDK (mcp 2.0.0,
@@ -39,7 +41,7 @@ MSYS_NO_PATHCONV=1 docker run -d --name "$NAME" --network "$NAME" --user 0   -v 
 
 MSYS_NO_PATHCONV=1 docker run --rm --network "$NAME" -v "$NAME:/otel:ro" -v "$MOUNT:/src:ro"   -e OTEL_EXPORTER_OTLP_ENDPOINT="http://$NAME:4318" -e OTEL_BSP_SCHEDULE_DELAY=200   "$IMAGE" sh -c '
   set -e
-  mkdir -p /t/uApiSample /t/uDbApiSample && cp -r /src/src /src/samples /src/tools /src/external /t/
+  mkdir -p /t/uApiSample /t/uDbApiSample /t/uTenantApiSample && cp -r /src/src /src/samples /src/tools /src/external /t/
   E=/t/external
   P="-Fu/t/src -Fi/t/src -Fu/t/src/horse -Fu$E/horse/src -Fi$E/horse/src"
   P="$P -Fu$E/pascal-common-faa/src -Fi$E/pascal-common-faa/src -Fu$E/pascal-common-faa/bridges/jsonmapper"
@@ -65,7 +67,7 @@ MSYS_NO_PATHCONV=1 docker run --rm --network "$NAME" -v "$NAME:/otel:ro" -v "$MO
       sh /t/tools/promtool_check.sh /t/metrics-$2.txt || RC=$?
     fi
     # The MCP endpoint, driven by the official Python SDK (2026-07-28).
-    if [ $RC -eq 0 ]; then
+    if [ $RC -eq 0 ] && [ -n "$6" ]; then
       python3 /t/tools/mcp_client_check.py $6 http://127.0.0.1:$3 || RC=$?
     fi
     # The last spans: the exporter sends every 200 ms.
@@ -80,6 +82,8 @@ MSYS_NO_PATHCONV=1 docker run --rm --network "$NAME" -v "$NAME:/otel:ro" -v "$MO
   run 01-api ApiSample 9310 http_scenarios.sh "" 01
   echo "-- samples/02-db"
   run 02-db DbApiSample 9330 http_scenarios_db.sh --reset 02
+  echo "-- samples/03-tenants"
+  run 03-tenants TenantApiSample 9350 http_scenarios_tenants.sh --reset ""
   echo "-- spans received by the collector"
   sleep 1
   python3 /t/tools/otlp_check.py /otel/traces.json'

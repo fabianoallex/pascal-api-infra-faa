@@ -1,8 +1,9 @@
 # Design: multi-tenant APIs on this library
 
-Status: **approved, not implemented (2026-10-13)**. All ten decisions taken with the user;
-decision 9 waits on one measurement in pascal-db-faa ("To measure before relying on it").
-Decisions 1 to 4 and 7 block `samples/03-tenants`; 9 and 10 don't.
+Status: **approved; `samples/03-tenants` done and verified on FPC (Windows and Linux) and
+Delphi 12 (Win32 and Win64) (2026-10-13)**. All ten decisions taken with the user; decision 9 still waits on one
+measurement in pascal-db-faa ("To measure before relying on it"). What the sample measured
+changed decisions 2 and 8 in detail ("Sample 03: what was done").
 
 ## Goal
 
@@ -56,8 +57,8 @@ The application never chooses a pool itself; it asks the resolver for the reques
 
 ```pascal
 TTenantDataScope = record
-  Pool: IDBConnectionPool;   // which database
-  Discriminator: string;     // the tenant_id value, or '' when the database already isolates
+  Factory: IDBFactory;       // which database: its pool, and its SqlLoader
+  Discriminator: string;     // the tenant_id value, always set (decision 4)
 end;
 
 ITenantDataResolver = interface
@@ -65,8 +66,9 @@ ITenantDataResolver = interface
 end;
 ```
 
-"Which pool" alone covers a database per tenant; a shared database also needs "which filter",
-hence the record. Because the resolver decides per tenant (from the catalog), modes can be
+"Which database" alone covers a database per tenant; a shared database also needs "which
+filter", hence the record. (First drafted with `Pool: IDBConnectionPool`; the sample's
+repository also needs the factory's `SqlLoader`, so the scope carries the factory.) Because the resolver decides per tenant (from the catalog), modes can be
 **mixed**: large tenants on their own database, small ones on a shared one.
 
 ### 3. Two implementations ship; schema-per-tenant doesn't (user, 2026-10-13)
@@ -129,13 +131,21 @@ All answered by the middleware, before any handler.
 
 | Option | Taken? |
 |---|---|
-| A helper, `TTenantFilter`: returns `c.tenant_id = :tenant_id` for an alias and binds the parameter from the `TTenantDataScope` | **yes**: small, works with any SQL |
+| A helper, `TTenantFilter`: the condition for an alias and the parameter from the `TTenantDataScope`, set in one call (`Prepare`) | **yes**: small, works with any SQL |
 | A class wrapping every query and injecting the filter | no: it would have to parse arbitrary SQL (joins, subqueries, CTEs), unreliable, and it would fight `SqlLoader`'s templates |
 | A `TENANT` tag in `SqlLoader` files (`[TENANT {] AND tenant_id = :tenant_id [} TENANT]`) | **yes, optional**, for applications that keep SQL in files |
 
-The tag convention fails loudly by `SqlLoader`'s own rule: a tag nobody processes loses only
-its markers and its content stays, so a forgotten `ProcessTag` keeps the filter, and the query
-fails on an unbound `:tenant_id` instead of silently losing the condition.
+**One call, not two (measured in sample 03).** The first version replaced the condition and
+bound the parameter in separate calls. A forgotten bind is **silent** on SQLdb/SQLite: the
+unbound parameter is NULL, `TENANT_ID = NULL` matches nothing, and the route answers 404 with
+nothing in the log. It fails closed (no other tenant's rows) but quietly, so `Prepare` loads the
+SQL, replaces `${TENANT}` with the condition and binds `:TENANT_ID` together. A forgotten
+`${TENANT}` replacement is loud (the literal stays in the SQL and the database rejects it).
+FireDAC on Delphi may answer an unbound parameter differently: not measured.
+
+The same measurement corrects what this section first said of the tag convention: a forgotten
+`ProcessTag` keeps the condition (`SqlLoader`'s rule: the content stays), but the unbound
+`:tenant_id` that follows is the silent case above, not an error. Safe, not loud.
 
 Neither stops a hand-written query that skips both. The safety net is the cross-tenant HTTP
 scenarios (see "How it will be tested"), so a missing filter fails CI. A possible later addition:
@@ -150,8 +160,9 @@ visibility comes from the spans (`tenant.id` attribute) and the logs, where card
 nothing.
 
 Read in pascal-db-faa 0.14.0: the pool's metrics are up-down counters (`TPcUpDownCounterSeries`),
-so pools sharing a name should add up (`max` the sum of maxima, `used` the sum in use), which is
-the right aggregate. **Not measured:** whether a pool that is closed (evicted when idle, or a
+so pools sharing a name add up (`max` the sum of maxima, `used` the sum in use), which is the
+right aggregate: **measured** in sample 03, two dedicated pools of 5 show
+`db_client_connection_max{pool_name="dedicated"} 10`. **Not measured:** whether a pool that is closed (evicted when idle, or a
 tenant deprovisioned) subtracts what it added. If it doesn't, the gauges only grow; this must
 be measured, and fixed in pascal-db-faa if needed, before this decision is relied on.
 
@@ -188,6 +199,10 @@ In the sample (SQLite), provisioning is opening the file.
 - On a request it travels on the request, marked like the logger's mark (`:pascalapi-tenant`);
   `TTenantMiddleware.Current(AReq)` returns it, as `TJwtMiddleware.Claims` does. Horse's
   `Sessions` is the alternative (to measure on both compilers before choosing).
+- The mark is safe because the middleware **overwrites** it on every request it lets through,
+  not because a client can't send it: HTTP forbids ':' in a header name, but fpWeb accepted a
+  raw `:sample-tenant: initech` line (measured in sample 03; curl won't even send it, the
+  check uses a raw socket). Routes the middleware skips never read it.
 - **Passed explicitly** to services and repositories, never only through a `threadvar`: jobs,
   AMQP consumers and code outside a request have no request to read it from.
 
@@ -255,6 +270,46 @@ demand.
   (404, never B's data), a token naming a removed tenant (401), a suspended tenant (403,
   `tenant_suspended`), and the same in both isolation modes.
 - The existing scenarios (146 + 65 checks) pass unchanged: the opt-in check of decision 1.
+
+## Sample 03: what was done (2026-10-13)
+
+`samples/03-tenants` (`TenantApiSample`, port 9350), one source for Delphi and FPC:
+
+- `TenantApiSample.Tenancy`: `TTenantInfo`, `ITenantCatalog` with the configuration catalog
+  (`TENANTS`, default `acme`/`globex` dedicated, `initech`/`umbrella` shared, `soylent` shared
+  and suspended), `TTenantDataScope`, `TTenantDataResolver` (one `IDBFactory` per database key,
+  created under a lock; pools named `dedicated`/`shared`), `TTenantFilter.Prepare`,
+  `CheckTenant`. A record instead of `ITenantContext` for now.
+- `TenantApiSample.Cities`: `TENANT_ID` in every row and in the primary key, the same table in
+  every database; a repository per request from the scope.
+- The program: login (the application's route, tenant from the body: 404 for any unknown
+  name, 403 suspended), the tenant middleware after JWT (claim `tenant_id`; 401 no tenant or
+  removed, 403 suspended), every database migrated at startup, Swagger and `/metrics`.
+- `tools/http_scenarios_tenants.sh`: 57 checks, in `tools/test_http.sh` and in CI
+  (`tools/test_http_docker.sh`, plus the OpenAPI validator and promtool). Tokens the sample
+  never issues (removed tenant, no tenant, a number, `tid`, suspended) are signed in the
+  script with Python's `hmac`.
+
+Verified: FPC 3.2.2 on Windows (lazbuild) and Linux (`tools/ci-test.sh`: 146 + 65 + 57 checks,
+the unit suite unchanged), and Delphi 12 Win32 and Win64 (57 checks each, FireDAC). Indy, like
+fpWeb, accepts the raw `:sample-tenant` line and the tenant stays the token's.
+
+Found while verifying on Delphi: a second instance started with `--reset` on the same
+`DATA_DIR` while the first ran couldn't delete the open files on Windows, ignored that, and
+served the first one's rows (the scenarios then failed with 409s). `--reset` now stops with an
+error naming the file (checked on FPC; the Delphi executables were built before this change).
+
+Mutation checks, run once by hand on FPC Windows and reverted:
+
+- dropping the tenant condition from the by-code and delete queries: 5 checks failed (shared
+  database: reading and deleting another tenant's city). The dedicated checks still passed, as
+  they should: there the database isolates.
+- keeping the condition but not binding it: 10 checks failed, every one a silent 404 (the
+  finding under decision 8).
+
+Not covered yet: the access log and spans with `tenant.id`, the rate limit by tenant,
+eviction of idle pools (waits on decision 9's measurement), unit tests of the tenancy pieces
+(they come with the promotion to the library).
 
 ## Not in this design
 

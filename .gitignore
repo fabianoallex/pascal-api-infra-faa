@@ -44,3 +44,5 @@ server.log
 samples/02-db/DbApiSample
 *.sqlite
 samples/02-db/sqlite3.dll
+samples/03-tenants/TenantApiSample
+samples/03-tenants/sqlite3.dll

@@ -1,7 +1,8 @@
 #!/bin/sh
 # Everything CI runs (.github/workflows/ci.yml), also runnable locally with
-# Docker: the unit suite on Linux FPC 3.2.2, then samples/01-api and
-# samples/02-db (SQLite) over HTTP (tools/test_http_docker.sh). Delphi Community Edition can't
+# Docker: the unit suite on Linux FPC 3.2.2, then samples/01-api,
+# samples/02-db (SQLite) and samples/03-tenants (multi-tenant) over HTTP
+# (tools/test_http_docker.sh). Delphi Community Edition can't
 # build headless, so the Delphi side is validated in the IDE (see CLAUDE.md,
 # "Tests").
 #
@@ -23,5 +24,5 @@ export FPC_IMAGE
 
 echo "== unit suite"
 sh tools/test_fpc_docker.sh
-echo "== HTTP scenarios (samples/01-api, samples/02-db)"
+echo "== HTTP scenarios (samples/01-api, samples/02-db, samples/03-tenants)"
 sh tools/test_http_docker.sh

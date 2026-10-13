@@ -164,7 +164,7 @@ and `tools/http_scenarios_db.sh` checks them (65 checks). `promtool` rejects the
 name `db_client_connection_count` (its `_count` lint); the user chose to accept that one warning
 in CI (`tools/promtool_check.sh`). No release: no library code changed.
 
-### 7. Multi-tenancy — design approved, not implemented (2026-10-13)
+### 7. Multi-tenancy — design approved; sample 03 done (2026-10-13)
 
 Opt-in support for multi-tenant APIs, decided outside the database: tenant resolution (JWT claim
 first), an explicit tenant context, a catalog, and one data-scope contract with two shipped
@@ -172,3 +172,8 @@ modes (database per tenant, shared database with `tenant_id`; not schema per ten
 repositories that always filter by `tenant_id`. Ten decisions taken with the user; one waits on
 a measurement in pascal-db-faa (pool metrics after a pool closes). First as
 `samples/03-tenants`, then promoted. Design: `docs/multitenancy-design.md`.
+
+`samples/03-tenants` done on 2026-10-13, verified on FPC Windows and Linux (CI script: 57
+checks, with the cross-tenant attempts in both modes) and on Delphi 12 Win32/Win64. It changed
+two details: the data scope carries the `IDBFactory` (the repository needs its `SqlLoader`), and
+the filter is set by one call (a forgotten bind is a silent 404 on SQLdb/SQLite).

@@ -6,6 +6,17 @@ may change the API; each such change is listed here.
 
 ## [Unreleased]
 
+### Added
+
+- `samples/03-tenants` (`TenantApiSample`): the first step of `docs/multitenancy-design.md`, all
+  of it in the sample, nothing in the library yet. The tenant comes from the token's
+  `tenant_id` claim; dedicated tenants get a database each, the others share one, and every
+  row carries `TENANT_ID`. `tools/http_scenarios_tenants.sh` (57 checks) tries one tenant's
+  token on another's rows in both modes, and checks the 401/403 answers for a removed, missing
+  or suspended tenant; it runs in `tools/test_http.sh` and in CI. Measured on the way: a
+  forgotten bind of `:TENANT_ID` is a silent 404 on SQLdb/SQLite (so `TTenantFilter.Prepare`
+  sets the condition and the parameter in one call), and pools sharing a metric name add up.
+
 ### Changed
 
 - `external/pascal-db-faa` on v0.14.0, whose connection pool records OpenTelemetry's
