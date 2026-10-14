@@ -166,10 +166,14 @@ its own Horse `src` to the search path.
 - **When no route matches, Horse 3.3.12 runs the router twice** (the path, then `/*`:
   `Horse.Core.RouterTree`, `DoExecuteInternal`), so every global middleware runs twice for one
   request. Seen in samples/02-db's log (two access lines for one `GET /`). `TLoggerMiddleware`
-  marks the request and runs once; a new global middleware with side effects must do the same.
-  The others still run twice there; a
-  global `TRateLimitMiddleware` would presumably count such a request twice (not measured, not
-  fixed: only routes that don't exist).
+  and `TRateLimitMiddleware` mark the request and run once (the limit counted it twice and sent
+  its headers twice, measured 2026-10-14; `tools/http_scenarios_tenants.sh` checks it); a new
+  global middleware with side effects must do the same. The others still run twice there.
+- **The rate limit's default key trusts `X-Forwarded-For` only from proxies**
+  (`TrustedClientIp`: a loopback peer, or `TRateLimitOptions.ProxyHops`). Until 0.13.0 it was the
+  header's first address, which the client writes: a new value per request escaped the limit
+  (measured). The MCP executor forwards the chain as a proxy does (`ForwardedForChain`), so a tool
+  call keeps its caller's key. `ClientIp` (first address) is only for log lines.
 - **A middleware's exception never reaches `THorse.OnError` on FPC**: Horse 3.3.12's FPC router
   (`TRouterTreeExecutor.Run`) re-raises it, and fpWeb sent `500 text/html` with the message and
   stack addresses (measured 2026-10-14). `TLoggerMiddleware` catches it (`NextOrAnswer`) and

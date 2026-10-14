@@ -13,6 +13,7 @@ way it does.
 | [Getting started](getting-started.md) | you start an API: the dependencies, the program file, JSON out, errors, a DTO, paging, the middleware order, the samples |
 | [Configuration](configuration.md) | settings from the environment, a `.env` file or a default; the variables the library reads |
 | [Authentication](authentication.md) | routes need a token: JWT (HS256) or your own check, the open paths, issuing and reading a token |
+| [Rate limiting](rate-limiting.md) | a client may make so many requests a minute: the window, the key (behind a proxy too), a limit per client, the headers and the 429 |
 | [Errors and validation](errors.md) | a request fails: the exceptions and their statuses, validating input, the database's errors, the client messages (English/Portuguese) |
 | [Multi-tenancy](multitenancy.md) | one API serves several customers, each seeing only its own data |
 
@@ -24,7 +25,6 @@ are the reference.
 
 | Guide | Covers | Today, see |
 |---|---|---|
-| Rate limiting | the window, the key, a limit per request | `PascalApi.Horse.Middlewares` |
 | Database access | pascal-db-faa from a handler: paging, ordering, filters, migrations | `samples/02-db` |
 | Logging and observability | the access log, trace context, metrics, health, spans to OpenTelemetry | `docs/observability-design.md` |
 | OpenAPI | documenting routes and DTOs, Swagger UI | `docs/openapi-design.md` |

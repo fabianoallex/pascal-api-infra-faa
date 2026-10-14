@@ -26,6 +26,20 @@ may change the API; each such change is listed here.
   message, `requestId`, log line), so the middlewares after it are covered on both compilers and
   the access line has the real status. Sample 01 gains `/fail/middleware`;
   `tools/http_scenarios.sh` checks it.
+- **The rate limit's IP key could be escaped with `X-Forwarded-For`.** The default key was the
+  header's first address, which the client writes: six requests with a new value each all passed
+  a limit of 3 (measured, FPC 3.2.2/Windows). The key is now `TrustedClientIp`: the connection's
+  address, with the header trusted only from a loopback peer or from the proxies declared in the
+  new `TRateLimitOptions.ProxyHops` (default 0), read from the right. **An API behind a proxy
+  that relied on the old key must set `ProxyHops`** (1 for one proxy). The MCP executor now
+  forwards the chain as a proxy does (`ForwardedForChain`), so a tool call keeps its caller's key.
+- **The rate limit's memory grew with every key ever seen.** A key's bucket was never freed:
+  1,000,000 distinct keys held 231 MiB after their windows ended, and with the hole above a client
+  could grow it at will (measured). `TRateLimitState` now frees the keys whose window is over,
+  once per window, and shrinks its table: 0 KiB left in the same run.
+- **The rate limit counted a request to a route that doesn't exist twice**, and sent its headers
+  twice (Horse runs the global middlewares twice there; measured). It marks the request now, as
+  the logger does; `tools/http_scenarios_tenants.sh` (88 checks) checks it.
 - **`TJwtMiddleware.Claims` decoded a token signed with an empty key when `TJwtMiddleware.New`
   was never called** (only `TAuthMiddleware` in use: the secret was ''). Measured with a probe.
   `TJwt.Decode` now refuses an empty secret (`jrBadSignature`; anyone can sign with an empty
@@ -38,7 +52,7 @@ may change the API; each such change is listed here.
   request had no Bearer token, `Bearer error="invalid_token"` when its token was refused (RFC
   6750), from `TJwtMiddleware`, `TAuthMiddleware` and `TTenantMiddleware`. New
   `BearerChallenge` in `PascalApi.Http` (tested); `tools/http_scenarios.sh` (158 checks) and
-  `tools/http_scenarios_tenants.sh` (85) check the header.
+  `tools/http_scenarios_tenants.sh` check the header.
 - **`.env` file: spaces around `=` are ignored, and the last line of a repeated key wins.**
   `TAppConfig` kept the spaces after `=` (`PORT = 9000` was ` 9000`; `NAME = "x"` kept the
   space and the quotes) and returned the first line of a repeated key, so `A=` before `A=later`
@@ -59,8 +73,9 @@ may change the API; each such change is listed here.
 - `docs/guide/`: guides for the library's users, one per topic, to one template (index:
   `docs/guide/README.md`). The first is multi-tenancy (`docs/guide/multitenancy.md`); the others
   are listed there as planned. Then getting started (`docs/guide/getting-started.md`), configuration
-  (`docs/guide/configuration.md`), errors and validation (`docs/guide/errors.md`) and
-  authentication (`docs/guide/authentication.md`).
+  (`docs/guide/configuration.md`), errors and validation (`docs/guide/errors.md`),
+  authentication (`docs/guide/authentication.md`) and rate limiting
+  (`docs/guide/rate-limiting.md`).
 - **`${TENANT.alias}` in tenant SQL, for a JOIN.** `TTenantFilter.Prepare` replaces each
   `${TENANT.c}` with `c.TENANT_ID = :TENANT_ID` (plain `${TENANT}` is unchanged). Measured on
   SQLite: plain `${TENANT}` with two joined tables that have the column is "ambiguous column

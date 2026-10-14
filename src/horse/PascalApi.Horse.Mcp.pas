@@ -307,7 +307,10 @@ begin
   LHeaders.Method := AReq.Headers['Mcp-Method'];
   LHeaders.Name := AReq.Headers['Mcp-Name'];
   LForward.Authorization := AReq.Headers['Authorization'];
-  LForward.ForwardedFor := ClientIp(AReq.Headers['X-Forwarded-For'], RemoteAddr(AReq), '');
+  // As a proxy does: the incoming chain plus the peer. The call reaches the
+  // API from a loopback address, which TrustedClientIp skips, so its rate
+  // limit key is the same as this request's.
+  LForward.ForwardedFor := ForwardedForChain(AReq.Headers['X-Forwarded-For'], RemoteAddr(AReq));
   LForward.TraceParent := AReq.Headers['traceparent'];
   LForward.TraceState := AReq.Headers['tracestate'];
   LAnswer := LEntry.Server.HandlePost(AReq.Body, LHeaders, LForward, LStatus);

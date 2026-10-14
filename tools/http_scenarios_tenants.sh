@@ -238,6 +238,18 @@ status_is 429 "hooli, a 6th request within the minute"
 grep -qi '^X-RateLimit-Limit: 5' "$T/headers" && ok || fail "hooli: the plan's limit, 5 (headers: $(cat "$T/headers"))"
 req GET /tenant "" -H "Authorization: Bearer $INITECH"
 status_is 200 "initech, on the same shared database, has its own window"
+# A route that doesn't exist: Horse runs the global middlewares twice, and
+# the limit counted it twice (with its headers twice) until it marked the
+# request.
+req GET /no/such/route "" -H "Authorization: Bearer $ACME"
+R1="$(header X-RateLimit-Remaining)"
+req GET /no/such/route "" -H "Authorization: Bearer $ACME"
+status_is 404 "unknown route, rate limited"
+R2="$(header X-RateLimit-Remaining)"
+[ -n "$R1" ] && [ "$R2" = "$((R1 - 1))" ] && ok \
+  || fail "unknown route: one slot per request (remaining $R1, then $R2)"
+[ "$(tr -d '\r' < "$T/headers" | grep -ci '^X-RateLimit-Remaining:')" = 1 ] && ok \
+  || fail "unknown route: X-RateLimit-Remaining once"
 
 # --- tenant.id in the access log (TLoggerMiddleware.AddField), when the
 # runner says where the server's output goes

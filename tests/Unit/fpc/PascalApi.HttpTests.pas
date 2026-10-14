@@ -66,6 +66,11 @@ type
     procedure PathMatches_TrailingSlashPrefix;
     procedure PathMatches_IgnoresCase_AndEmpty;
     procedure ClientIp_Order;
+    procedure TrustedClientIp_NoProxy_IgnoresForwardedFor;
+    procedure TrustedClientIp_ProxyHops_FromTheRight;
+    procedure TrustedClientIp_LoopbackPeer_IsAProxy;
+    procedure TrustedClientIp_UnknownPeer_IsTheDefault;
+    procedure ForwardedForChain_AppendsThePeer;
     procedure Trace_FromTraceParent;
     procedure Trace_NotSampledParent_StaysNotSampled;
     procedure Trace_InvalidTraceParent_DropsTraceState;
@@ -389,6 +394,51 @@ begin
   TAssert.AssertTrue(PathMatchesAny('/Health', ['/health']));
   TAssert.AssertFalse('an empty prefix matches nothing', PathMatchesAny('/cities', ['']));
   TAssert.AssertFalse('no prefixes', PathMatchesAny('/cities', []));
+end;
+
+procedure THttpHelpersTests.TrustedClientIp_NoProxy_IgnoresForwardedFor;
+begin
+  // The client writes X-Forwarded-For: a new value per request must not be
+  // a new key.
+  TAssert.AssertEquals('198.51.100.7', TrustedClientIp('203.0.113.1', '198.51.100.7', 0, '-'));
+  TAssert.AssertEquals('198.51.100.7', TrustedClientIp('', '198.51.100.7', 0, '-'));
+end;
+
+procedure THttpHelpersTests.TrustedClientIp_ProxyHops_FromTheRight;
+begin
+  // One proxy (10.0.0.2) appended the address it saw; what's left of it is
+  // whatever the client sent.
+  TAssert.AssertEquals('203.0.113.7',
+    TrustedClientIp('1.2.3.4, 203.0.113.7', '10.0.0.2', 1, '-'));
+  TAssert.AssertEquals('two proxies', '203.0.113.7',
+    TrustedClientIp('1.2.3.4, 203.0.113.7, 10.0.0.1', '10.0.0.2', 2, '-'));
+  TAssert.AssertEquals('more hops than addresses: the leftmost', '203.0.113.7',
+    TrustedClientIp('203.0.113.7', '10.0.0.2', 3, '-'));
+  TAssert.AssertEquals('a proxy, but no header: the peer', '10.0.0.2',
+    TrustedClientIp('', '10.0.0.2', 1, '-'));
+end;
+
+procedure THttpHelpersTests.TrustedClientIp_LoopbackPeer_IsAProxy;
+begin
+  // The API calling itself (MCP) or a proxy on the same machine.
+  TAssert.AssertEquals('203.0.113.7', TrustedClientIp('1.2.3.4, 203.0.113.7', '127.0.0.1', 0, '-'));
+  TAssert.AssertEquals('203.0.113.7', TrustedClientIp('203.0.113.7', '::1', 0, '-'));
+  TAssert.AssertEquals('203.0.113.7', TrustedClientIp('203.0.113.7', '::ffff:127.0.0.1', 0, '-'));
+  TAssert.AssertEquals('MCP behind one proxy', '203.0.113.7',
+    TrustedClientIp('1.2.3.4, 203.0.113.7, 10.0.0.2', '127.0.0.1', 1, '-'));
+  TAssert.AssertEquals('loopback alone', '127.0.0.1', TrustedClientIp('', '127.0.0.1', 0, '-'));
+end;
+
+procedure THttpHelpersTests.TrustedClientIp_UnknownPeer_IsTheDefault;
+begin
+  TAssert.AssertEquals('unknown', TrustedClientIp('203.0.113.7', '', 1, 'unknown'));
+end;
+
+procedure THttpHelpersTests.ForwardedForChain_AppendsThePeer;
+begin
+  TAssert.AssertEquals('203.0.113.7, 10.0.0.2', ForwardedForChain('203.0.113.7', '10.0.0.2'));
+  TAssert.AssertEquals('10.0.0.2', ForwardedForChain('', '10.0.0.2'));
+  TAssert.AssertEquals('203.0.113.7', ForwardedForChain('203.0.113.7', ''));
 end;
 
 procedure THttpHelpersTests.ClientIp_Order;

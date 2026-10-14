@@ -196,7 +196,25 @@ function BearerChallenge(ATokenRefused: Boolean): string;
 function PathMatchesAny(const APath: string; const APrefixes: array of string): Boolean;
 
 /// The first address of X-Forwarded-For, else ARemoteAddr, else ADefault.
+/// What the client claims: for a log line, never for a decision (a client
+/// writes its own X-Forwarded-For). Use TrustedClientIp for those.
 function ClientIp(const AForwardedFor, ARemoteAddr, ADefault: string): string;
+
+/// The client's address as far as it can be trusted, for a rate-limit key.
+/// The chain is X-Forwarded-For's addresses followed by ARemoteAddr (the
+/// connection's peer). From the right, an address is skipped while it is a
+/// proxy: a loopback address (the API calling itself, as the MCP executor
+/// does, or a proxy on the same machine), or one of the AProxyHops proxies
+/// in front of the API. The first address that isn't one is the client; the
+/// leftmost when all are. With AProxyHops = 0 and a peer that isn't
+/// loopback, X-Forwarded-For is ignored. ADefault when ARemoteAddr is ''
+/// (the peer unknown: nothing in the header can be trusted).
+function TrustedClientIp(const AForwardedFor, ARemoteAddr: string; AProxyHops: Integer;
+  const ADefault: string): string;
+
+/// What a proxy sends on as X-Forwarded-For: the incoming value with the
+/// peer it received the request from appended (the MCP executor's calls).
+function ForwardedForChain(const AForwardedFor, ARemoteAddr: string): string;
 
 /// The trace context of a request, from its headers, in this order:
 /// 1. a valid traceparent: its trace id, its span as the parent, its
@@ -580,6 +598,74 @@ begin
     Result := Trim(ARemoteAddr);
   if Result = '' then
     Result := ADefault;
+end;
+
+function IsLoopback(const AAddress: string): Boolean;
+var
+  LAddress: string;
+begin
+  LAddress := LowerCase(AAddress);
+  Result := (Copy(LAddress, 1, 4) = '127.') or (LAddress = '::1') or
+    (Copy(LAddress, 1, 11) = '::ffff:127.');
+end;
+
+function TrustedClientIp(const AForwardedFor, ARemoteAddr: string; AProxyHops: Integer;
+  const ADefault: string): string;
+var
+  LChain: array of string;
+  LRest, LItem: string;
+  LComma, I, LHops: Integer;
+begin
+  if Trim(ARemoteAddr) = '' then
+    Exit(ADefault);
+  LChain := nil;
+  LRest := AForwardedFor;
+  while LRest <> '' do
+  begin
+    LComma := Pos(',', LRest);
+    if LComma = 0 then
+    begin
+      LItem := Trim(LRest);
+      LRest := '';
+    end
+    else
+    begin
+      LItem := Trim(Copy(LRest, 1, LComma - 1));
+      LRest := Copy(LRest, LComma + 1, MaxInt);
+    end;
+    if LItem <> '' then
+    begin
+      SetLength(LChain, Length(LChain) + 1);
+      LChain[High(LChain)] := LItem;
+    end;
+  end;
+  SetLength(LChain, Length(LChain) + 1);
+  LChain[High(LChain)] := Trim(ARemoteAddr);
+  I := High(LChain);
+  LHops := 0;
+  while I > 0 do
+  begin
+    if IsLoopback(LChain[I]) then
+      Dec(I)
+    else if LHops < AProxyHops then
+    begin
+      Inc(LHops);
+      Dec(I);
+    end
+    else
+      Break;
+  end;
+  Result := LChain[I];
+end;
+
+function ForwardedForChain(const AForwardedFor, ARemoteAddr: string): string;
+begin
+  if Trim(ARemoteAddr) = '' then
+    Result := Trim(AForwardedFor)
+  else if Trim(AForwardedFor) = '' then
+    Result := Trim(ARemoteAddr)
+  else
+    Result := Trim(AForwardedFor) + ', ' + Trim(ARemoteAddr);
 end;
 
 function TRequestTrace.TraceParent: string;

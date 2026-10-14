@@ -86,7 +86,9 @@ TMcpEndpoint.Register('/mcp/cities', 'http://127.0.0.1:9330', 'cities', '1.0.0',
 2. **Execution through HTTP to the API itself**, so every middleware applies (JWT, rate limit,
    logging, error handler) exactly as for a direct call; the incoming `Authorization` header and
    the client's address (as `X-Forwarded-For`) are passed on, so authentication and per-client
-   rate limits keep working. Recommended. The alternative, calling handlers in-process, would
+   rate limits keep working (since the fix after 0.13.0, the address goes as a proxy sends it,
+   the incoming `X-Forwarded-For` plus the peer, and the call arrives from a loopback address
+   that the rate limit treats as a proxy: `TrustedClientIp`). Recommended. The alternative, calling handlers in-process, would
    skip the middlewares or need Horse internals.
 3. **Fix the origin's argument mapping**: query parameters into the query string, so GET tools
    with filters work. Recommended (the origin's behavior is a defect, not a contract).

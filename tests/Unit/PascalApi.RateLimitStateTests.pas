@@ -42,6 +42,7 @@ type
   TRateLimitStateTests = class
   private
     FState: IRateLimitState;
+    FImpl: TRateLimitState;
     FClock: TManualClock;
     FClockRef: IClock;
     FT0: TDateTime;
@@ -65,6 +66,9 @@ type
     [Test] procedure LimitOfOne_SecondRequestRefused;
     [Test] procedure WallClockMovesBack_DoesNotExtendBlock;
     [Test] procedure WallClockMovesForward_DoesNotEndBlockEarly;
+    [Test] procedure KeysOutsideTheWindow_AreFreed;
+    [Test] procedure KeysInsideTheWindow_AreKept;
+    [Test] procedure FreedKey_StartsAFullWindow;
   end;
 
 implementation
@@ -114,7 +118,8 @@ begin
   FClockRef := FClock; // keeps it alive; TClock and TTicker hold references too
   TClock.SetClock(FClock);
   TTicker.SetTicker(FClock);
-  FState := TRateLimitState.Create;
+  FImpl := TRateLimitState.Create;
+  FState := FImpl;
 end;
 
 procedure TRateLimitStateTests.TearDown;
@@ -280,6 +285,43 @@ begin
   TAssert.AssertEquals('full quota back', 9, LRem);
   TAssert.AssertEquals('ResetUnix: wall-clock now (already moved back) + window',
     DateTimeToUnix(FT0 - 1 / HoursPerDay + 121 / SECS_PER_DAY, False), LReset);
+end;
+
+procedure TRateLimitStateTests.KeysOutsideTheWindow_AreFreed;
+var
+  LRem: Integer; LReset: Int64; LExc: Boolean;
+begin
+  FillBucket('ip1', 10, 60, 3);
+  FillBucket('ip2', 10, 60, 1);
+  TAssert.AssertEquals(2, FImpl.KeyCount);
+  FClock.SetTime(FT0 + 61 / SECS_PER_DAY);
+  FState.CheckAndRecord('ip3', 10, 60, LRem, LReset, LExc);
+  TAssert.AssertEquals('only ip3 is left', 1, FImpl.KeyCount);
+end;
+
+procedure TRateLimitStateTests.KeysInsideTheWindow_AreKept;
+var
+  LRem: Integer; LReset: Int64; LExc: Boolean;
+begin
+  FillBucket('ip1', 10, 60, 1);
+  FClock.SetTime(FT0 + 30 / SECS_PER_DAY);
+  FillBucket('ip2', 10, 60, 1);
+  FClock.SetTime(FT0 + 61 / SECS_PER_DAY);
+  FState.CheckAndRecord('ip3', 10, 60, LRem, LReset, LExc);
+  TAssert.AssertEquals('ip1 freed; ip2 (31 s old) and ip3 kept', 2, FImpl.KeyCount);
+  FState.CheckAndRecord('ip2', 10, 60, LRem, LReset, LExc);
+  TAssert.AssertEquals('ip2 kept its first request', 8, LRem);
+end;
+
+procedure TRateLimitStateTests.FreedKey_StartsAFullWindow;
+var
+  LRem: Integer; LReset: Int64; LExc: Boolean;
+begin
+  FillBucket('ip1', 3, 60, 3);
+  FClock.SetTime(FT0 + 61 / SECS_PER_DAY);
+  FState.CheckAndRecord('ip1', 3, 60, LRem, LReset, LExc);
+  TAssert.AssertFalse(LExc);
+  TAssert.AssertEquals(2, LRem);
 end;
 
 procedure TRateLimitStateTests.WallClockMovesForward_DoesNotEndBlockEarly;

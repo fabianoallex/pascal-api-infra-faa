@@ -2,7 +2,7 @@
 
 One API serving several customers (tenants), each of them seeing only its own data. This guide
 builds such an API step by step. The code comes from `samples/03-tenants`, which compiles on
-Delphi and FPC and is checked over HTTP by `tools/http_scenarios_tenants.sh` (85 checks, most of
+Delphi and FPC and is checked over HTTP by `tools/http_scenarios_tenants.sh` (88 checks, most of
 them one tenant trying to reach another's rows).
 
 Why it works this way, and what was measured on the way: [the design](../multitenancy-design.md).

@@ -173,19 +173,26 @@ type
   TRateLimitOptions = record
     Limit: Integer;
     WindowSeconds: Integer;
-    /// nil: the client's IP (X-Forwarded-For, then the remote address).
+    /// nil: the client's IP, PascalApi.Http.TrustedClientIp with ProxyHops.
     KeyExtractor: TRateLimitKeyExtractor;
+    /// The proxies in front of the API whose X-Forwarded-For is trusted for
+    /// the default key: 0 (the default) ignores the header unless the peer
+    /// is a loopback address; 1 behind one proxy (a load balancer), and so
+    /// on. Until 0.13.0 the key was X-Forwarded-For's first address, which
+    /// the client writes: a new value per request escaped the limit.
+    ProxyHops: Integer;
     /// nil: Limit for every request. Otherwise the limit of each request
     /// (with a KeyExtractor that groups requests the same way, e.g. by
     /// tenant and plan); a result of 0 or less falls back to Limit.
     LimitFor: TRateLimitLimitFunc;
-    /// 60 requests per 60 seconds, by IP.
+    /// 60 requests per 60 seconds, by IP, no proxy trusted.
     class function Default: TRateLimitOptions; static;
   end;
 
   /// Sliding window per key (PascalApi.RateLimitState). Every response gets
   /// X-RateLimit-Limit/-Remaining/-Reset; a refused one is 429 with
-  /// Retry-After.
+  /// Retry-After. A request is counted once, also when Horse runs the
+  /// middlewares twice (a route that doesn't exist).
   TRateLimitMiddleware = class
   public
     class function New(ALimit, AWindowSeconds: Integer): THorseCallback; overload; static;
@@ -277,6 +284,8 @@ end;
 // a name with one can only come from this code.
 const
   LOGGED_KEY = ':pascalapi-logged'#10;
+  // Set by the rate limit's first pass; same reasoning as LOGGED_KEY.
+  RATE_LIMITED_KEY = ':pascalapi-ratelimit'#10;
 
 { Error handler }
 
@@ -668,6 +677,7 @@ begin
   Result.WindowSeconds := 60;
   Result.KeyExtractor := nil;
   Result.LimitFor := nil;
+  Result.ProxyHops := 0;
 end;
 
 procedure RateLimitHandler(AReq: THorseRequest; ARes: THorseResponse; ANext: TNextProc);
@@ -677,10 +687,21 @@ var
   LResetUnix, LRetryAfter: Int64;
   LExceeded: Boolean;
 begin
+  // Horse runs the router twice when no route matches (see LoggerHandler):
+  // the first pass counts the request, the second only goes on. Measured
+  // before this mark: two slots per request and the X-RateLimit headers
+  // twice (FPC 3.2.2/Windows, 2026-10-14).
+  if AReq.Headers.Dictionary.ContainsKey(RATE_LIMITED_KEY) then
+  begin
+    ANext();
+    Exit;
+  end;
+  AReq.Headers.Dictionary.Add(RATE_LIMITED_KEY, '1');
   if Assigned(GRateLimit.KeyExtractor) then
     LKey := GRateLimit.KeyExtractor(AReq)
   else
-    LKey := ClientIp(AReq.Headers['X-Forwarded-For'], RemoteAddrOf(AReq), 'unknown');
+    LKey := TrustedClientIp(AReq.Headers['X-Forwarded-For'], RemoteAddrOf(AReq),
+      GRateLimit.ProxyHops, 'unknown');
   LLimit := 0;
   if Assigned(GRateLimit.LimitFor) then
     LLimit := GRateLimit.LimitFor(AReq);
