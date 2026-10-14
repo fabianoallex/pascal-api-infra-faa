@@ -8,11 +8,15 @@ may change the API; each such change is listed here.
 
 ### Added
 
+- `docs/guide/`: guides for the library's users, one per topic, to one template (index:
+  `docs/guide/README.md`). The first is multi-tenancy (`docs/guide/multitenancy.md`); the others
+  are listed there as planned.
 - **`${TENANT.alias}` in tenant SQL, for a JOIN.** `TTenantFilter.Prepare` replaces each
   `${TENANT.c}` with `c.TENANT_ID = :TENANT_ID` (plain `${TENANT}` is unchanged). Measured on
   SQLite: plain `${TENANT}` with two joined tables that have the column is "ambiguous column
   name", and a join whose `ON` lacks the tenant returns the other tenants' joined rows. Each
-  joined table gets its own tag, in its `ON` (`docs/multitenancy-design.md`, decision 8).
+  joined table gets its own tag, in its `ON` (`docs/multitenancy-design.md`, decision 8;
+  `docs/guide/multitenancy.md`, step 2).
 - **Sample 03: a JOIN of two tenant tables.** `STATES` (migration 3), `POST /states` and
   `GET /cities/:code/details` (a `LEFT JOIN` with `${TENANT.c}` and `${TENANT.s}`).
   `tools/http_scenarios_tenants.sh` checks it (84 checks): another tenant's state on the shared

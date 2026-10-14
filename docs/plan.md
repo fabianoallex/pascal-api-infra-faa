@@ -192,3 +192,13 @@ After 0.12.0, the three follow-ups (released as 0.13.0): `tenant.id` in the acce
 the access log on Delphi (Indy kept a raw `:pascalapi-logged` line); fixed. And on Delphi, with
 stdout in a file or a pipe, the end of the last access line stayed in the RTL's buffer: fixed
 in pascal-common-faa 1.8.1 (`SafeWriteln` flushes on both compilers), now the minimum.
+
+### 8. Guides for the library's users — started (2026-10-14)
+
+The design documents record decisions for the maintainers; nothing explained to a user how to
+build an application. `docs/guide/` holds guides, one per topic, all written to the template in
+`docs/guide/README.md` (what it solves, the smallest program, step by step, choices, pitfalls,
+testing, reference), with code taken from the samples. Done: multi-tenancy
+(`docs/guide/multitenancy.md`). Planned, in a session of its own: the other topics listed in
+`docs/guide/README.md` (getting started, configuration, errors, authentication, rate limiting,
+database access, observability, OpenAPI, MCP, sibling libraries).

@@ -16,6 +16,9 @@ spans exported to an OpenTelemetry collector (OTLP), and opt-in multi-tenancy
 ([docs/multitenancy-design.md](docs/multitenancy-design.md)).
 Observability plan: [docs/observability-design.md](docs/observability-design.md). See [docs/plan.md](docs/plan.md).
 
+**Guides** for building an API with the library: [docs/guide](docs/guide/README.md) (so far:
+[multi-tenancy](docs/guide/multitenancy.md)).
+
 ## Contents
 
 | Unit | What it gives you |
@@ -37,7 +40,7 @@ Observability plan: [docs/observability-design.md](docs/observability-design.md)
 | `PascalApi.Horse.Mcp` (`src/horse`) | `TMcpEndpoint.Register('/mcp', ...)`: the MCP endpoint; tool calls go through the API's own middlewares |
 | `PascalApi.Otlp` | OTLP/HTTP JSON for traces and `TOtlpHttpExporter` (an `IPcSpanExporter` for pascal-common-faa's `PascalCommon.Tracing`), configured by the standard `OTEL_*` variables |
 | `PascalApi.Horse.Observability` (`src/horse`) | `TMetricsMiddleware` (OpenTelemetry HTTP server metrics), `TMetricsEndpoint` (`/metrics`, Prometheus text), `THealthEndpoint` (`/health/live`, `/health/ready` with your checks) |
-| `PascalApi.Tenancy` | multi-tenancy, opt-in: the tenant catalog (configuration, or a control database with a TTL cache), `ITenantDataResolver` (a database per tenant or a shared one, pools named by mode, idle databases dropped), `TTenantFilter.Prepare` (the `TENANT_ID` condition and its parameter in one call), the 401/403 refusals. Design: [docs/multitenancy-design.md](docs/multitenancy-design.md) |
+| `PascalApi.Tenancy` | multi-tenancy, opt-in ([guide](docs/guide/multitenancy.md)): the tenant catalog (configuration, or a control database with a TTL cache), `ITenantDataResolver` (a database per tenant or a shared one, pools named by mode, idle databases dropped), `TTenantFilter.Prepare` (the `TENANT_ID` condition and its parameter in one call), the 401/403 refusals. Design: [docs/multitenancy-design.md](docs/multitenancy-design.md) |
 | `PascalApi.Horse.Tenancy` (`src/horse`) | `TTenantMiddleware`: the tenant from the token's `tenant_id` claim, checked against the catalog, after `TJwtMiddleware`; `TTenantMiddleware.Current(AReq)` in a handler; `TenantIdOf` for `tenant.id` in the access log and spans |
 | `PascalApi.Version` | `PASCALAPI_VERSION`, for compile-time checks |
 
@@ -96,7 +99,7 @@ How to add them to an application, minimum versions and short examples:
 
 | Sample | Shows | Checked by |
 |---|---|---|
-| [01-api](samples/01-api/ApiSample.dpr) | every middleware (errors, CORS, log, metrics, JWT, rate limit), health, paging and validation, in memory | `tools/http_scenarios.sh` (146 checks) |
+| [01-api](samples/01-api/ApiSample.dpr) | every middleware (errors, CORS, log, metrics, JWT, rate limit), health, paging and validation, in memory | `tools/http_scenarios.sh` (147 checks) |
 | [02-db](samples/02-db/DbApiSample.dpr) | SQLite through pascal-db-faa (SQLdb on FPC, FireDAC on Delphi): migrations, paging and ordering in SQL, filters, 409 from a unique key, NULL as `null` | `tools/http_scenarios_db.sh` (65 checks; also the pool metrics pascal-db-faa records) |
 | [03-tenants](samples/03-tenants/TenantApiSample.dpr) | multi-tenant with `PascalApi.Tenancy`: the tenant from a JWT claim, a database per tenant and a shared one with `TENANT_ID`, 401/403 for a removed or suspended tenant | `tools/http_scenarios_tenants.sh` (84 checks, most of them one tenant trying another's rows, also through a JOIN; also rate limit by plan and `tenant.id` in the log) |
 

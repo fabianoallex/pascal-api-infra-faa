@@ -27,6 +27,10 @@ For the general dual-compiler rules (project anatomy, `.inc`, mirrored tests, CI
 `dual-compiler-delphi-lazarus` skill. This file records only what is specific to this repo. The
 plan, the phases and what is still open are in `docs/plan.md`.
 
+**Guides for users** live in `docs/guide/` (index and template: `docs/guide/README.md`); the
+`docs/*-design.md` files are decision records. A change to a feature with a guide updates the
+guide too, and a guide's code comes from a sample that compiles and is tested.
+
 ---
 
 ## Language
@@ -252,7 +256,7 @@ exception in a helper and assert on what it returned.
 | Delphi | open `PascalApi.groupproj`, build `PascalApi.UnitTests`, `ApiSample`, `DbApiSample` and `TenantApiSample` (Win32 and Win64); run the tests; start `ApiSample.exe` and run `sh tools/http_scenarios.sh 9310`; start `DbApiSample.exe 9330 --reset` and run `sh tools/http_scenarios_db.sh 9330`; start `TenantApiSample.exe 9350 --reset` and run `sh tools/http_scenarios_tenants.sh 9350` |
 
 The middlewares are tested in two layers: their decisions in `PascalApi.HttpTests` (no server),
-and over real HTTP by `tools/http_scenarios.sh` (curl, 146 checks) against `samples/01-api`,
+and over real HTTP by `tools/http_scenarios.sh` (curl, 147 checks) against `samples/01-api`,
 which uses every middleware. In-process servers aren't used: on FPC, Horse's `Listen` blocks in
 `THTTPApplication.Run` and there is no `StopListen`.
 

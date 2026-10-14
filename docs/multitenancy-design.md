@@ -1,5 +1,8 @@
 # Design: multi-tenant APIs on this library
 
+Building an application with it: [the guide](guide/multitenancy.md). This document records the
+decisions and what was measured.
+
 Status: **approved and implemented (2026-10-13)**: `samples/03-tenants` proved the design on FPC
 (Windows and Linux) and Delphi 12 (Win32 and Win64), then the tenancy moved to the library
 (`PascalApi.Tenancy`, `PascalApi.Horse.Tenancy`; "Promotion to the library"). All ten
