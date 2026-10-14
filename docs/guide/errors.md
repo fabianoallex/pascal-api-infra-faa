@@ -141,10 +141,12 @@ POST /cities {"code":"3550308",...}   409  {"error":"A record with these values 
 | `EConstraintViolationException`, CHECK | 422 | `ConstraintCheck` | yes |
 | `ELockConflictException` (lock, deadlock, changed row) | 409 | `LockConflict` | yes |
 | `EDatabaseUnavailableException` | 503 | `DatabaseUnavailable` | yes |
+| `EPoolTimeoutException` (every pooled connection busy for the whole wait) | 503 | `ServerBusy` | yes |
 
 All tested in `PascalApi.HttpTests` (`Constraint...`, `LockConflict_Is409_Logged`,
-`DatabaseUnavailable_Is503_DetailOnlyInLog`); the 503 is also checked over HTTP (sample 01,
-`/fail/database`), and so is the unique key (sample 02).
+`DatabaseUnavailable_Is503_DetailOnlyInLog`, `PoolTimeout_Is503_Logged`); both 503s are also
+checked over HTTP (sample 01, `/fail/database` and `/fail/busy`), and so is the unique key
+(sample 02). Until 0.13.0 a pool timeout was a 500. See [Database access](database.md).
 
 The messages are fixed: the driver's text never reaches the client. Why the split: a duplicate
 key is the client's data meeting existing data, an expected outcome. A NOT NULL or CHECK error
@@ -249,6 +251,7 @@ TApiMessages.Current := LMessages;
 | `TokenMissing`, `TokenBadFormat`, `TokenInvalid` | | 401, authentication (`TAuthMiddleware`, `TJwtMiddleware`) |
 | `RateLimited` | Rate limit exceeded. Try again in %d second(s). | 429 (`%d`: seconds) |
 | `TenantMissing`, `TenantUnknown`, `TenantSuspended` | | multi-tenancy, see [Multi-tenancy](multitenancy.md) |
+| `ServerBusy` | The server is busy. Try again shortly. | 503, no free database connection in time |
 | `InternalError` | An unexpected error occurred. | 500 |
 
 A field with `%s` or `%d` goes through `Format`: keep the placeholder when you replace it.

@@ -40,6 +40,13 @@ may change the API; each such change is listed here.
 - **The rate limit counted a request to a route that doesn't exist twice**, and sent its headers
   twice (Horse runs the global middlewares twice there; measured). It marks the request now, as
   the logger does; `tools/http_scenarios_tenants.sh` (88 checks) checks it.
+- **A pool timeout was a 500.** pascal-db-faa's `EPoolTimeoutException` (every pooled connection
+  busy for the whole wait) derives from `Exception`, so `MapException` answered it as an unexpected
+  error. It is now 503 with the new `TApiMessages.ServerBusy` ("The server is busy. Try again
+  shortly." / "O servidor está ocupado. Tente novamente em instantes."), logged with the pool's
+  state, as pascal-db-faa's docs suggest (capacity, not the database down). Test
+  `PoolTimeout_Is503_Logged`; sample 01 gains `/fail/busy`, checked by `tools/http_scenarios.sh`
+  (161 checks).
 - **`TJwtMiddleware.Claims` decoded a token signed with an empty key when `TJwtMiddleware.New`
   was never called** (only `TAuthMiddleware` in use: the secret was ''). Measured with a probe.
   `TJwt.Decode` now refuses an empty secret (`jrBadSignature`; anyone can sign with an empty
@@ -51,7 +58,7 @@ may change the API; each such change is listed here.
 - **A 401 carries `WWW-Authenticate`**, which HTTP requires (RFC 9110): `Bearer` when the
   request had no Bearer token, `Bearer error="invalid_token"` when its token was refused (RFC
   6750), from `TJwtMiddleware`, `TAuthMiddleware` and `TTenantMiddleware`. New
-  `BearerChallenge` in `PascalApi.Http` (tested); `tools/http_scenarios.sh` (158 checks) and
+  `BearerChallenge` in `PascalApi.Http` (tested); `tools/http_scenarios.sh` and
   `tools/http_scenarios_tenants.sh` check the header.
 - **`.env` file: spaces around `=` are ignored, and the last line of a repeated key wins.**
   `TAppConfig` kept the spaces after `=` (`PORT = 9000` was ` 9000`; `NAME = "x"` kept the
@@ -74,8 +81,8 @@ may change the API; each such change is listed here.
   `docs/guide/README.md`). The first is multi-tenancy (`docs/guide/multitenancy.md`); the others
   are listed there as planned. Then getting started (`docs/guide/getting-started.md`), configuration
   (`docs/guide/configuration.md`), errors and validation (`docs/guide/errors.md`),
-  authentication (`docs/guide/authentication.md`) and rate limiting
-  (`docs/guide/rate-limiting.md`).
+  authentication (`docs/guide/authentication.md`), rate limiting
+  (`docs/guide/rate-limiting.md`) and database access (`docs/guide/database.md`).
 - **`${TENANT.alias}` in tenant SQL, for a JOIN.** `TTenantFilter.Prepare` replaces each
   `${TENANT.c}` with `c.TENANT_ID = :TENANT_ID` (plain `${TENANT}` is unchanged). Measured on
   SQLite: plain `${TENANT}` with two joined tables that have the column is "ambiguous column

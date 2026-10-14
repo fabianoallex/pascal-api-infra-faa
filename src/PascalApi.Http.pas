@@ -22,6 +22,9 @@
     StartsWith excluded that too).
   - A 401 names its scheme (BearerChallenge, for WWW-Authenticate), as
     HTTP requires; the origin sent none.
+  - pascal-db-faa's EPoolTimeoutException (every pooled connection busy for
+    the whole wait) is 503 with TApiMessages.ServerBusy, logged; until
+    0.13.0 it was a 500 here, as any unmapped exception.
   - Bodies the JSON mapper rejects become 400: EJsonParseError, and
     EJsonMapperError whose message carries a JSON path ('$...'). An
     EJsonMapperError without a path is a programming error (a DTO not
@@ -93,6 +96,7 @@ type
     TenantUnknown: string;             // the token's tenant was removed
     TenantSuspended: string;
     InternalError: string;             // 500: any exception not mapped above
+    ServerBusy: string;                // 503: no free database connection in time
     class function English: TApiMessages; static;
     class function Portuguese: TApiMessages; static;
     /// The messages in use. Assign once, at startup.
@@ -293,6 +297,7 @@ uses
   PascalJsonMapper.Mapper,
   PascalCommon.TraceContext,
   PascalDb.Interfaces,
+  PascalDb.Pool,
   PascalDb.Version,
   PascalApi.OrderBy,
   PascalApi.Text;
@@ -350,6 +355,7 @@ begin
   Result.TenantUnknown := 'The token''s tenant no longer exists.';
   Result.TenantSuspended := 'This tenant is suspended.';
   Result.InternalError := 'An unexpected error occurred.';
+  Result.ServerBusy := 'The server is busy. Try again shortly.';
 end;
 
 class function TApiMessages.Portuguese: TApiMessages;
@@ -374,6 +380,7 @@ begin
   Result.TenantUnknown := 'O tenant do token não existe mais.';
   Result.TenantSuspended := 'Este tenant está suspenso.';
   Result.InternalError := 'Ocorreu um erro inesperado.';
+  Result.ServerBusy := 'O servidor está ocupado. Tente novamente em instantes.';
 end;
 
 { Error mapping }
@@ -458,6 +465,16 @@ begin
     Result.LogLine := DetailLine(AMethod, APath, Result.Status, E,
       EDatabaseUnavailableException(E).OriginalClassName,
       EDatabaseUnavailableException(E).OriginalMessage);
+  end
+  else if E is EPoolTimeoutException then
+  begin
+    // Capacity, not the database down (pascal-db-faa's docs/errors.md): the
+    // client may retry; the pool's state ("Pool: 5/5 active...") is for the
+    // log, where frequent ones say the pool or the database is too small.
+    Result.Status := 503;
+    Result.Message := LMessages.ServerBusy;
+    Result.LogLine := Format('%s %s -> %d: %s: %s',
+      [AMethod, APath, Result.Status, E.ClassName, E.Message]);
   end
   else
   begin

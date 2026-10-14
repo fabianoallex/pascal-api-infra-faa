@@ -173,6 +173,10 @@ req GET /fail/database "" -H "$AUTH"
 status_is 503 "database down"
 body_is "{\"error\":\"The database is unavailable. Try again shortly.\",\"requestId\":\"$(header X-Request-Id)\"}" "database down"
 body_lacks 'db.internal' "database down: no driver detail"
+req GET /fail/busy "" -H "$AUTH"
+status_is 503 "pool timeout"
+body_is "{\"error\":\"The server is busy. Try again shortly.\",\"requestId\":\"$(header X-Request-Id)\"}" "pool timeout"
+body_lacks 'Pool:' "pool timeout: the pool's state stays in the log"
 # A middleware's exception: on FPC, Horse passes it to fpWeb, not to
 # THorse.OnError (fpWeb sent its message and stack as HTML); the logger
 # answers it like the error handler.

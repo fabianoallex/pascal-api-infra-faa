@@ -23,6 +23,7 @@ uses
   PascalJsonMapper.Json,
   PascalJsonMapper.Mapper,
   PascalDb.Interfaces,
+  PascalDb.Pool,
   PascalApi.OrderBy,
   PascalApi.Text,
   PascalApi.Http;
@@ -45,6 +46,7 @@ type
     procedure ConstraintNotNullAndCheck_Are422_Logged;
     procedure LockConflict_Is409_Logged;
     procedure DatabaseUnavailable_Is503_DetailOnlyInLog;
+    procedure PoolTimeout_Is503_Logged;
     procedure Other_Is500_Logged;
     procedure Messages_CanBeReplaced;
     procedure ErrorJson_EscapesAndKeepsNonAscii;
@@ -221,6 +223,19 @@ begin
   TAssert.AssertEquals('The record is locked or was changed by another operation. Try again.',
     R.Message);
   TAssert.AssertTrue(R.LogLine <> '');
+end;
+
+procedure TErrorMappingTests.PoolTimeout_Is503_Logged;
+var
+  R: TErrorResponse;
+begin
+  R := Map(EPoolTimeoutException.Create(5, 5, 2, 50));
+  TAssert.AssertEquals(503, R.Status);
+  TAssert.AssertEquals('The server is busy. Try again shortly.', R.Message);
+  TAssert.AssertTrue('logged', Pos('POST /cities -> 503: EPoolTimeoutException: ', R.LogLine) = 1);
+  TApiMessages.Current := TApiMessages.Portuguese;
+  TAssert.AssertEquals('O servidor está ocupado. Tente novamente em instantes.',
+    Map(EPoolTimeoutException.Create(5, 5, 2, 50)).Message);
 end;
 
 procedure TErrorMappingTests.DatabaseUnavailable_Is503_DetailOnlyInLog;
