@@ -139,7 +139,8 @@ type
     class procedure AddField(const AName: string; AValueOf: TRequestValueFunc); static;
   end;
 
-  /// "Authorization: Bearer <token>", checked by AValidator; 401 otherwise.
+  /// "Authorization: Bearer <token>", checked by AValidator; 401 otherwise,
+  /// with WWW-Authenticate (PascalApi.Http.BearerChallenge), as TJwtMiddleware.
   /// Paths matching AExcludedPrefixes (whole segments) pass untouched.
   TAuthMiddleware = class
   public
@@ -160,7 +161,8 @@ type
     class function New(const ASecret: string;
       const AExcludedPrefixes: array of string): THorseCallback; overload; static;
     /// The claims of the request's token, verified again with the configured
-    /// secret; nil when absent or invalid. The caller frees the result.
+    /// secret; nil when absent or invalid, and nil when New wasn't called
+    /// (TAuthMiddleware alone). The caller frees the result.
     class function Claims(AReq: THorseRequest): TJsonValue; static;
     /// New was called (for TRouteDoc.Serve, which documents the scheme).
     class function Configured: Boolean; static;
@@ -558,16 +560,19 @@ begin
   case ParseBearer(AReq.Headers['Authorization'], LToken) of
     brMissing:
       begin
+        ARes.AddHeader('WWW-Authenticate', BearerChallenge(False));
         SendError(ARes, 401, TApiMessages.Current.TokenMissing);
         Exit(False);
       end;
     brNotBearer:
       begin
+        ARes.AddHeader('WWW-Authenticate', BearerChallenge(False));
         SendError(ARes, 401, TApiMessages.Current.TokenBadFormat);
         Exit(False);
       end;
     brEmpty:
       begin
+        ARes.AddHeader('WWW-Authenticate', BearerChallenge(True));
         SendError(ARes, 401, TApiMessages.Current.TokenInvalid);
         Exit(False);
       end;
@@ -577,7 +582,10 @@ begin
   else
     LValid := Assigned(GAuthValidator) and GAuthValidator(LToken);
   if not LValid then
+  begin
+    ARes.AddHeader('WWW-Authenticate', BearerChallenge(True));
     SendError(ARes, 401, TApiMessages.Current.TokenInvalid);
+  end;
   Result := LValid;
 end;
 
@@ -646,7 +654,9 @@ var
   LToken: string;
 begin
   Result := nil;
-  if ParseBearer(AReq.Headers['Authorization'], LToken) = brOk then
+  // Without New there is no secret, and TJwt.Decode refuses an empty one: a
+  // token signed with an empty key must not read as valid here.
+  if (GJwtSecret <> '') and (ParseBearer(AReq.Headers['Authorization'], LToken) = brOk) then
     TJwt.Decode(LToken, GJwtSecret, Result);
 end;
 

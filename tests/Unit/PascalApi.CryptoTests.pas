@@ -60,6 +60,7 @@ type
     [Test] procedure Decode_WrongSecret_BadSignature;
     [Test] procedure Decode_TamperedPayload_BadSignature;
     [Test] procedure Decode_AlgNone_Refused;
+    [Test] procedure Decode_EmptySecret_Refused;
     [Test] procedure Decode_Malformed;
     [Test] procedure Decode_Expired;
     [Test] procedure Decode_ExpBoundary;
@@ -318,6 +319,15 @@ begin
     Encode(JWT_IO_CLAIMS) + '.', JWT_IO_SECRET) = jrUnsupportedAlg);
   TAssert.AssertTrue(DecodeResult(Encode('{"alg":"HS512"}') + '.' + Encode(JWT_IO_CLAIMS) +
     '.abc', JWT_IO_SECRET) = jrUnsupportedAlg);
+end;
+
+procedure TJwtTests.Decode_EmptySecret_Refused;
+var
+  LClaims: TJsonValue;
+begin
+  // Anyone can sign with an empty key, so no token verifies against one.
+  TAssert.AssertTrue(TJwt.Decode(TJwt.SignHS256('{"sub":"x"}', ''), '', LClaims) = jrBadSignature);
+  TAssert.AssertTrue('no claims', LClaims = nil);
 end;
 
 procedure TJwtTests.Decode_Malformed;

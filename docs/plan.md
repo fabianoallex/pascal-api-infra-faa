@@ -200,6 +200,7 @@ build an application. `docs/guide/` holds guides, one per topic, all written to 
 `docs/guide/README.md` (what it solves, the smallest program, step by step, choices, pitfalls,
 testing, reference), with code taken from the samples. Done: multi-tenancy
 (`docs/guide/multitenancy.md`), getting started (`docs/guide/getting-started.md`), configuration
-(`docs/guide/configuration.md`), errors and validation (`docs/guide/errors.md`). Planned: the
-other topics listed in `docs/guide/README.md` (authentication, rate limiting,
+(`docs/guide/configuration.md`), errors and validation (`docs/guide/errors.md`), authentication
+(`docs/guide/authentication.md`). Planned: the other topics listed in `docs/guide/README.md`
+(rate limiting,
 database access, observability, OpenAPI, MCP, sibling libraries).

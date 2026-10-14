@@ -13,7 +13,8 @@
       LClaims.Free;
     end;
 
-  Decode checks, in this order: three dot-separated Base64url parts; the
+  Decode refuses an empty secret (jrBadSignature): anyone can sign with an
+  empty key. Then it checks, in this order: three dot-separated Base64url parts; the
   header is a JSON object with "alg":"HS256" (any other alg, "none"
   included, is refused); the signature (compared in constant time); the
   payload is a JSON object; "exp" and "nbf", when present, are numbers of
@@ -132,7 +133,8 @@ var
   LTime: Int64;
 begin
   AClaims := nil;
-
+  if ASecret = '' then
+    Exit(jrBadSignature);
   LDot1 := Pos('.', AToken);
   if LDot1 = 0 then
     Exit(jrMalformed);

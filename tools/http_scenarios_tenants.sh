@@ -32,10 +32,10 @@ $PY -c "" >/dev/null 2>&1 || PY=python
 req() {
   M="$1"; P="$2"; B="$3"; shift 3 2>/dev/null || shift $#
   if [ -n "$B" ]; then
-    curl -s -X "$M" -o "$T/body" -w '%{http_code}' -H 'Content-Type: application/json' \
+    curl -s -X "$M" -o "$T/body" -D "$T/headers" -w '%{http_code}' -H 'Content-Type: application/json' \
       --data-binary "$B" "$@" "$BASE$P" > "$T/status"
   else
-    curl -s -X "$M" -o "$T/body" -w '%{http_code}' "$@" "$BASE$P" > "$T/status"
+    curl -s -X "$M" -o "$T/body" -D "$T/headers" -w '%{http_code}' "$@" "$BASE$P" > "$T/status"
   fi
 }
 ok()   { CHECKS=$((CHECKS + 1)); }
@@ -44,6 +44,8 @@ status_is() { [ "$(cat "$T/status")" = "$1" ] && ok || fail "$2: status $(cat "$
 body_is()   { [ "$(cat "$T/body")" = "$1" ] && ok || fail "$2: body $(cat "$T/body"), expected $1"; }
 body_has()  { grep -qF -- "$1" "$T/body" && ok || fail "$2: body lacks $1 (body: $(cat "$T/body"))"; }
 body_lacks(){ grep -qF -- "$1" "$T/body" && fail "$2: body has $1" || ok; }
+header()    { tr -d '\r' < "$T/headers" | grep -i "^$1:" | head -1 | sed 's/^[^:]*: *//'; }
+header_is() { [ "$(header "$1")" = "$2" ] && ok || fail "$3: header $1 = '$(header "$1")', expected '$2'"; }
 # Sum of a metric's samples whose labels contain $2 (a Prometheus text file in $3).
 metric_sum() { awk -v n="$1" -v l="$2" 'index($1, n "{") == 1 && index($1, l) > 0 { s += $NF } END { printf "%d", s }' "$3"; }
 
@@ -130,6 +132,7 @@ TOKEN="$(sign '{"sub":"ana"}')"
 req GET /cities "" -H "Authorization: Bearer $TOKEN"
 status_is 401 "token without a tenant"
 body_is '{"error":"The token names no tenant."}' "token without a tenant"
+header_is WWW-Authenticate 'Bearer error="invalid_token"' "token without a tenant"
 TOKEN="$(sign '{"sub":"ana","tenant_id":7}')"
 req GET /cities "" -H "Authorization: Bearer $TOKEN"
 status_is 401 "token with a non-string tenant"

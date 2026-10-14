@@ -60,6 +60,7 @@ implementation
 
 uses
   PascalJsonMapper.Json,
+  PascalApi.Http,
   PascalApi.Horse.Middlewares;
 
 const
@@ -108,6 +109,9 @@ begin
   if LCheck <> tcOk then
   begin
     LBody := TenantRejection(LCheck, LStatus);
+    // A valid token naming no usable tenant: the client should log in again.
+    if LStatus = 401 then
+      ARes.AddHeader('WWW-Authenticate', BearerChallenge(True));
     TJsonSend.Send(ARes, LBody, LStatus);
     Exit;
   end;

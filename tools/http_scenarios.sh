@@ -74,12 +74,15 @@ header_is Access-Control-Allow-Origin 'https://app.example.com' "simple request"
 req GET /cities ""
 status_is 401 "no token"
 body_is '{"error":"Authorization token missing."}' "no token"
+header_is WWW-Authenticate 'Bearer' "no token: the challenge HTTP requires on a 401"
 req GET /cities "" -H 'Authorization: Basic dXNlcjpwYXNz'
 status_is 401 "basic auth"
 body_has 'Bearer <token>' "basic auth"
+header_is WWW-Authenticate 'Bearer' "basic auth"
 req GET /cities "" -H 'Authorization: Bearer abc.def.ghi'
 status_is 401 "bad token"
 body_is '{"error":"Invalid or expired token."}' "bad token"
+header_is WWW-Authenticate 'Bearer error="invalid_token"' "bad token"
 req POST /auth/login '{"user":"ana"}'
 status_is 200 "login"
 TOKEN="$(sed 's/.*"token":"\([^"]*\)".*/\1/' "$T/body")"

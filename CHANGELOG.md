@@ -25,10 +25,20 @@ may change the API; each such change is listed here.
   `TLoggerMiddleware` now answers such an exception as the error handler does (status, fixed
   message, `requestId`, log line), so the middlewares after it are covered on both compilers and
   the access line has the real status. Sample 01 gains `/fail/middleware`;
-  `tools/http_scenarios.sh` checks it (155 checks).
+  `tools/http_scenarios.sh` checks it.
+- **`TJwtMiddleware.Claims` decoded a token signed with an empty key when `TJwtMiddleware.New`
+  was never called** (only `TAuthMiddleware` in use: the secret was ''). Measured with a probe.
+  `TJwt.Decode` now refuses an empty secret (`jrBadSignature`; anyone can sign with an empty
+  key), and `Claims` returns nil without a configured secret. Test
+  `Decode_EmptySecret_Refused`.
 
 ### Changed
 
+- **A 401 carries `WWW-Authenticate`**, which HTTP requires (RFC 9110): `Bearer` when the
+  request had no Bearer token, `Bearer error="invalid_token"` when its token was refused (RFC
+  6750), from `TJwtMiddleware`, `TAuthMiddleware` and `TTenantMiddleware`. New
+  `BearerChallenge` in `PascalApi.Http` (tested); `tools/http_scenarios.sh` (158 checks) and
+  `tools/http_scenarios_tenants.sh` (85) check the header.
 - **`.env` file: spaces around `=` are ignored, and the last line of a repeated key wins.**
   `TAppConfig` kept the spaces after `=` (`PORT = 9000` was ` 9000`; `NAME = "x"` kept the
   space and the quotes) and returned the first line of a repeated key, so `A=` before `A=later`
@@ -49,7 +59,8 @@ may change the API; each such change is listed here.
 - `docs/guide/`: guides for the library's users, one per topic, to one template (index:
   `docs/guide/README.md`). The first is multi-tenancy (`docs/guide/multitenancy.md`); the others
   are listed there as planned. Then getting started (`docs/guide/getting-started.md`), configuration
-  (`docs/guide/configuration.md`) and errors and validation (`docs/guide/errors.md`).
+  (`docs/guide/configuration.md`), errors and validation (`docs/guide/errors.md`) and
+  authentication (`docs/guide/authentication.md`).
 - **`${TENANT.alias}` in tenant SQL, for a JOIN.** `TTenantFilter.Prepare` replaces each
   `${TENANT.c}` with `c.TENANT_ID = :TENANT_ID` (plain `${TENANT}` is unchanged). Measured on
   SQLite: plain `${TENANT}` with two joined tables that have the column is "ambiguous column

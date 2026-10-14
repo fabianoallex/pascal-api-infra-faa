@@ -3,7 +3,7 @@
 From an empty folder to a Horse API that answers JSON, turns exceptions into HTTP statuses, logs
 every request and checks a token, on Delphi and on Lazarus/FPC from one source. The code comes
 from `samples/01-api`, which compiles on both compilers and is checked over HTTP by
-`tools/http_scenarios.sh` (155 checks), except the smallest program below, which says where it
+`tools/http_scenarios.sh` (158 checks), except the smallest program below, which says where it
 was checked.
 
 ## What it solves
@@ -419,7 +419,7 @@ environment in production. More in [Configuration](configuration.md).
 
 The login route signs a token with `TJwt.SignHS256(LClaims, GSecret)`, and a handler reads the
 verified claims with `TJwtMiddleware.Claims(AReq)` (the caller frees the result). Both are in
-sample 01 (`PostLogin`, `GetMe`); the Authentication guide (planned) covers them.
+sample 01 (`PostLogin`, `GetMe`); [Authentication](authentication.md) covers them.
 
 ### 8. Callbacks are methods
 
@@ -536,7 +536,7 @@ on both (FastMM, heaptrc); see the `dual-compiler-delphi-lazarus` skill for mirr
 
 - `samples/01-api`: `ApiSample.dpr` (the program, the middleware order), `ApiSample.Cities.pas`
   (the DTO, ordering, paging).
-- `tools/http_scenarios.sh`: the 155 checks against sample 01.
+- `tools/http_scenarios.sh`: the 158 checks against sample 01.
 - `PascalApi.Horse.Middlewares` (`src/horse`): the comment at the top of the unit and each
   middleware's declaration.
 - `PascalApi.Http`: `MapException` (exception → status and message), `TApiMessages`.

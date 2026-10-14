@@ -61,6 +61,7 @@ type
     procedure Cors_ExactOrigin_NoOrigin_NoHeaders;
     procedure Cors_OptionalHeaders;
     procedure Bearer_Results;
+    procedure BearerChallenge_NoTokenOrRefused;
     procedure PathMatches_WholeSegments;
     procedure PathMatches_TrailingSlashPrefix;
     procedure PathMatches_IgnoresCase_AndEmpty;
@@ -360,6 +361,12 @@ begin
   TAssert.AssertTrue('basic', ParseBearer('Basic dXNlcjpwYXNz', LToken) = brNotBearer);
   TAssert.AssertTrue('no space', ParseBearer('Bearerabc', LToken) = brNotBearer);
   TAssert.AssertTrue('empty token', ParseBearer('Bearer    ', LToken) = brEmpty);
+end;
+
+procedure THttpHelpersTests.BearerChallenge_NoTokenOrRefused;
+begin
+  TAssert.AssertEquals('Bearer', BearerChallenge(False));
+  TAssert.AssertEquals('Bearer error="invalid_token"', BearerChallenge(True));
 end;
 
 procedure THttpHelpersTests.PathMatches_WholeSegments;

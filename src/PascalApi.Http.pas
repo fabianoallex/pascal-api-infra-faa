@@ -20,6 +20,8 @@
   - An excluded path prefix matches whole segments: '/auth/login' excludes
     '/auth/login' and '/auth/login/x', not '/auth/login-admin' (the origin's
     StartsWith excluded that too).
+  - A 401 names its scheme (BearerChallenge, for WWW-Authenticate), as
+    HTTP requires; the origin sent none.
   - Bodies the JSON mapper rejects become 400: EJsonParseError, and
     EJsonMapperError whose message carries a JSON path ('$...'). An
     EJsonMapperError without a path is a programming error (a DTO not
@@ -181,6 +183,13 @@ function CorsHeaders(const AOptions: TCorsOptions; const ARequestOrigin: string)
 
 /// The token of "Authorization: Bearer <token>" (scheme case-insensitive).
 function ParseBearer(const AAuthorization: string; out AToken: string): TBearerResult;
+
+/// The WWW-Authenticate header of a 401, which HTTP requires (RFC 9110,
+/// 11.6.1), in RFC 6750's Bearer form: 'Bearer' when the request carried no
+/// Bearer token (no Authorization, or another scheme), and
+/// 'Bearer error="invalid_token"' when it carried one that was refused
+/// (invalid, expired, empty, or naming no usable tenant).
+function BearerChallenge(ATokenRefused: Boolean): string;
 
 /// True if APath is one of the prefixes or below it (whole segments, case
 /// ignored). A prefix ending with '/' matches anything below it.
@@ -527,6 +536,14 @@ begin
     Result := brEmpty
   else
     Result := brOk;
+end;
+
+function BearerChallenge(ATokenRefused: Boolean): string;
+begin
+  if ATokenRefused then
+    Result := 'Bearer error="invalid_token"'
+  else
+    Result := 'Bearer';
 end;
 
 function PathMatchesAny(const APath: string; const APrefixes: array of string): Boolean;
