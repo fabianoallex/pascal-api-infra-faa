@@ -200,11 +200,12 @@ function BearerChallenge(ATokenRefused: Boolean): string;
 function PathMatchesAny(const APath: string; const APrefixes: array of string): Boolean;
 
 /// The first address of X-Forwarded-For, else ARemoteAddr, else ADefault.
-/// What the client claims: for a log line, never for a decision (a client
-/// writes its own X-Forwarded-For). Use TrustedClientIp for those.
+/// What the client claims (a client writes its own X-Forwarded-For): never
+/// for a decision or a log. The library uses TrustedClientIp since 0.13.0.
 function ClientIp(const AForwardedFor, ARemoteAddr, ADefault: string): string;
 
-/// The client's address as far as it can be trusted, for a rate-limit key.
+/// The client's address as far as it can be trusted: for a rate-limit key, a
+/// log line, a span (PascalApi.Horse.Middlewares.TClientAddress).
 /// The chain is X-Forwarded-For's addresses followed by ARemoteAddr (the
 /// connection's peer). From the right, an address is skipped while it is a
 /// proxy: a loopback address (the API calling itself, as the MCP executor

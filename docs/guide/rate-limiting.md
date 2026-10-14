@@ -80,7 +80,7 @@ req GET /limited "" -H "$AUTH" -H 'X-Client: a'
 status_is 429 "over the limit"
 ```
 
-### 3. Behind a proxy: `ProxyHops`
+### 3. Behind a proxy: `TClientAddress.ProxyHops`
 
 With the default key, the client's address is the connection's peer. Behind a load balancer or a
 reverse proxy, the peer is the proxy, and the client's address is in `X-Forwarded-For`, which the
@@ -88,8 +88,12 @@ proxy appends to. But a client can send that header too, with anything in it. So
 trusts the header only as far as you say there are proxies:
 
 ```pascal
-GRateLimit.ProxyHops := 1;   // one proxy in front of the API
+TClientAddress.ProxyHops := 1;   // one proxy in front of the API; at startup, before Listen
 ```
+
+It is one setting for the process (`PascalApi.Horse.Middlewares`): the same address goes into
+the access log and the request's span ([Logging and observability](observability.md), step 3), so the limit and the logs
+agree on who the client is.
 
 How the address is found (`TrustedClientIp`, tested): the chain is `X-Forwarded-For`'s addresses
 followed by the peer. From the right, each address is skipped while it is a proxy, that is one
@@ -222,7 +226,7 @@ costs memory while it lasts.
 
 ## Pitfalls
 
-- **Trusting a header the client writes.** `X-Forwarded-For` without `ProxyHops` (step 3), or a
+- **Trusting a header the client writes.** `X-Forwarded-For` beyond `ProxyHops` (step 3), or a
   key function that reads `X-Client`, `X-Api-Key` without checking it, or any request header:
   each new value is a new window.
 - **`ProxyHops` too high**, or set while the API is reachable without the proxy: the client's

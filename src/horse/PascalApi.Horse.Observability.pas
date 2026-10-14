@@ -102,9 +102,13 @@ type
 
 const
   // Set on the request by the first pass (see TLoggerMiddleware: Horse runs
-  // global middlewares twice when no route matches). A header name can't
-  // contain ':', so no client can send it.
-  METERED_KEY = ':pascalapi-metered';
+  // global middlewares twice when no route matches). It ends with a line
+  // feed, as the logger's mark: "no header name starts with ':'" was false
+  // for Indy, which kept a raw ':pascalapi-logged: 1' line. A raw
+  // ':pascalapi-metered: 1' line didn't hide a request from the metrics on
+  // either compiler (measured, 2026-10-14), but the reason given here was
+  // that same false belief.
+  METERED_KEY = ':pascalapi-metered'#10;
 
 var
   GDuration: TPcHistogram;

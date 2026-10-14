@@ -20,7 +20,8 @@ Observability plan: [docs/observability-design.md](docs/observability-design.md)
 [getting started](docs/guide/getting-started.md), [configuration](docs/guide/configuration.md),
 [errors and validation](docs/guide/errors.md),
 [authentication](docs/guide/authentication.md), [rate limiting](docs/guide/rate-limiting.md),
-[database access](docs/guide/database.md), [multi-tenancy](docs/guide/multitenancy.md)).
+[database access](docs/guide/database.md),
+[logging and observability](docs/guide/observability.md), [multi-tenancy](docs/guide/multitenancy.md)).
 
 ## Contents
 
@@ -102,7 +103,7 @@ How to add them to an application, minimum versions and short examples:
 
 | Sample | Shows | Checked by |
 |---|---|---|
-| [01-api](samples/01-api/ApiSample.dpr) | every middleware (errors, CORS, log, metrics, JWT, rate limit), health, paging and validation, in memory | `tools/http_scenarios.sh` (161 checks) |
+| [01-api](samples/01-api/ApiSample.dpr) | every middleware (errors, CORS, log, metrics, JWT, rate limit), health, paging and validation, in memory | `tools/http_scenarios.sh` (164 checks) |
 | [02-db](samples/02-db/DbApiSample.dpr) | SQLite through pascal-db-faa (SQLdb on FPC, FireDAC on Delphi): migrations, paging and ordering in SQL, filters, 409 from a unique key, NULL as `null` | `tools/http_scenarios_db.sh` (65 checks; also the pool metrics pascal-db-faa records) |
 | [03-tenants](samples/03-tenants/TenantApiSample.dpr) | multi-tenant with `PascalApi.Tenancy`: the tenant from a JWT claim, a database per tenant and a shared one with `TENANT_ID`, 401/403 for a removed or suspended tenant | `tools/http_scenarios_tenants.sh` (88 checks, most of them one tenant trying another's rows, also through a JOIN; also rate limit by plan and `tenant.id` in the log) |
 

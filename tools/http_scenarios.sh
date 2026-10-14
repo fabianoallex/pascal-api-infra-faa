@@ -351,6 +351,26 @@ while s.recv(65536):
     || fail "log: the middleware's 500 with trace_id=$MW_ID"
   grep -q "GET /fail/middleware 500 .*$MW_ID" "$SERVER_LOG" && ok \
     || fail "log: the access line has the middleware error's status"
+  # The client's address in the access line is what can be trusted
+  # (TClientAddress): this script's peer is loopback, a proxy on the same
+  # machine, so the header's last address is the client; the first one is
+  # whatever the client wrote and must not reach the log.
+  curl -s -o /dev/null -H 'X-Forwarded-For: 203.0.113.9, 10.0.0.1' "$BASE/health?probe=xff"
+  sleep 1
+  grep 'probe=xff' "$SERVER_LOG" | grep -q ' 10\.0\.0\.1 ' && ok \
+    || fail "log: client address from the right of X-Forwarded-For ($(grep 'probe=xff' "$SERVER_LOG"))"
+  grep 'probe=xff' "$SERVER_LOG" | grep -q '203\.0\.113\.9' && fail "log: the client-written address reached the access line" || ok
+  # A raw ':pascalapi-metered: 1' line (Indy keeps such lines) must not hide
+  # a request from the metrics.
+  M0=$(curl -s "$BASE/metrics" | grep '^http_server_request_duration_seconds_count{' | grep 'http_route="/health/live"' | awk '{ s += $NF } END { printf "%d", s }')
+  $PY -c '
+import socket, sys
+s = socket.create_connection(("127.0.0.1", int(sys.argv[1])))
+s.sendall(b"GET /health/live HTTP/1.1\r\nHost: 127.0.0.1\r\n:pascalapi-metered: 1\r\nConnection: close\r\n\r\n")
+while s.recv(65536):
+  pass' "$PORT"
+  M1=$(curl -s "$BASE/metrics" | grep '^http_server_request_duration_seconds_count{' | grep 'http_route="/health/live"' | awk '{ s += $NF } END { printf "%d", s }')
+  [ "$M1" = "$((M0 + 1))" ] && ok || fail "metrics: a raw :pascalapi-metered line hid the request ($M0 -> $M1)"
 fi
 
 rm -rf "$T"

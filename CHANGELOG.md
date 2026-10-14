@@ -30,9 +30,20 @@ may change the API; each such change is listed here.
   header's first address, which the client writes: six requests with a new value each all passed
   a limit of 3 (measured, FPC 3.2.2/Windows). The key is now `TrustedClientIp`: the connection's
   address, with the header trusted only from a loopback peer or from the proxies declared in the
-  new `TRateLimitOptions.ProxyHops` (default 0), read from the right. **An API behind a proxy
-  that relied on the old key must set `ProxyHops`** (1 for one proxy). The MCP executor now
-  forwards the chain as a proxy does (`ForwardedForChain`), so a tool call keeps its caller's key.
+  new `TClientAddress.ProxyHops` (default 0), read from the right. **An API behind a proxy that
+  relied on the old key must set `TClientAddress.ProxyHops`** (1 for one proxy). The MCP executor
+  now forwards the chain as a proxy does (`ForwardedForChain`), so a tool call keeps its caller's
+  key.
+- **Anyone could put any address in the access log and the spans.** `client_ip` (the log line)
+  and `client.address` (the server span) were `X-Forwarded-For`'s first address. They now come
+  from `TClientAddress.Resolve`, the same trusted address as the rate limit's key, from one
+  setting for the process (`TClientAddress.ProxyHops`). `tools/http_scenarios.sh` checks the
+  access line (the old Delphi build logged the client-written `203.0.113.9`: 2 checks failed).
+  `ClientIp` stays, unused by the library.
+- The metrics middleware's internal mark ends with a line feed, as the logger's
+  (`':pascalapi-metered'#10`); its comment gave the reason proved false for the logger. A raw
+  `:pascalapi-metered: 1` line didn't hide a request from the metrics on either compiler
+  (measured); `tools/http_scenarios.sh` checks it (164 checks).
 - **The rate limit's memory grew with every key ever seen.** A key's bucket was never freed:
   1,000,000 distinct keys held 231 MiB after their windows ended, and with the hole above a client
   could grow it at will (measured). `TRateLimitState` now frees the keys whose window is over,
@@ -45,8 +56,7 @@ may change the API; each such change is listed here.
   error. It is now 503 with the new `TApiMessages.ServerBusy` ("The server is busy. Try again
   shortly." / "O servidor está ocupado. Tente novamente em instantes."), logged with the pool's
   state, as pascal-db-faa's docs suggest (capacity, not the database down). Test
-  `PoolTimeout_Is503_Logged`; sample 01 gains `/fail/busy`, checked by `tools/http_scenarios.sh`
-  (161 checks).
+  `PoolTimeout_Is503_Logged`; sample 01 gains `/fail/busy`, checked by `tools/http_scenarios.sh`.
 - **`TJwtMiddleware.Claims` decoded a token signed with an empty key when `TJwtMiddleware.New`
   was never called** (only `TAuthMiddleware` in use: the secret was ''). Measured with a probe.
   `TJwt.Decode` now refuses an empty secret (`jrBadSignature`; anyone can sign with an empty
@@ -82,7 +92,8 @@ may change the API; each such change is listed here.
   are listed there as planned. Then getting started (`docs/guide/getting-started.md`), configuration
   (`docs/guide/configuration.md`), errors and validation (`docs/guide/errors.md`),
   authentication (`docs/guide/authentication.md`), rate limiting
-  (`docs/guide/rate-limiting.md`) and database access (`docs/guide/database.md`).
+  (`docs/guide/rate-limiting.md`), database access (`docs/guide/database.md`) and logging and
+  observability (`docs/guide/observability.md`).
 - **`${TENANT.alias}` in tenant SQL, for a JOIN.** `TTenantFilter.Prepare` replaces each
   `${TENANT.c}` with `c.TENANT_ID = :TENANT_ID` (plain `${TENANT}` is unchanged). Measured on
   SQLite: plain `${TENANT}` with two joined tables that have the column is "ambiguous column

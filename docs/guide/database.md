@@ -347,8 +347,8 @@ after an outage").
 - **Metrics**: the pool publishes `db.client.connection.*` (count by state, max, wait time) on the
   same `/metrics` as the HTTP metrics; the scenario checks them.
 - **Spans**: with tracing on, each statement is a span under the request's span (CI checks
-  sample 02's database spans with a real OpenTelemetry Collector). The Logging and observability
-  guide (planned; until then `docs/observability-design.md`) covers all three.
+  sample 02's database spans with a real OpenTelemetry Collector). [Logging and observability](observability.md)
+  covers all three.
 
 ## Choices
 

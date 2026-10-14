@@ -202,5 +202,6 @@ testing, reference), with code taken from the samples. Done: multi-tenancy
 (`docs/guide/multitenancy.md`), getting started (`docs/guide/getting-started.md`), configuration
 (`docs/guide/configuration.md`), errors and validation (`docs/guide/errors.md`), authentication
 (`docs/guide/authentication.md`), rate limiting (`docs/guide/rate-limiting.md`), database access
-(`docs/guide/database.md`). Planned: the other topics listed in `docs/guide/README.md` (
+(`docs/guide/database.md`), logging and observability (`docs/guide/observability.md`). Planned:
+the other topics listed in `docs/guide/README.md` (
 database access, observability, OpenAPI, MCP, sibling libraries).

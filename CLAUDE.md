@@ -169,11 +169,13 @@ its own Horse `src` to the search path.
   and `TRateLimitMiddleware` mark the request and run once (the limit counted it twice and sent
   its headers twice, measured 2026-10-14; `tools/http_scenarios_tenants.sh` checks it); a new
   global middleware with side effects must do the same. The others still run twice there.
-- **The rate limit's default key trusts `X-Forwarded-For` only from proxies**
-  (`TrustedClientIp`: a loopback peer, or `TRateLimitOptions.ProxyHops`). Until 0.13.0 it was the
-  header's first address, which the client writes: a new value per request escaped the limit
-  (measured). The MCP executor forwards the chain as a proxy does (`ForwardedForChain`), so a tool
-  call keeps its caller's key. `ClientIp` (first address) is only for log lines.
+- **The client's address is `TClientAddress.Resolve`**, for the access log, the server span and
+  the rate limit's default key: `TrustedClientIp` trusts `X-Forwarded-For` only from a loopback
+  peer or the `TClientAddress.ProxyHops` proxies (one setting per process). Until 0.13.0 all three
+  took the header's first address, which the client writes: a new value per request escaped the
+  limit, and any address reached the log (both measured). The MCP executor forwards the chain as
+  a proxy does (`ForwardedForChain`), so a tool call keeps its caller's address. Don't use
+  `ClientIp` (first address) for anything new.
 - **A middleware's exception never reaches `THorse.OnError` on FPC**: Horse 3.3.12's FPC router
   (`TRouterTreeExecutor.Run`) re-raises it, and fpWeb sent `500 text/html` with the message and
   stack addresses (measured 2026-10-14). `TLoggerMiddleware` catches it (`NextOrAnswer`) and
@@ -265,7 +267,7 @@ exception in a helper and assert on what it returned.
 | Delphi | open `PascalApi.groupproj`, build `PascalApi.UnitTests`, `ApiSample`, `DbApiSample` and `TenantApiSample` (Win32 and Win64); run the tests; start `ApiSample.exe` and run `sh tools/http_scenarios.sh 9310`; start `DbApiSample.exe 9330 --reset` and run `sh tools/http_scenarios_db.sh 9330`; start `TenantApiSample.exe 9350 --reset` and run `sh tools/http_scenarios_tenants.sh 9350` |
 
 The middlewares are tested in two layers: their decisions in `PascalApi.HttpTests` (no server),
-and over real HTTP by `tools/http_scenarios.sh` (curl, 161 checks) against `samples/01-api`,
+and over real HTTP by `tools/http_scenarios.sh` (curl, 164 checks) against `samples/01-api`,
 which uses every middleware. In-process servers aren't used: on FPC, Horse's `Listen` blocks in
 `THTTPApplication.Run` and there is no `StopListen`.
 

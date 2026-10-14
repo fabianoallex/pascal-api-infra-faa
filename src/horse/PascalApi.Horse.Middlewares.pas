@@ -170,17 +170,30 @@ type
     class function Excludes(const APath: string): Boolean; static;
   end;
 
+  /// The client's address as far as it can be trusted, for the access log
+  /// (client_ip), the server span (client.address) and the rate limit's
+  /// default key: PascalApi.Http.TrustedClientIp of X-Forwarded-For and the
+  /// connection's address, with ProxyHops. Until 0.13.0 the log and the span
+  /// took X-Forwarded-For's first address and the rate limit too, which the
+  /// client writes: anyone could put any address in the log (and escape the
+  /// limit).
+  TClientAddress = class
+  public
+    /// The proxies in front of the API that append to X-Forwarded-For: 0
+    /// (the default) trusts the header only from a loopback peer (a proxy on
+    /// the same machine, or the API calling itself, as the MCP executor
+    /// does); 1 behind one proxy (a load balancer), and so on. One setting
+    /// per process: set it at startup, before Listen.
+    class var ProxyHops: Integer;
+    /// The request's client address; '' when the connection's is unknown.
+    class function Resolve(AReq: THorseRequest): string; static;
+  end;
+
   TRateLimitOptions = record
     Limit: Integer;
     WindowSeconds: Integer;
-    /// nil: the client's IP, PascalApi.Http.TrustedClientIp with ProxyHops.
+    /// nil: the client's IP, TClientAddress.Resolve ('unknown' when unknown).
     KeyExtractor: TRateLimitKeyExtractor;
-    /// The proxies in front of the API whose X-Forwarded-For is trusted for
-    /// the default key: 0 (the default) ignores the header unless the peer
-    /// is a loopback address; 1 behind one proxy (a load balancer), and so
-    /// on. Until 0.13.0 the key was X-Forwarded-For's first address, which
-    /// the client writes: a new value per request escaped the limit.
-    ProxyHops: Integer;
     /// nil: Limit for every request. Otherwise the limit of each request
     /// (with a KeyExtractor that groups requests the same way, e.g. by
     /// tenant and plan); a result of 0 or less falls back to Limit.
@@ -262,6 +275,11 @@ begin
   Result := AReq.RemoteAddr;
   if (Result = '') and (AReq.RawWebRequest <> nil) then
     Result := AReq.RawWebRequest.RemoteAddr;
+end;
+
+class function TClientAddress.Resolve(AReq: THorseRequest): string;
+begin
+  Result := TrustedClientIp(AReq.Headers['X-Forwarded-For'], RemoteAddrOf(AReq), ProxyHops, '');
 end;
 
 class procedure TJsonSend.Send(ARes: THorseResponse; const AJson: string; AStatus: Integer);
@@ -490,7 +508,7 @@ begin
   try
     NextOrAnswer(AReq, ARes, ANext);
   finally
-    LIp := ClientIp(AReq.Headers['X-Forwarded-For'], RemoteAddrOf(AReq), '');
+    LIp := TClientAddress.Resolve(AReq);
     LRoute := MetricRoute(AReq.MatchedRoute, AReq.PathInfo);
     if LRoute <> '' then
     begin
@@ -677,7 +695,6 @@ begin
   Result.WindowSeconds := 60;
   Result.KeyExtractor := nil;
   Result.LimitFor := nil;
-  Result.ProxyHops := 0;
 end;
 
 procedure RateLimitHandler(AReq: THorseRequest; ARes: THorseResponse; ANext: TNextProc);
@@ -700,8 +717,11 @@ begin
   if Assigned(GRateLimit.KeyExtractor) then
     LKey := GRateLimit.KeyExtractor(AReq)
   else
-    LKey := TrustedClientIp(AReq.Headers['X-Forwarded-For'], RemoteAddrOf(AReq),
-      GRateLimit.ProxyHops, 'unknown');
+  begin
+    LKey := TClientAddress.Resolve(AReq);
+    if LKey = '' then
+      LKey := 'unknown';
+  end;
   LLimit := 0;
   if Assigned(GRateLimit.LimitFor) then
     LLimit := GRateLimit.LimitFor(AReq);
@@ -741,6 +761,7 @@ begin
 end;
 
 initialization
+  TClientAddress.ProxyHops := 0;
   GCorsOptions := TCorsOptions.Default;
   GRateLimit := TRateLimitOptions.Default;
   GRateLimitState := TRateLimitState.Create;
