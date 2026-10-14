@@ -6,11 +6,33 @@ may change the API; each such change is listed here.
 
 ## [Unreleased]
 
+### Security
+
+- **A 500 no longer sends the exception's message to the client.** `MapException` answered an
+  unmapped exception with `E.Message`, which can carry a path, a host or SQL (the origin,
+  delphi-api-infra-faa, did the same). The client now gets `TApiMessages.InternalError`
+  (`'An unexpected error occurred.'`, `'Ocorreu um erro inesperado.'`); the class and message
+  stay in the error handler's log line. An `EJsonMapperError` without a JSON path (a DTO not
+  registered) is one such 500.
+- **The error handler copied a client's `X-Request-Id` into the log** when `TLoggerMiddleware`
+  wasn't in use: `trace_id=` took the raw header. It now takes only the id the logger set, and
+  none without the logger (measured on FPC/Windows with a program without the logger).
+
+### Changed
+
+- **The errors the handler logs carry the request id in the body**:
+  `{"error": "...", "requestId": "<trace id>"}` for 500, 503, 422 and lock conflicts, the same
+  id the log line ends with (`trace_id=`) and the `X-Request-Id` header, so a user can quote it
+  to support. Client errors (400, 404, 409 from a unique key) are unchanged. New
+  `ErrorJson(AMessage, ARequestId)` overload; the OpenAPI `Error` schema gains an optional
+  `requestId`. `tools/http_scenarios.sh` (149 checks) checks the body, that the exception's
+  message isn't in it, and that the sample's log has it with the client's id.
+
 ### Added
 
 - `docs/guide/`: guides for the library's users, one per topic, to one template (index:
   `docs/guide/README.md`). The first is multi-tenancy (`docs/guide/multitenancy.md`); the others
-  are listed there as planned.
+  are listed there as planned. Then getting started (`docs/guide/getting-started.md`).
 - **`${TENANT.alias}` in tenant SQL, for a JOIN.** `TTenantFilter.Prepare` replaces each
   `${TENANT.c}` with `c.TENANT_ID = :TENANT_ID` (plain `${TENANT}` is unchanged). Measured on
   SQLite: plain `${TENANT}` with two joined tables that have the column is "ambiguous column

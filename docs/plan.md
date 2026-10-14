@@ -199,6 +199,6 @@ The design documents record decisions for the maintainers; nothing explained to 
 build an application. `docs/guide/` holds guides, one per topic, all written to the template in
 `docs/guide/README.md` (what it solves, the smallest program, step by step, choices, pitfalls,
 testing, reference), with code taken from the samples. Done: multi-tenancy
-(`docs/guide/multitenancy.md`). Planned, in a session of its own: the other topics listed in
-`docs/guide/README.md` (getting started, configuration, errors, authentication, rate limiting,
+(`docs/guide/multitenancy.md`), getting started (`docs/guide/getting-started.md`). Planned: the
+other topics listed in `docs/guide/README.md` (configuration, errors, authentication, rate limiting,
 database access, observability, OpenAPI, MCP, sibling libraries).

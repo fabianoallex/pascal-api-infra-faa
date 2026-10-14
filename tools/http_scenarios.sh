@@ -159,12 +159,16 @@ curl -s -o "$T/body" -w '%{http_code}' -H 'Content-Type: application/json' -H "$
 [ "$(cat "$T/status")" != "500" ] && ok || fail "body not in UTF-8 must not be a 500 (body: $(cat "$T/body"))"
 
 # --- server and database errors
+# A logged error carries the request id in the body too (the one its log
+# line ends with); an unexpected exception's own message reaches the log only.
 req GET /fail/server "" -H "$AUTH"
 status_is 500 "server error"
-body_is '{"error":"something broke"}' "server error"
+FAIL_ID="$(header X-Request-Id)"
+body_is "{\"error\":\"An unexpected error occurred.\",\"requestId\":\"$FAIL_ID\"}" "server error: fixed message and the request id"
+body_lacks 'something broke' "server error: the exception's message stays in the log"
 req GET /fail/database "" -H "$AUTH"
 status_is 503 "database down"
-body_is '{"error":"The database is unavailable. Try again shortly."}' "database down"
+body_is "{\"error\":\"The database is unavailable. Try again shortly.\",\"requestId\":\"$(header X-Request-Id)\"}" "database down"
 body_lacks 'db.internal' "database down: no driver detail"
 
 # --- rate limit: 3 per minute per X-Client
@@ -323,6 +327,9 @@ while s.recv(65536):
   pass' "$PORT"
   sleep 1
   grep -q 'probe=hidden' "$SERVER_LOG" && ok || fail "log: a raw :pascalapi-logged line hid the request"
+  # The 500's detail, findable by the id the client got.
+  grep -q "something broke trace_id=$FAIL_ID" "$SERVER_LOG" && ok \
+    || fail "log: the 500's message with trace_id=$FAIL_ID"
 fi
 
 rm -rf "$T"

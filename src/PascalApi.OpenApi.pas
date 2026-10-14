@@ -1310,6 +1310,13 @@ begin
         FW.Name('type');
         FW.WriteString('string');
         FW.EndObject;
+        // Only on the errors the handler logs (500, 503...): the id their
+        // log line ends with.
+        FW.Name('requestId');
+        FW.BeginObject;
+        FW.Name('type');
+        FW.WriteString('string');
+        FW.EndObject;
         FW.EndObject;
         FW.Name('required');
         FW.BeginArray;

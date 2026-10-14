@@ -366,7 +366,8 @@ begin
   TAssert.AssertFalse(Has(['components', 'schemas', 'Error']));
   AddResponse(LOp, 400, rkError, nil);
   Parse;
-  TAssert.AssertEquals('{"type":"object","properties":{"error":{"type":"string"}},"required":["error"]}',
+  TAssert.AssertEquals('{"type":"object","properties":{"error":{"type":"string"},"requestId":{"type":"string"}},' +
+    '"required":["error"]}',
     Text(['components', 'schemas', 'Error']));
 end;
 

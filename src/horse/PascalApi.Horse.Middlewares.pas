@@ -62,7 +62,12 @@ type
   /// a middleware in the chain: register it any time before Listen). AOnError
   /// gets the log line of the errors worth monitoring (500, 503, 422, lock
   /// conflicts), ending with " trace_id=<X-Request-Id>" when
-  /// TLoggerMiddleware is in use; client errors aren't passed to it.
+  /// TLoggerMiddleware is in use (without it, no id: a client's own
+  /// X-Request-Id is never copied); client errors aren't passed to it. The
+  /// answers to those same errors carry the id in the body too
+  /// ({"error": ..., "requestId": ...}), so a user can quote it to support.
+  /// Any exception not mapped by MapException is a 500 with a fixed message
+  /// (TApiMessages.InternalError); its own message reaches the log only.
   /// Sends AJson with AStatus as "application/json; charset=utf-8", as UTF-8
   /// bytes. Use it instead of Res.Send(string) for JSON: on Delphi,
   /// Send(string) goes through the web response's Content, which encodes by
@@ -253,17 +258,46 @@ begin
   TJsonSend.Send(ARes, ErrorJson(AMessage), AStatus);
 end;
 
+// Set on the request by the first pass of the logger. It used to be
+// ':pascalapi-logged', on the belief that no client can send a name
+// starting with ':'. Measured (2026-10-13): fpWeb cuts the name at the first
+// ':' and ignores such a line, but Indy (Delphi 12 Win32/Win64) kept it, so
+// a raw ':pascalapi-logged: 1' line made the logger skip the request (no
+// access line, no span). A line feed ends a header line in every parser, so
+// a name with one can only come from this code.
+const
+  LOGGED_KEY = ':pascalapi-logged'#10;
+
 { Error handler }
+
+// The request's id when TLoggerMiddleware set it (a W3C trace id), else ''.
+// Without the logger, X-Request-Id is whatever the client sent, and client
+// text must not reach the log or be echoed in the body.
+function LoggedRequestId(const ARequest: THorseRequest): string;
+begin
+  if ARequest.Headers.Dictionary.ContainsKey(LOGGED_KEY) then
+    Result := ARequest.Headers['X-Request-Id']
+  else
+    Result := '';
+end;
 
 procedure HandleError(const ARequest: THorseRequest; const AResponse: THorseResponse;
   const AException: Exception);
 var
   LError: TErrorResponse;
+  LRequestId: string;
 begin
   LError := MapException(AException, ARequest.Method, ARequest.PathInfo);
-  if (LError.LogLine <> '') and Assigned(GOnError) then
-    GOnError(WithTraceId(LError.LogLine, ARequest.Headers['X-Request-Id']));
-  SendError(AResponse, LError.Status, LError.Message);
+  if LError.LogLine = '' then
+  begin
+    SendError(AResponse, LError.Status, LError.Message);
+    Exit;
+  end;
+  // A logged error: the body carries the id its log line ends with.
+  LRequestId := LoggedRequestId(ARequest);
+  if Assigned(GOnError) then
+    GOnError(WithTraceId(LError.LogLine, LRequestId));
+  TJsonSend.Send(AResponse, ErrorJson(LError.Message, LRequestId), LError.Status);
 end;
 
 class procedure TErrorHandlerMiddleware.Register;
@@ -342,16 +376,6 @@ begin
   else
     Result := '';
 end;
-
-// Set on the request by the first pass of the logger. It used to be
-// ':pascalapi-logged', on the belief that no client can send a name
-// starting with ':'. Measured (2026-10-13): fpWeb cuts the name at the first
-// ':' and ignores such a line, but Indy (Delphi 12 Win32/Win64) kept it, so
-// a raw ':pascalapi-logged: 1' line made the logger skip the request (no
-// access line, no span). A line feed ends a header line in every parser, so
-// a name with one can only come from this code.
-const
-  LOGGED_KEY = ':pascalapi-logged'#10;
 
 // The application's fields (TLoggerMiddleware.AddField) with a value. Read
 // in the logger's finally: a raising function must not replace the

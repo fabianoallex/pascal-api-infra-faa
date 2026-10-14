@@ -43,6 +43,7 @@ type
     [Test] procedure Other_Is500_Logged;
     [Test] procedure Messages_CanBeReplaced;
     [Test] procedure ErrorJson_EscapesAndKeepsNonAscii;
+    [Test] procedure ErrorJson_RequestIdOnlyWhenGiven;
   end;
 
   [TestFixture]
@@ -233,10 +234,11 @@ procedure TErrorMappingTests.Other_Is500_Logged;
 var
   R: TErrorResponse;
 begin
-  R := Map(EAccessViolation.Create('boom'));
+  R := Map(EAccessViolation.Create('boom at C:\app\secrets.ini'));
   TAssert.AssertEquals(500, R.Status);
-  TAssert.AssertEquals('boom', R.Message);
-  TAssert.AssertEquals('POST /cities -> 500: EAccessViolation: boom', R.LogLine);
+  TAssert.AssertEquals('a fixed message', 'An unexpected error occurred.', R.Message);
+  TAssert.AssertEquals('the detail in the log',
+    'POST /cities -> 500: EAccessViolation: boom at C:\app\secrets.ini', R.LogLine);
 end;
 
 procedure TErrorMappingTests.Messages_CanBeReplaced;
@@ -245,6 +247,7 @@ begin
   TAssert.AssertEquals('Já existe um registro com estes dados.',
     Map(EConstraintViolationException.Create(cvUnique, nil)).Message);
   TAssert.AssertEquals('Recurso não encontrado.', Map(ENotFoundException.Create).Message);
+  TAssert.AssertEquals('Ocorreu um erro inesperado.', Map(EAccessViolation.Create('boom')).Message);
 end;
 
 procedure TErrorMappingTests.ErrorJson_EscapesAndKeepsNonAscii;
@@ -258,6 +261,13 @@ begin
   finally
     LParsed.Free;
   end;
+end;
+
+procedure TErrorMappingTests.ErrorJson_RequestIdOnlyWhenGiven;
+begin
+  TAssert.AssertEquals('{"error":"m","requestId":"4bf92f3577b34da6a3ce929d0e0e4736"}',
+    ErrorJson('m', '4bf92f3577b34da6a3ce929d0e0e4736'));
+  TAssert.AssertEquals('{"error":"m"}', ErrorJson('m', ''));
 end;
 
 { THttpHelpersTests }

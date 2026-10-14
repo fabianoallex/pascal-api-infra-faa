@@ -27,7 +27,11 @@
   - ETextEncodingException (PascalApi.Text) is 400, like EEncodingError.
   - The request id is the W3C trace id (32 hex digits, 0.8.0), resolved by
     ResolveRequestTrace from traceparent or a 32-digit X-Request-Id; the
-    origin made a new 8-digit id for every request. *)
+    origin made a new 8-digit id for every request.
+  - Any other exception is a 500 with a fixed message
+    (TApiMessages.InternalError); its class and message go to the error log
+    only. The origin, and this unit until 0.13.0, sent E.Message to the
+    client, which can carry paths, hosts or SQL. *)
 
 interface
 
@@ -86,6 +90,7 @@ type
     TenantMissing: string;             // PascalApi.Tenancy: the token names no tenant
     TenantUnknown: string;             // the token's tenant was removed
     TenantSuspended: string;
+    InternalError: string;             // 500: any exception not mapped above
     class function English: TApiMessages; static;
     class function Portuguese: TApiMessages; static;
     /// The messages in use. Assign once, at startup.
@@ -162,7 +167,13 @@ type
 function MapException(E: Exception; const AMethod, APath: string): TErrorResponse;
 
 /// {"error":"<message>"}.
-function ErrorJson(const AMessage: string): string;
+function ErrorJson(const AMessage: string): string; overload;
+
+/// {"error":"<message>","requestId":"<ARequestId>"}; without requestId when
+/// ARequestId is ''. The error handler sends this for the errors it logs
+/// (TErrorResponse.LogLine <> ''), so the id a client reports leads support
+/// to the log line (which ends with trace_id=<the same id>).
+function ErrorJson(const AMessage, ARequestId: string): string; overload;
 
 /// The CORS headers for a request from ARequestOrigin; none when the origin
 /// isn't allowed.
@@ -311,6 +322,7 @@ begin
   Result.TenantMissing := 'The token names no tenant.';
   Result.TenantUnknown := 'The token''s tenant no longer exists.';
   Result.TenantSuspended := 'This tenant is suspended.';
+  Result.InternalError := 'An unexpected error occurred.';
 end;
 
 class function TApiMessages.Portuguese: TApiMessages;
@@ -334,6 +346,7 @@ begin
   Result.TenantMissing := 'O token não informa o tenant.';
   Result.TenantUnknown := 'O tenant do token não existe mais.';
   Result.TenantSuspended := 'Este tenant está suspenso.';
+  Result.InternalError := 'Ocorreu um erro inesperado.';
 end;
 
 { Error mapping }
@@ -421,14 +434,20 @@ begin
   end
   else
   begin
+    // The message may carry paths, hosts or SQL: only the log gets it.
     Result.Status := 500;
-    Result.Message := E.Message;
+    Result.Message := LMessages.InternalError;
     Result.LogLine := Format('%s %s -> %d: %s: %s',
       [AMethod, APath, Result.Status, E.ClassName, E.Message]);
   end;
 end;
 
 function ErrorJson(const AMessage: string): string;
+begin
+  Result := ErrorJson(AMessage, '');
+end;
+
+function ErrorJson(const AMessage, ARequestId: string): string;
 var
   LWriter: TJsonWriter;
 begin
@@ -437,6 +456,11 @@ begin
     LWriter.BeginObject;
     LWriter.Name('error');
     LWriter.WriteString(AMessage);
+    if ARequestId <> '' then
+    begin
+      LWriter.Name('requestId');
+      LWriter.WriteString(ARequestId);
+    end;
     LWriter.EndObject;
     Result := LWriter.ToString;
   finally
