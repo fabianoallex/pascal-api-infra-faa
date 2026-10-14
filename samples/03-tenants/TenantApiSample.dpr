@@ -48,6 +48,11 @@
     POST   /cities         {"code":"4205407","name":"...","state":"SC","population":123}
                            201; 409 when the tenant already has the code
     DELETE /cities/:code   204; 404 when the tenant has none with this code
+    GET    /cities/:code/details  the city and its state's name in the tenant
+                           (a JOIN: TTenantFilter's ${TENANT.alias}); stateName
+                           null when the tenant hasn't registered the state
+    POST   /states         {"code":"SC","name":"Santa Catarina"}; 201; 409 when
+                           the tenant already has the code
     GET    /metrics        Prometheus text; the pools are named dedicated and shared
     GET    /health/live    200 while the process answers
     GET    /swagger        Swagger UI; /swagger/doc.json is the OpenAPI document
@@ -307,6 +312,32 @@ begin
   end;
 end;
 
+procedure GetCityDetails(AReq: THorseRequest; ARes: THorseResponse; ANext: TNextProc);
+var
+  LCities: TCityRepository;
+begin
+  LCities := CitiesOf(AReq);
+  try
+    TJsonSend.Send(ARes, TJsonMapper.Shared.ToJson<ICityDetails>(
+      LCities.Details(AReq.Params['code'])));
+  finally
+    LCities.Free;
+  end;
+end;
+
+procedure PostState(AReq: THorseRequest; ARes: THorseResponse; ANext: TNextProc);
+var
+  LCities: TCityRepository;
+begin
+  LCities := CitiesOf(AReq);
+  try
+    TJsonSend.Send(ARes, TJsonMapper.Shared.ToJson<IState>(
+      LCities.InsertState(TJsonMapper.Shared.FromJson<IStateInsert>(AReq.Body))), 201);
+  finally
+    LCities.Free;
+  end;
+end;
+
 procedure DeleteCity(AReq: THorseRequest; ARes: THorseResponse; ANext: TNextProc);
 var
   LCities: TCityRepository;
@@ -500,6 +531,19 @@ begin
       .NoContent(204, 'Deleted')
       .Error(404, 'The tenant has no city with this code')
       .Register(DeleteCity);
+    TRouteDoc.Get('/cities/:code/details')
+      .Summary('One city of the tenant and its state''s name').Tag('cities')
+      .PathParam('code', 'IBGE code (7 digits)')
+      .Response<ICityDetails>(200)
+      .Error(404, 'The tenant has no city with this code')
+      .Register(GetCityDetails);
+    TRouteDoc.Post('/states')
+      .Summary('Create a state in the tenant').Tag('states')
+      .Body<IStateInsert>
+      .Response<IState>(201, 'Created')
+      .Error(400, 'Invalid data')
+      .Error(409, 'The tenant already has a state with this code')
+      .Register(PostState);
     TMetricsEndpoint.Register;
     THealthEndpoint.Register('/health', GLog.Error);
     TRouteDoc.Serve('/swagger', 'Cities API, multi-tenant (pascal-api-infra-faa sample 03)', '1.0.0');

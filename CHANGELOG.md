@@ -6,6 +6,19 @@ may change the API; each such change is listed here.
 
 ## [Unreleased]
 
+### Added
+
+- **`${TENANT.alias}` in tenant SQL, for a JOIN.** `TTenantFilter.Prepare` replaces each
+  `${TENANT.c}` with `c.TENANT_ID = :TENANT_ID` (plain `${TENANT}` is unchanged). Measured on
+  SQLite: plain `${TENANT}` with two joined tables that have the column is "ambiguous column
+  name", and a join whose `ON` lacks the tenant returns the other tenants' joined rows. Each
+  joined table gets its own tag, in its `ON` (`docs/multitenancy-design.md`, decision 8).
+- **Sample 03: a JOIN of two tenant tables.** `STATES` (migration 3), `POST /states` and
+  `GET /cities/:code/details` (a `LEFT JOIN` with `${TENANT.c}` and `${TENANT.s}`).
+  `tools/http_scenarios_tenants.sh` checks it (84 checks): another tenant's state on the shared
+  database must not be joined; with the state's tag left out of `ON`, 2 checks failed, and moved
+  to `WHERE`, 3.
+
 ## [0.13.0] - 2026-10-14
 
 The multi-tenancy follow-ups (`tenant.id` in the log and spans, rate limit by plan, the catalog

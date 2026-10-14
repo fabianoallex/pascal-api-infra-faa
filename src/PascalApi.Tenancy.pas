@@ -32,7 +32,10 @@
     :TENANT_ID bound, in one call. Measured in samples/03-tenants: an unbound
     :TENANT_ID is silent on SQLdb/SQLite (NULL, the condition matches
     nothing, a 404 with nothing in the log), so the condition and its
-    parameter are never set apart.
+    parameter are never set apart. ${TENANT.c} is the condition for alias c,
+    for a JOIN (measured on SQLite 3.50: a bare TENANT_ID with two tables
+    that have it is "ambiguous column name", and a join whose ON lacks the
+    tenant returns the other tenants' joined rows).
   - CheckTenant, TenantIdFromClaims and TenantRejection: a token's tenant
     against the catalog, and the status and body of each refusal (401 no
     tenant or a removed one, 403 suspended, with "code":"tenant_suspended").
@@ -193,9 +196,12 @@ type
     /// 'TENANT_ID = :TENANT_ID', or 'c.TENANT_ID = :TENANT_ID' for alias c.
     class function Condition(const AAlias: string = ''): string; static;
     /// Sets AQuery's SQL to the scope's SQL named ASqlName with ${TENANT}
-    /// replaced by Condition, and binds :TENANT_ID when the SQL has it. One
-    /// call, so the condition and its parameter can't be set apart. Other
-    /// parameters are bound after it (setting the SQL resets them).
+    /// replaced by Condition and each ${TENANT.alias} by Condition(alias),
+    /// and binds :TENANT_ID when the SQL has it. One call, so the condition
+    /// and its parameter can't be set apart. In a JOIN, every joined table
+    /// with the column gets its own tag (in ON for the joined ones), or its
+    /// rows come from every tenant. Other parameters are bound after it
+    /// (setting the SQL resets them).
     class procedure Prepare(const AQuery: IQuery; const AScope: TTenantDataScope;
       const ASqlName: string); static;
   end;
@@ -701,10 +707,51 @@ begin
     Result := AAlias + '.TENANT_ID = :TENANT_ID';
 end;
 
+// Each ${TENANT.alias} replaced by Condition(alias). A tag whose alias isn't
+// an identifier is left as it is: the database rejects the SQL that shows it.
+function ReplaceAliasedTenantTags(const ASql: string): string;
+const
+  OPEN_TAG = '${TENANT.';
+var
+  LRest: string;
+  LStart, LEnd: Integer;
+  LAlias: string;
+  LValid: Boolean;
+  I: Integer;
+begin
+  Result := '';
+  LRest := ASql;
+  LStart := Pos(OPEN_TAG, LRest);
+  while LStart > 0 do
+  begin
+    LEnd := LStart + Length(OPEN_TAG);
+    while (LEnd <= Length(LRest)) and (LRest[LEnd] <> '}') do
+      Inc(LEnd);
+    LAlias := Copy(LRest, LStart + Length(OPEN_TAG), LEnd - LStart - Length(OPEN_TAG));
+    LValid := (LEnd <= Length(LRest)) and (LAlias <> '');
+    for I := 1 to Length(LAlias) do
+      if not CharInSet(LAlias[I], ['A'..'Z', 'a'..'z', '0'..'9', '_']) then
+        LValid := False;
+    if LValid then
+    begin
+      Result := Result + Copy(LRest, 1, LStart - 1) + TTenantFilter.Condition(LAlias);
+      Delete(LRest, 1, LEnd);
+    end
+    else
+    begin
+      Result := Result + Copy(LRest, 1, LStart + Length(OPEN_TAG) - 1);
+      Delete(LRest, 1, LStart + Length(OPEN_TAG) - 1);
+    end;
+    LStart := Pos(OPEN_TAG, LRest);
+  end;
+  Result := Result + LRest;
+end;
+
 class procedure TTenantFilter.Prepare(const AQuery: IQuery; const AScope: TTenantDataScope;
   const ASqlName: string);
 begin
-  AQuery.Sql := AScope.Factory.SqlLoader[ASqlName].ReplaceLiteral('TENANT', Condition).SQL;
+  AQuery.Sql := ReplaceAliasedTenantTags(
+    AScope.Factory.SqlLoader[ASqlName].ReplaceLiteral('TENANT', Condition).SQL);
   if Pos(':TENANT_ID', UpperCase(AQuery.Sql)) > 0 then
     AQuery.Params.Strings['TENANT_ID'] := AScope.Discriminator;
 end;

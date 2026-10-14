@@ -146,6 +146,18 @@ SQL, replaces `${TENANT}` with the condition and binds `:TENANT_ID` together. A 
 `${TENANT}` replacement is loud (the literal stays in the SQL and the database rejects it).
 FireDAC on Delphi may answer an unbound parameter differently: not measured.
 
+**A JOIN: one tag per table (2026-10-14).** Plain `${TENANT}` has no alias. Measured on SQLite
+3.50 with two tenants sharing a state code: with two joined tables that have the column it is
+"ambiguous column name" (loud), and with the condition on the main table only, the query runs
+and returns the other tenants' joined rows (silent, and it leaks). A single alias parameter on
+`Prepare` would fix the first and not the second, so the alias goes in the SQL: `${TENANT.c}`
+becomes `c.TENANT_ID = :TENANT_ID`, as many times as the SQL has it, the joined tables' tags in
+their `ON` (a `LEFT JOIN` needs it there). Tested against `TMockDBFactory`
+(`Filter_Prepare_AliasedTags_ForAJoin`) and over HTTP in sample 03 (`GET /cities/:code/details`,
+a `LEFT JOIN` of `CITIES` and `STATES`): with `${TENANT.s}` left out of `ON`, initech's city came
+with umbrella's state on the shared database (2 checks failed); moved to `WHERE`, a city whose
+state the tenant hasn't registered answered 404 (3 failed).
+
 The same measurement corrects what this section first said of the tag convention: a forgotten
 `ProcessTag` keeps the condition (`SqlLoader`'s rule: the content stays), but the unbound
 `:tenant_id` that follows is the silent case above, not an error. Safe, not loud.

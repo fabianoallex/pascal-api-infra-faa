@@ -2,7 +2,8 @@
 # Checks samples/03-tenants over HTTP with curl: the tenant from the token's
 # claim, the answers for a missing, removed or suspended tenant, and above
 # all the cross-tenant attempts (a token of one tenant reading, creating over
-# or deleting another's rows), on dedicated databases and on the shared one.
+# or deleting another's rows), on dedicated databases and on the shared one,
+# and a JOIN of two tenant tables (GET /cities/:code/details).
 # Also the pool metrics named by mode (decision 9 of
 # docs/multitenancy-design.md), the rate limit by plan, and, when SERVER_LOG
 # names the server's output file, tenant.id in the access log.
@@ -195,6 +196,30 @@ status_is 200 "initech's city with the same code is still there"
 req GET /cities/4205407 "" -H "Authorization: Bearer $UMBRELLA"
 status_is 404 "umbrella's is gone"
 
+# --- a JOIN of two tables that both have TENANT_ID (CITY.DETAILS: one
+# ${TENANT.alias} tag per table, the state's in the LEFT JOIN's ON). On the
+# shared database, umbrella registers RS first: with the tenant missing from
+# ON, initech's Porto Alegre would show umbrella's state (measured on SQLite).
+req POST /states '{"code":"RS","name":"Umbrella RS"}' -H "Authorization: Bearer $UMBRELLA"
+status_is 201 "umbrella registers RS"
+req GET /cities/4314902/details "" -H "Authorization: Bearer $INITECH"
+status_is 200 "join: initech's city without its state is still found (LEFT JOIN)"
+body_is '{"code":"4314902","name":"Porto Alegre","state":"RS","stateName":null}' "join: another tenant's state is not joined (shared database)"
+req GET /cities/4314902/details "" -H "Authorization: Bearer $UMBRELLA"
+status_is 404 "join: umbrella reads initech's city (shared database)"
+req POST /states '{"code":"RS","name":"Rio Grande do Sul"}' -H "Authorization: Bearer $INITECH"
+status_is 201 "initech registers RS too (same code, another tenant)"
+req POST /states '{"code":"rs","name":"Again"}' -H "Authorization: Bearer $INITECH"
+status_is 409 "the same state twice in one tenant"
+req GET /cities/4314902/details "" -H "Authorization: Bearer $INITECH"
+body_is '{"code":"4314902","name":"Porto Alegre","state":"RS","stateName":"Rio Grande do Sul"}' "join: initech's own state, once"
+req POST /states '{"code":"SC","name":"Santa Catarina"}' -H "Authorization: Bearer $ACME"
+status_is 201 "acme registers SC (dedicated)"
+req GET /cities/4205407/details "" -H "Authorization: Bearer $ACME"
+body_has '"stateName":"Santa Catarina"' "join: acme's state (dedicated)"
+req GET /cities/4205407/details "" -H "Authorization: Bearer $GLOBEX"
+body_has '"stateName":null' "join: globex has no SC (dedicated)"
+
 # --- rate limit: one window per tenant, its limit by the tenant's plan
 # (TRateLimitOptions.KeyExtractor and LimitFor)
 curl -s -D "$T/headers" -o /dev/null -H "Authorization: Bearer $ACME" "$BASE/tenant"
@@ -235,6 +260,7 @@ status_is 200 "health needs no tenant"
 req GET /swagger/doc.json ""
 status_is 200 "OpenAPI document"
 body_has '"/cities/{code}"' "OpenAPI: path template"
+body_has '"/cities/{code}/details"' "OpenAPI: the join's route"
 body_has '"/auth/login":{"post":{"tags":["public"],"summary":"Get a token for one tenant (1 hour)","security":[]' "OpenAPI: login needs no token"
 [ -n "$OPENAPI_OUT" ] && cp "$T/body" "$OPENAPI_OUT"
 

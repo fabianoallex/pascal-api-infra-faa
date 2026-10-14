@@ -111,6 +111,8 @@ type
     [Test] procedure Resolver_RecentlyUsedDatabase_IsKept;
     [Test] procedure Filter_Condition_WithAndWithoutAlias;
     [Test] procedure Filter_Prepare_ReplacesAndBinds;
+    [Test] procedure Filter_Prepare_AliasedTags_ForAJoin;
+    [Test] procedure Filter_Prepare_AliasTagNotAnIdentifier_LeftAsIs;
   end;
 
 implementation
@@ -702,6 +704,51 @@ begin
   TAssert.AssertEquals('bound in the same call', 'initech',
     LMock.LastExecution(EXPECTED).AsString('TENANT_ID'));
   TAssert.AssertEquals('4314902', LMock.LastExecution(EXPECTED).AsString('CODE'));
+end;
+
+procedure TTenancyTests.Filter_Prepare_AliasedTags_ForAJoin;
+const
+  // A LEFT JOIN: the joined table's condition must be in ON (in WHERE it
+  // would drop the cities without a state).
+  SQL = 'SELECT c.CODE, s.NAME FROM CITIES c LEFT JOIN STATES s ' +
+    'ON s.UF = c.STATE AND ${TENANT.s} WHERE c.CODE = :CODE AND ${TENANT.c}';
+  EXPECTED = 'SELECT c.CODE, s.NAME FROM CITIES c LEFT JOIN STATES s ' +
+    'ON s.UF = c.STATE AND s.TENANT_ID = :TENANT_ID ' +
+    'WHERE c.CODE = :CODE AND c.TENANT_ID = :TENANT_ID';
+var
+  LMock: TMockDBFactory;
+  LScope: TTenantDataScope;
+  LQuery: IQuery;
+  LTransaction: IScopeTransaction;
+begin
+  LMock := TMockDBFactory.Create;
+  LScope.Factory := LMock;
+  LScope.Discriminator := 'initech';
+  LTransaction := LScope.Factory.GetPool.AcquireQuery(LQuery);
+  TTenantFilter.Prepare(LQuery, LScope, SQL);
+  LQuery.Params.Strings['CODE'] := '4314902';
+  TAssert.AssertEquals(EXPECTED, LQuery.Sql);
+  LQuery.ExecSql;
+  TAssert.AssertEquals('bound in the same call', 'initech',
+    LMock.LastExecution(EXPECTED).AsString('TENANT_ID'));
+end;
+
+procedure TTenancyTests.Filter_Prepare_AliasTagNotAnIdentifier_LeftAsIs;
+const
+  // Not replaced, so the database rejects the SQL that shows the tag.
+  SQL = 'SELECT * FROM CITIES c WHERE ${TENANT.c d} AND ${TENANT.} AND ${TENANT.c';
+var
+  LMock: TMockDBFactory;
+  LScope: TTenantDataScope;
+  LQuery: IQuery;
+  LTransaction: IScopeTransaction;
+begin
+  LMock := TMockDBFactory.Create;
+  LScope.Factory := LMock;
+  LScope.Discriminator := 'initech';
+  LTransaction := LScope.Factory.GetPool.AcquireQuery(LQuery);
+  TTenantFilter.Prepare(LQuery, LScope, SQL);
+  TAssert.AssertEquals(SQL, LQuery.Sql);
 end;
 
 initialization
