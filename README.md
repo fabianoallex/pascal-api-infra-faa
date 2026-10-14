@@ -17,7 +17,8 @@ spans exported to an OpenTelemetry collector (OTLP), and opt-in multi-tenancy
 Observability plan: [docs/observability-design.md](docs/observability-design.md). See [docs/plan.md](docs/plan.md).
 
 **Guides** for building an API with the library: [docs/guide](docs/guide/README.md) (so far:
-[getting started](docs/guide/getting-started.md), [multi-tenancy](docs/guide/multitenancy.md)).
+[getting started](docs/guide/getting-started.md), [configuration](docs/guide/configuration.md),
+[multi-tenancy](docs/guide/multitenancy.md)).
 
 ## Contents
 

@@ -43,6 +43,11 @@ type
     [Test] procedure Get_RemovesDoubleAndSingleQuotes;
     [Test] procedure Get_FileKeyIgnoresCase;
     [Test] procedure Get_ValueMayContainEqualsSign;
+    [Test] procedure Get_SpacesAroundKeyAndValueAreIgnored;
+    [Test] procedure Get_QuotesKeepTheirSpaces;
+    [Test] procedure Get_RepeatedKey_LastLineWins;
+    [Test] procedure Get_EmptyValue_IsAbsent;
+    [Test] procedure Get_CommentAfterValue_IsPartOfIt;
     [Test] procedure Get_FileWithBomAndNonAscii;
     [Test] procedure Get_FileWithCrLf;
     [Test] procedure Get_RealEnvironmentReader_SeesPath;
@@ -172,6 +177,43 @@ procedure TAppConfigTests.Get_ValueMayContainEqualsSign;
 begin
   WriteEnvFile(KEY_A + '=a=b=c');
   TAssert.AssertEquals('a=b=c', TAppConfig.Get(KEY_A));
+end;
+
+procedure TAppConfigTests.Get_SpacesAroundKeyAndValueAreIgnored;
+begin
+  WriteEnvFile('  ' + KEY_A + ' =  9000  ' + #10 + KEY_B + '= "quoted" ');
+  TAssert.AssertEquals('9000', TAppConfig.Get(KEY_A));
+  TAssert.AssertEquals(9000, TAppConfig.GetInt(KEY_A, 0));
+  TAssert.AssertEquals('quoted', TAppConfig.Get(KEY_B));
+end;
+
+procedure TAppConfigTests.Get_QuotesKeepTheirSpaces;
+begin
+  WriteEnvFile(KEY_A + ' = "  two spaces  "');
+  TAssert.AssertEquals('  two spaces  ', TAppConfig.Get(KEY_A));
+end;
+
+procedure TAppConfigTests.Get_RepeatedKey_LastLineWins;
+begin
+  WriteEnvFile(KEY_A + '=first' + #10 + KEY_B + '=other' + #10 + KEY_A + '=second');
+  TAssert.AssertEquals('second', TAppConfig.Get(KEY_A));
+end;
+
+procedure TAppConfigTests.Get_EmptyValue_IsAbsent;
+begin
+  // An empty line before a value doesn't hide it; an empty last line
+  // overrides an earlier value, and empty means absent: the default.
+  WriteEnvFile(KEY_A + '=' + #10 + KEY_A + '=later');
+  TAssert.AssertEquals('later', TAppConfig.Get(KEY_A, 'default'));
+  WriteEnvFile(KEY_A + '=earlier' + #10 + KEY_A + '=');
+  TAssert.AssertEquals('default', TAppConfig.Get(KEY_A, 'default'));
+end;
+
+procedure TAppConfigTests.Get_CommentAfterValue_IsPartOfIt;
+begin
+  // Not supported, on purpose: '#' may be part of a value (a password).
+  WriteEnvFile(KEY_A + '=value # comment');
+  TAssert.AssertEquals('value # comment', TAppConfig.Get(KEY_A));
 end;
 
 procedure TAppConfigTests.Get_FileWithBomAndNonAscii;

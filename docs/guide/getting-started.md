@@ -174,7 +174,9 @@ begin
   became `?`; measured in pascal-db-faa). For this guide, the smallest program above was also
   built without the call: `"São Paulo"` written as a literal came out with the same bytes, so the
   loss shows on decoded data, not on literals. Keep the call anyway: request bodies are decoded
-  data. LCL programs already run in UTF-8.
+  data, and without it a `.env` file with any non-ASCII character makes every
+  `TAppConfig.Get` raise `ETextEncodingException` (measured,
+  [Configuration](configuration.md)). LCL programs already run in UTF-8.
 
 The measurements are recorded in the `dual-compiler-delphi-lazarus` skill
 (`references/rtl-gotchas.md`, "Encoding").

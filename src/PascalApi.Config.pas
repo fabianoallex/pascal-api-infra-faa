@@ -6,9 +6,15 @@
 
   Lookup order: environment variable, then the .env file, then the default.
   The default file is .env in the executable's folder. Format: KEY=VALUE, one
-  per line; blank lines and lines starting with # are ignored; a value may
-  be wrapped in single or double quotes. Keys are compared ignoring case in
-  the file. The file is UTF-8 (see PascalApi.Text for the FPC code page rule)
+  per line; blank lines and lines starting with # are ignored; spaces around
+  the key and the value are ignored, and a value may then be wrapped in
+  single or double quotes (which keep the spaces inside them). Keys are
+  compared ignoring case in the file; when a key repeats, the last line
+  wins, as in a shell. An empty value counts as absent, like an empty
+  environment variable. Not supported: a comment after a value (it is part
+  of the value) and the shell's "export KEY=value" (no key matches).
+  Until 0.13.0, spaces after '=' stayed in the value and the first line of a
+  repeated key won (measured, docs/guide/configuration.md). The file is UTF-8 (see PascalApi.Text for the FPC code page rule)
   and is read again on every call, so editing it takes effect without a
   restart.
 
@@ -109,6 +115,8 @@ begin
     FEnvReader := ProcessEnvironment;
 end;
 
+// The value of the last line whose key is AKey ('' when none): later lines
+// override earlier ones, as in a shell.
 class function TAppConfig.ReadFile(const AKey: string): string;
 var
   LLines: TStringList;
@@ -131,7 +139,7 @@ begin
         Continue;
       if not SameText(Trim(Copy(LLine, 1, LSep - 1)), AKey) then
         Continue;
-      Exit(Unquote(Copy(LLine, LSep + 1, MaxInt)));
+      Result := Unquote(Trim(Copy(LLine, LSep + 1, MaxInt)));
     end;
   finally
     LLines.Free;

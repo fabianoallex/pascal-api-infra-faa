@@ -20,6 +20,13 @@ may change the API; each such change is listed here.
 
 ### Changed
 
+- **`.env` file: spaces around `=` are ignored, and the last line of a repeated key wins.**
+  `TAppConfig` kept the spaces after `=` (`PORT = 9000` was ` 9000`; `NAME = "x"` kept the
+  space and the quotes) and returned the first line of a repeated key, so `A=` before `A=later`
+  gave the default. Now the value is trimmed before its quotes are removed (quoted spaces are
+  kept), and later lines override earlier ones, as in a shell. Found while measuring for
+  `docs/guide/configuration.md`. A comment after a value is still part of it, and `export A=...`
+  still isn't read (both tested or measured, both in the guide).
 - **The errors the handler logs carry the request id in the body**:
   `{"error": "...", "requestId": "<trace id>"}` for 500, 503, 422 and lock conflicts, the same
   id the log line ends with (`trace_id=`) and the `X-Request-Id` header, so a user can quote it
@@ -32,7 +39,8 @@ may change the API; each such change is listed here.
 
 - `docs/guide/`: guides for the library's users, one per topic, to one template (index:
   `docs/guide/README.md`). The first is multi-tenancy (`docs/guide/multitenancy.md`); the others
-  are listed there as planned. Then getting started (`docs/guide/getting-started.md`).
+  are listed there as planned. Then getting started (`docs/guide/getting-started.md`) and configuration
+  (`docs/guide/configuration.md`).
 - **`${TENANT.alias}` in tenant SQL, for a JOIN.** `TTenantFilter.Prepare` replaces each
   `${TENANT.c}` with `c.TENANT_ID = :TENANT_ID` (plain `${TENANT}` is unchanged). Measured on
   SQLite: plain `${TENANT}` with two joined tables that have the column is "ambiguous column
