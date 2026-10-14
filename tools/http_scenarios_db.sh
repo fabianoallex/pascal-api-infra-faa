@@ -90,6 +90,22 @@ body_is '{"error":"\"name\" is required."}' "missing name"
 req POST /cities '{"code":"1234567","name":"X","state":"SP","population":"many"}'
 status_is 400 "wrong type"
 body_has '$.population' "wrong type"
+# The limits the OpenAPI document declares are enforced by the handler: until
+# they were, '+123456' and -5 were stored, and a 150-character name was 201 on
+# FPC and 500 on Delphi (FireDAC refuses a value longer than the column).
+req POST /cities '{"code":"+123456","name":"X","state":"SP"}'
+status_is 400 "code: digits only (the document's pattern)"
+req POST /cities "{\"code\":\"1000001\",\"name\":\"$(printf 'x%.0s' $(seq 1 101))\",\"state\":\"SP\"}"
+status_is 400 "name: at most 100 characters (the document's maxLength)"
+body_is '{"error":"\"name\" must have at most 100 characters."}' "name too long"
+req POST /cities '{"code":"1000001","name":"X","state":"SP","population":-5}'
+status_is 400 "population: not negative (the document's minimum)"
+# 100 characters of two bytes each: counted as characters on both compilers.
+printf '{"code":"1000001","name":"%s","state":"SP"}' "$(printf '\303\243%.0s' $(seq 1 100))" > "$T/long"
+req POST /cities "@$T/long"
+status_is 201 "name: 100 two-byte characters are 100 characters"
+req DELETE /cities/1000001 ""
+status_is 204 "delete the 100-character city"
 req DELETE /cities/2408102 ""
 status_is 204 "delete"
 req DELETE /cities/2408102 ""

@@ -16,6 +16,7 @@ way it does.
 | [Rate limiting](rate-limiting.md) | a client may make so many requests a minute: the window, the key (behind a proxy too), a limit per client, the headers and the 429 |
 | [Database access](database.md) | handlers over a real database: the factory, migrations, SQL by key, paging and ordering in SQL, transactions, what the database's errors become |
 | [Logging and observability](observability.md) | the request id, the access line, the client's address, files, metrics, health, spans to OpenTelemetry |
+| [OpenAPI](openapi.md) | documenting routes and DTOs, Swagger UI, authentication in the document; the limits a handler must still enforce |
 | [Errors and validation](errors.md) | a request fails: the exceptions and their statuses, validating input, the database's errors, the client messages (English/Portuguese) |
 | [Multi-tenancy](multitenancy.md) | one API serves several customers, each seeing only its own data |
 
@@ -27,7 +28,6 @@ are the reference.
 
 | Guide | Covers | Today, see |
 |---|---|---|
-| OpenAPI | documenting routes and DTOs, Swagger UI | `docs/openapi-design.md` |
 | MCP | the API's routes as tools for an AI client | `docs/mcp-design.md` |
 | Messaging, Redis, IPC | the sibling libraries | `docs/related-libraries.md` |
 

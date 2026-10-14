@@ -40,6 +40,11 @@ function PaMd5Hex(const ABytes: TBytes): string;
 /// Delphi and bytes on FPC).
 function PaUtf8Prefix(const AText: string; AMaxBytes: Integer): string;
 
+/// The number of characters (Unicode code points) in AText, the same on
+/// both compilers: Length counts bytes on FPC and UTF-16 units on Delphi, so
+/// a rule like "at most 100 characters" needs this instead.
+function PaCharCount(const AText: string): Integer;
+
 implementation
 
 uses
@@ -121,6 +126,19 @@ begin
     Dec(LCut);
   LPrefix := Copy(LBytes, 0, LCut);
   Result := PaUtf8BytesToString(LPrefix, 'PaUtf8Prefix');
+end;
+
+function PaCharCount(const AText: string): Integer;
+var
+  LBytes: TBytes;
+  I: Integer;
+begin
+  // One character per byte that isn't a continuation byte (10xxxxxx).
+  LBytes := PaStringToUtf8Bytes(AText);
+  Result := 0;
+  for I := 0 to High(LBytes) do
+    if (LBytes[I] and $C0) <> $80 then
+      Inc(Result);
 end;
 
 end.

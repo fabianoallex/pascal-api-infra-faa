@@ -368,7 +368,11 @@ Resources (the default `TResourceSqlSource`) for production: one executable. A f
 
 Fine for a sample, a small internal API or tests. It has one writer at a time: the adapters set
 a busy timeout (5 s), so a second writer waits instead of failing at once. Use a file, never
-`:memory:` (each pooled connection would get its own empty database). On FPC for Windows, the
+`:memory:` (each pooled connection would get its own empty database). SQLite doesn't enforce a
+column's length: a 150-character name went into `VARCHAR(100)` through SQLdb and FireDAC alike.
+FireDAC then refuses to *read* the row (`[FireDAC][DatS]-32 ... overflow`), a 500 for every
+request that touches it (measured, sample 02, Delphi 12 Win32), so check lengths before writing
+([OpenAPI](openapi.md), step 5). On FPC for Windows, the
 `sqlite3.dll` must be sqlite.org's build (pascal-db-faa's gotcha 23): `tools/test_http.sh` takes
 it from `SQLITE_DLL` or `.deps/`.
 
@@ -380,6 +384,8 @@ it from `SQLITE_DLL` or `.deps/`.
 - **Forgetting `Rollback; raise;`**: without the `raise`, the client gets a success for work that
   was undone; without the `Rollback`, the transaction stays open on a pooled connection.
 - **A `SELECT` to check for duplicates** instead of the key (step 5).
+- **A value longer than its column** on SQLite with FireDAC: stored, then unreadable (SQLite,
+  under Choices).
 - **`PoolMaxConnections` sized to the threads**, or a pool wait so long that requests pile up;
   a pool timeout is now a 503 (step 7).
 - **`IDatabaseConfig` in a class variable**: it is reference-counted; mixing the two frees it

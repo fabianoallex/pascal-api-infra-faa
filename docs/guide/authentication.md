@@ -227,7 +227,7 @@ function runs on every request, on Horse's threads: keep it fast, and thread-saf
 
 - **OpenAPI**: `TRouteDoc.Serve` asks the middleware which scheme is in use and which paths it
   leaves open, and documents those as needing no token (`"security": []`). There is no second
-  list to keep in step.
+  list to keep in step ([OpenAPI](openapi.md), step 7).
 - **MCP**: a tool call goes back through the API over HTTP with the caller's token, so every
   route keeps its own check.
 - **Multi-tenancy**: `TTenantMiddleware` reads the tenant from the verified token's claim, and

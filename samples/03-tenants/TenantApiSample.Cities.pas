@@ -167,10 +167,23 @@ uses
   TypInfo,
   PascalJsonMapper.Mapper,
   PascalApi.OpenApi,
-  PascalApi.Http;
+  PascalApi.Http,
+  PascalApi.Text;
 
 const
   DIR = 'SQLITE';
+
+/// True when AText is exactly ALength ASCII digits. StrToIntDef would also
+/// take '+123456' or '-000001'.
+function IsDigits(const AText: string; ALength: Integer): Boolean;
+var
+  I: Integer;
+begin
+  Result := Length(AText) = ALength;
+  for I := 1 to Length(AText) do
+    if (AText[I] < '0') or (AText[I] > '9') then
+      Exit(False);
+end;
 
 function CitySqlSource: ISqlSource;
 var
@@ -339,13 +352,19 @@ var
   LScope: IScopeTransaction;
   LCode: string;
 begin
+  // The limits the OpenAPI document declares (TApiSchema.Describe below): the
+  // document describes them, only this enforces them.
   LCode := Trim(ACity.GetCode);
-  if (Length(LCode) <> 7) or (StrToIntDef(LCode, -1) < 0) then
+  if not IsDigits(LCode, 7) then
     raise EValidationException.Create('"code" must be the 7-digit IBGE code.');
   if Trim(ACity.GetName) = '' then
     raise EValidationException.Create('"name" is required.');
+  if PaCharCount(Trim(ACity.GetName)) > 100 then
+    raise EValidationException.Create('"name" must have at most 100 characters.');
   if Length(Trim(ACity.GetState)) <> 2 then
     raise EValidationException.Create('"state" must have 2 letters.');
+  if ACity.GetPopulation.HasValue and (ACity.GetPopulation.Value < 0) then
+    raise EValidationException.Create('"population" can''t be negative.');
 
   LScope := FScope.Factory.GetPool.AcquireQuery(LQuery);
   LScope.StartTransaction;
@@ -432,6 +451,8 @@ begin
     raise EValidationException.Create('"code" must have 2 letters.');
   if Trim(AState.GetName) = '' then
     raise EValidationException.Create('"name" is required.');
+  if PaCharCount(Trim(AState.GetName)) > 100 then
+    raise EValidationException.Create('"name" must have at most 100 characters.');
 
   LScope := FScope.Factory.GetPool.AcquireQuery(LQuery);
   LScope.StartTransaction;

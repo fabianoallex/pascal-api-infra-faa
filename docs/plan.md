@@ -202,6 +202,13 @@ testing, reference), with code taken from the samples. Done: multi-tenancy
 (`docs/guide/multitenancy.md`), getting started (`docs/guide/getting-started.md`), configuration
 (`docs/guide/configuration.md`), errors and validation (`docs/guide/errors.md`), authentication
 (`docs/guide/authentication.md`), rate limiting (`docs/guide/rate-limiting.md`), database access
-(`docs/guide/database.md`), logging and observability (`docs/guide/observability.md`). Planned:
-the other topics listed in `docs/guide/README.md` (
-database access, observability, OpenAPI, MCP, sibling libraries).
+(`docs/guide/database.md`), logging and observability (`docs/guide/observability.md`), OpenAPI
+(`docs/guide/openapi.md`). Planned: the other topics listed in `docs/guide/README.md` (MCP,
+sibling libraries).
+
+A candidate for pascal-db-faa, found while measuring for the OpenAPI guide and left for later
+(the user's decision, 2026-10-14): FireDAC raises `[FireDAC][DatS]-32 Variable length column
+overflow` when it reads a value longer than its column, which SQLite stores anyway. pascal-db-faa
+doesn't classify it, so here it is a 500: the insert of a 150-character name into
+`VARCHAR(100)` answered 500 with the row saved, and every later read of that row answered 500
+(sample 02, Delphi 12 Win32). Samples 02 and 03 now check the length first.

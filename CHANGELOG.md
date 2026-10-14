@@ -65,6 +65,14 @@ may change the API; each such change is listed here.
 
 ### Changed
 
+- **Samples 02 and 03 enforce the limits their OpenAPI documents declare.** The documents said
+  `pattern ^[0-9]{7}$` for the code, `maxLength 100` for a name and `minimum 0` for the
+  population, but nothing checked them: `+123456` and `-5` were stored, and a 150-character name
+  was 201 on FPC and 500 on Delphi, where FireDAC stored the row and then refused to read it back,
+  so the city and every list containing it answered 500 (measured). They now answer 400.
+  `tools/http_scenarios_db.sh` (71 checks) and `tools/http_scenarios_tenants.sh` (92) check
+  each limit, and a name of 100 two-byte characters; the Delphi build from before failed 7 and 5
+  of them. Found while measuring for `docs/guide/openapi.md`.
 - **A 401 carries `WWW-Authenticate`**, which HTTP requires (RFC 9110): `Bearer` when the
   request had no Bearer token, `Bearer error="invalid_token"` when its token was refused (RFC
   6750), from `TJwtMiddleware`, `TAuthMiddleware` and `TTenantMiddleware`. New
@@ -92,8 +100,11 @@ may change the API; each such change is listed here.
   are listed there as planned. Then getting started (`docs/guide/getting-started.md`), configuration
   (`docs/guide/configuration.md`), errors and validation (`docs/guide/errors.md`),
   authentication (`docs/guide/authentication.md`), rate limiting
-  (`docs/guide/rate-limiting.md`), database access (`docs/guide/database.md`) and logging and
-  observability (`docs/guide/observability.md`).
+  (`docs/guide/rate-limiting.md`), database access (`docs/guide/database.md`), logging and
+  observability (`docs/guide/observability.md`) and OpenAPI (`docs/guide/openapi.md`).
+- `PaCharCount` (`PascalApi.Text`): the number of characters in a string, the same on both
+  compilers (`Length` counts bytes on FPC and UTF-16 units on Delphi), for a rule like "at most
+  100 characters". Test `CharCount_CountsCharactersNotBytes`.
 - **`${TENANT.alias}` in tenant SQL, for a JOIN.** `TTenantFilter.Prepare` replaces each
   `${TENANT.c}` with `c.TENANT_ID = :TENANT_ID` (plain `${TENANT}` is unchanged). Measured on
   SQLite: plain `${TENANT}` with two joined tables that have the column is "ambiguous column

@@ -99,6 +99,7 @@ type
     [Test] procedure Md5_NonAsciiHashesUtf8Bytes;
     [Test] procedure Utf8Prefix_Ascii;
     [Test] procedure Utf8Prefix_BacksOffToCharacterStart;
+    [Test] procedure CharCount_CountsCharactersNotBytes;
   end;
 
 implementation
@@ -602,6 +603,16 @@ begin
   TAssert.AssertEquals('a', PaUtf8Prefix('a→b', 2));
   TAssert.AssertEquals('a', PaUtf8Prefix('a→b', 3));
   TAssert.AssertEquals('a→', PaUtf8Prefix('a→b', 4));
+end;
+
+procedure TTextHashTests.CharCount_CountsCharactersNotBytes;
+begin
+  TAssert.AssertEquals(0, PaCharCount(''));
+  TAssert.AssertEquals(3, PaCharCount('abc'));
+  // 'ã' is 2 bytes, '→' 3, '😀' 4 (2 UTF-16 units on Delphi): one character each.
+  TAssert.AssertEquals(9, PaCharCount('São Paulo'));
+  TAssert.AssertEquals(3, PaCharCount('a→b'));
+  TAssert.AssertEquals(1, PaCharCount('😀'));
 end;
 
 initialization

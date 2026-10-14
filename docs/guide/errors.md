@@ -104,13 +104,21 @@ a DTO you forgot to register, and stays a 500 (tested: `JsonMapperErrorWithoutPa
 
 ```pascal
 LCode := Trim(ACity.GetCode);
-if (Length(LCode) <> 7) or (StrToIntDef(LCode, -1) < 0) then
+if not IsDigits(LCode, 7) then
   raise EValidationException.Create('"code" must be the 7-digit IBGE code.');
 if Trim(ACity.GetName) = '' then
   raise EValidationException.Create('"name" is required.');
+if PaCharCount(Trim(ACity.GetName)) > 100 then
+  raise EValidationException.Create('"name" must have at most 100 characters.');
 if Length(Trim(ACity.GetState)) <> 2 then
   raise EValidationException.Create('"state" must have 2 letters.');
+if ACity.GetPopulation.HasValue and (ACity.GetPopulation.Value < 0) then
+  raise EValidationException.Create('"population" can''t be negative.');
 ```
+
+These are the limits the sample's OpenAPI document declares: the document describes them, and
+only this code enforces them ([OpenAPI](openapi.md), step 5, with what each broken limit did
+before the sample checked it).
 
 The mapper doesn't know which members are required: "required" is a check you write, like the
 ones above. An optional member left out arrives without a value (checked: sample 01 creates a
@@ -314,7 +322,8 @@ translates, which the library doesn't have today.
   `EValidationException` if a malformed id should be a 400.
 - **Counting characters on FPC.** `Length` counts bytes on FPC and UTF-16 units on Delphi, so a
   rule like `Length(State) <> 2` refuses a two-letter value with an accented letter on FPC only.
-  The samples' rules are on ASCII values.
+  Count with `PaCharCount` (`PascalApi.Text`, tested), as the samples do for a name's 100
+  characters; their `Length` rules are on ASCII values.
 - **A body that isn't UTF-8.** On Delphi, Horse decodes the body as UTF-8 and raises on invalid
   bytes, which becomes `400 InvalidEncoding`; on FPC the bytes are kept and no error is raised
   (from the comment in `MapException`; the scenario only checks that such a body is not a 500).

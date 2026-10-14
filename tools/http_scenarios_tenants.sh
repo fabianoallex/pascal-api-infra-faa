@@ -162,6 +162,13 @@ req POST /cities '{"code":"4205407","name":"Again","state":"SC"}' -H "Authorizat
 status_is 409 "the same code twice in one shared tenant"
 req POST /cities '{"code":"4205407","name":"Again","state":"SC"}' -H "Authorization: Bearer $ACME"
 status_is 409 "the same code twice in one dedicated tenant"
+# The limits the OpenAPI document declares (sample 02 has the same checks).
+req POST /cities '{"code":"+123456","name":"X","state":"SP"}' -H "Authorization: Bearer $ACME"
+status_is 400 "code: digits only"
+req POST /cities "{\"code\":\"1000001\",\"name\":\"$(printf 'x%.0s' $(seq 1 101))\",\"state\":\"SP\"}" -H "Authorization: Bearer $ACME"
+status_is 400 "city name: at most 100 characters"
+req POST /cities '{"code":"1000001","name":"X","state":"SP","population":-5}' -H "Authorization: Bearer $ACME"
+status_is 400 "population: not negative"
 
 # --- lists: only the caller's rows
 req GET /cities "" -H "Authorization: Bearer $ACME"
@@ -214,6 +221,8 @@ req POST /states '{"code":"RS","name":"Rio Grande do Sul"}' -H "Authorization: B
 status_is 201 "initech registers RS too (same code, another tenant)"
 req POST /states '{"code":"rs","name":"Again"}' -H "Authorization: Bearer $INITECH"
 status_is 409 "the same state twice in one tenant"
+req POST /states "{\"code\":\"PR\",\"name\":\"$(printf 'x%.0s' $(seq 1 101))\"}" -H "Authorization: Bearer $INITECH"
+status_is 400 "state name: at most 100 characters"
 req GET /cities/4314902/details "" -H "Authorization: Bearer $INITECH"
 body_is '{"code":"4314902","name":"Porto Alegre","state":"RS","stateName":"Rio Grande do Sul"}' "join: initech's own state, once"
 req POST /states '{"code":"SC","name":"Santa Catarina"}' -H "Authorization: Bearer $ACME"
