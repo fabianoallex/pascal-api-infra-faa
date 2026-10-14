@@ -45,6 +45,17 @@ type
   TTokenValidator = function(const AToken: string): Boolean of object;
   TRateLimitKeyExtractor = function(AReq: THorseRequest): string of object;
   {$ENDIF}
+  {$IFDEF PASCALAPI_FUNCREFS}
+  /// The limit for one request (e.g. by the tenant's plan); 0 or less: the
+  /// options' Limit.
+  TRateLimitLimitFunc = reference to function(AReq: THorseRequest): Integer;
+  {$ELSE}
+  TRateLimitLimitFunc = function(AReq: THorseRequest): Integer of object;
+  {$ENDIF}
+
+  /// A value read from a request after its handler ran (TLoggerMiddleware.
+  /// AddField). A plain function: it reads the request, it captures nothing.
+  TRequestValueFunc = function(AReq: THorseRequest): string;
 
   /// Answers exceptions that escape the handlers with {"error": "..."} and
   /// the status of PascalApi.Http.MapException, through THorse.OnError (not
@@ -105,6 +116,14 @@ type
     class function New: THorseCallback; overload; static;
     class function New(const AOnLog: TLogProc): THorseCallback; overload; static;
     class function New(const AOnLog: TLogProc; AFormat: TAccessLogFormat): THorseCallback; overload; static;
+    /// An application's field: after the handler, AValueOf(AReq) goes into
+    /// the access line (AccessLogLine/AccessLogJson with extra fields) and
+    /// becomes an attribute of the server span, both named AName (e.g.
+    /// 'tenant.id' with PascalApi.Horse.Tenancy's TenantIdOf). An empty
+    /// value is left out, and so is a value whose function raises (the
+    /// response is already decided). Call before the server listens; none
+    /// by default.
+    class procedure AddField(const AName: string; AValueOf: TRequestValueFunc); static;
   end;
 
   /// "Authorization: Bearer <token>", checked by AValidator; 401 otherwise.
@@ -141,6 +160,10 @@ type
     WindowSeconds: Integer;
     /// nil: the client's IP (X-Forwarded-For, then the remote address).
     KeyExtractor: TRateLimitKeyExtractor;
+    /// nil: Limit for every request. Otherwise the limit of each request
+    /// (with a KeyExtractor that groups requests the same way, e.g. by
+    /// tenant and plan); a result of 0 or less falls back to Limit.
+    LimitFor: TRateLimitLimitFunc;
     /// 60 requests per 60 seconds, by IP.
     class function Default: TRateLimitOptions; static;
   end;
@@ -176,6 +199,8 @@ var
   GCorsOptions: TCorsOptions;
   GOnLog: TLogProc;
   GLogFormat: TAccessLogFormat;
+  GLogFieldNames: TStringArray;
+  GLogFieldFuncs: array of TRequestValueFunc;
   GAuthValidator: TTokenValidator;
   GAuthExcluded: TStringArray;
   GJwtSecret: string;
@@ -318,11 +343,43 @@ begin
     Result := '';
 end;
 
-// Set on the request by the first pass of the logger. A header name can't
-// contain ':' (it ends the name in HTTP/1.1, and Horse strips HTTP/2
-// pseudo-headers), so no client can send it.
+// Set on the request by the first pass of the logger. It used to be
+// ':pascalapi-logged', on the belief that no client can send a name
+// starting with ':'. Measured (2026-10-13): fpWeb cuts the name at the first
+// ':' and ignores such a line, but Indy (Delphi 12 Win32/Win64) kept it, so
+// a raw ':pascalapi-logged: 1' line made the logger skip the request (no
+// access line, no span). A line feed ends a header line in every parser, so
+// a name with one can only come from this code.
 const
-  LOGGED_KEY = ':pascalapi-logged';
+  LOGGED_KEY = ':pascalapi-logged'#10;
+
+// The application's fields (TLoggerMiddleware.AddField) with a value. Read
+// in the logger's finally: a raising function must not replace the
+// handler's outcome, so its field is left out.
+function LogFieldsOf(AReq: THorseRequest): TLogFields;
+var
+  I, N: Integer;
+  LValue: string;
+begin
+  Result := nil;
+  SetLength(Result, Length(GLogFieldFuncs));
+  N := 0;
+  for I := 0 to High(GLogFieldFuncs) do
+  begin
+    try
+      LValue := GLogFieldFuncs[I](AReq);
+    except
+      LValue := '';
+    end;
+    if LValue <> '' then
+    begin
+      Result[N].Name := GLogFieldNames[I];
+      Result[N].Value := LValue;
+      Inc(N);
+    end;
+  end;
+  SetLength(Result, N);
+end;
 
 procedure LoggerHandler(AReq: THorseRequest; ARes: THorseResponse; ANext: TNextProc);
 var
@@ -331,6 +388,8 @@ var
   LStart: UInt64;
   LHeaders: THorseList;
   LSpan: IPcSpan;
+  LFields: TLogFields;
+  I: Integer;
 begin
   // When no route matches, Horse 3.3.12 runs the router again with '/*'
   // (Horse.Core.RouterTree, DoExecuteInternal), so global middlewares run
@@ -385,15 +444,18 @@ begin
       LSpan.SetAttribute('user_agent.original', AReq.Headers['User-Agent']);
     if ARes.Status >= 500 then
       LSpan.SetStatus(ssError);
+    LFields := LogFieldsOf(AReq);
+    for I := 0 to High(LFields) do
+      LSpan.SetAttribute(LFields[I].Name, LFields[I].Value);
     LSpan.Finish;
     if GLogFormat = alfJson then
       LLine := AccessLogJson(TClock.Now, AReq.Method, AReq.PathInfo, ARes.Status,
         Int64(PcTickMs - LStart), LIp, ResponseBytes(ARes), QueryText(AReq),
-        AReq.Headers['User-Agent'], LTrace)
+        AReq.Headers['User-Agent'], LTrace, LFields)
     else
       LLine := AccessLogLine(TClock.Now, AReq.Method, AReq.PathInfo, ARes.Status,
         Int64(PcTickMs - LStart), LIp, ResponseBytes(ARes), QueryText(AReq),
-        AReq.Headers['User-Agent'], LTrace.TraceId);
+        AReq.Headers['User-Agent'], LTrace.TraceId, LFields);
     if Assigned(GOnLog) then
       GOnLog(LLine)
     else
@@ -416,6 +478,16 @@ begin
   GOnLog := AOnLog;
   GLogFormat := AFormat;
   Result := AsCallback(LoggerHandler);
+end;
+
+class procedure TLoggerMiddleware.AddField(const AName: string; AValueOf: TRequestValueFunc);
+begin
+  if (AName = '') or not Assigned(AValueOf) then
+    raise EArgumentException.Create('TLoggerMiddleware.AddField: a name and a function');
+  SetLength(GLogFieldNames, Length(GLogFieldNames) + 1);
+  GLogFieldNames[High(GLogFieldNames)] := AName;
+  SetLength(GLogFieldFuncs, Length(GLogFieldFuncs) + 1);
+  GLogFieldFuncs[High(GLogFieldFuncs)] := AValueOf;
 end;
 
 { Bearer authentication and JWT }
@@ -531,12 +603,13 @@ begin
   Result.Limit := 60;
   Result.WindowSeconds := 60;
   Result.KeyExtractor := nil;
+  Result.LimitFor := nil;
 end;
 
 procedure RateLimitHandler(AReq: THorseRequest; ARes: THorseResponse; ANext: TNextProc);
 var
   LKey: string;
-  LRemaining: Integer;
+  LLimit, LRemaining: Integer;
   LResetUnix, LRetryAfter: Int64;
   LExceeded: Boolean;
 begin
@@ -544,10 +617,15 @@ begin
     LKey := GRateLimit.KeyExtractor(AReq)
   else
     LKey := ClientIp(AReq.Headers['X-Forwarded-For'], RemoteAddrOf(AReq), 'unknown');
+  LLimit := 0;
+  if Assigned(GRateLimit.LimitFor) then
+    LLimit := GRateLimit.LimitFor(AReq);
+  if LLimit <= 0 then
+    LLimit := GRateLimit.Limit;
 
-  GRateLimitState.CheckAndRecord(LKey, GRateLimit.Limit, GRateLimit.WindowSeconds,
+  GRateLimitState.CheckAndRecord(LKey, LLimit, GRateLimit.WindowSeconds,
     LRemaining, LResetUnix, LExceeded);
-  ARes.AddHeader('X-RateLimit-Limit', IntToStr(GRateLimit.Limit));
+  ARes.AddHeader('X-RateLimit-Limit', IntToStr(LLimit));
   ARes.AddHeader('X-RateLimit-Remaining', IntToStr(LRemaining));
   ARes.AddHeader('X-RateLimit-Reset', IntToStr(LResetUnix));
   if not LExceeded then

@@ -307,6 +307,24 @@ body_has 'http_server_request_duration_seconds_count{http_request_method="GET",h
 # METRICS_OUT: also save it, for promtool (tools/test_http_docker.sh).
 [ -n "$METRICS_OUT" ] && cp "$T/body" "$METRICS_OUT"
 
+# --- the logger's internal mark, sent by hand (last: it adds a request).
+# Until 0.13.0 the mark was ':pascalapi-logged', and Indy (Delphi) kept a
+# raw ':pascalapi-logged: 1' line, so the logger skipped the request: no
+# access line, no span. curl won't send such a line; Python's socket does.
+# Checked when the runner says where the server's output goes.
+if [ -n "$SERVER_LOG" ]; then
+  PY=python3
+  $PY -c "" >/dev/null 2>&1 || PY=python
+  $PY -c '
+import socket, sys
+s = socket.create_connection(("127.0.0.1", int(sys.argv[1])))
+s.sendall(b"GET /health/live?probe=hidden HTTP/1.1\r\nHost: 127.0.0.1\r\n:pascalapi-logged: 1\r\nConnection: close\r\n\r\n")
+while s.recv(65536):
+  pass' "$PORT"
+  sleep 1
+  grep -q 'probe=hidden' "$SERVER_LOG" && ok || fail "log: a raw :pascalapi-logged line hid the request"
+fi
+
 rm -rf "$T"
 echo "$CHECKS checks, $FAILS failed"
 [ "$FAILS" -eq 0 ]

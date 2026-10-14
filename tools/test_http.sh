@@ -33,7 +33,7 @@ run() {
   (cd "$1" && "./$2" "$3" $5 > server.log 2>&1 &)
   for I in 1 2 3 4 5 6 7 8 9 10; do curl -s -o /dev/null "http://127.0.0.1:$3/" && break; sleep 1; done
   RC=0
-  sh "$ROOT/tools/$4" "$3" || RC=$?
+  SERVER_LOG="$ROOT/$1/server.log" sh "$ROOT/tools/$4" "$3" || RC=$?
   taskkill //F //IM "$2" >/dev/null 2>&1 || pkill -f "$2" 2>/dev/null || true
   [ $RC -eq 0 ] || { echo "--- $1/server.log"; tail -20 "$1/server.log"; exit $RC; }
 }

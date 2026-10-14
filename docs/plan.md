@@ -183,3 +183,12 @@ Promoted the same day: `PascalApi.Tenancy` and `src/horse/PascalApi.Horse.Tenanc
 metrics because a freed pool gives its series back (already tested in pascal-db-faa 0.14.0).
 The keyed pool registry stayed in the resolver (no second consumer for pascal-db-faa). Verified
 on FPC Windows and Linux and Delphi 12 Win32/Win64 (239 tests, 0 leaks; sample 03, 57 checks).
+Released as 0.12.0.
+
+After 0.12.0, the three follow-ups (released as 0.13.0): `tenant.id` in the access log and spans
+(`TLoggerMiddleware.AddField`), the rate limit by plan (`TRateLimitOptions.LimitFor`,
+`TTenantInfo.Plan`), and the catalog from a control database with a cache
+(`TDbTenantCatalog`, `TCachedTenantCatalog`). On the way: a client could hide a request from
+the access log on Delphi (Indy kept a raw `:pascalapi-logged` line); fixed. And on Delphi, with
+stdout in a file or a pipe, the end of the last access line stayed in the RTL's buffer: fixed
+in pascal-common-faa 1.8.1 (`SafeWriteln` flushes on both compilers), now the minimum.

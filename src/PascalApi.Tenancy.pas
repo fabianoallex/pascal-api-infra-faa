@@ -9,8 +9,11 @@
   library uses this one.
 
   - TTenantInfo and ITenantCatalog. TConfigTenantCatalog reads one
-    configuration string ("acme=dedicated;initech=shared;x=shared,suspended"),
-    parsed once and never changed, so many threads read it without a lock.
+    configuration string ("acme=dedicated,plan:gold;initech=shared;
+    x=shared,suspended"), parsed once and never changed, so many threads
+    read it without a lock. TDbTenantCatalog reads a control database
+    through the application's SQL; TCachedTenantCatalog keeps another
+    catalog's answers for a TTL (found tenants only).
   - TTenantDataScope and ITenantDataResolver: the one contract repositories
     see. The scope carries the database's IDBFactory (its pool and its
     SqlLoader) and the discriminator, the tenant id, always set: repositories
@@ -63,6 +66,9 @@ type
     Id: string;
     Mode: TTenantMode;
     Suspended: Boolean;
+    /// The application's name for what the tenant pays for ('' when none):
+    /// e.g. the rate limit's TRateLimitOptions.LimitFor maps it to a limit.
+    Plan: string;
   end;
 
   ETenantCatalogError = class(Exception);
@@ -75,10 +81,10 @@ type
   end;
 
   /// The catalog from one configuration string, entries split by ';':
-  ///   acme=dedicated;initech=shared;soylent=shared,suspended
-  /// Ids are 1 to 40 characters of a-z, 0-9 and '-' (they name databases).
-  /// ETenantCatalogError for anything else, a repeated id, or an entry
-  /// without dedicated/shared.
+  ///   acme=dedicated,plan:gold;initech=shared;soylent=shared,suspended
+  /// Ids and plans are 1 to 40 characters of a-z, 0-9 and '-' (ids name
+  /// databases). ETenantCatalogError for anything else, a repeated id, or
+  /// an entry without dedicated/shared.
   TConfigTenantCatalog = class(TInterfacedObject, ITenantCatalog)
   private
     FItems: TArray<TTenantInfo>;
@@ -87,6 +93,56 @@ type
     constructor Create(const ASpec: string);
     function Find(const AId: string; out AInfo: TTenantInfo): Boolean;
     function All: TArray<TTenantInfo>;
+  end;
+
+  /// The catalog from a control database (not a tenant's), through the
+  /// application's SQL, named in the factory's SqlLoader: AFindSql takes :ID
+  /// and returns at most one row, AAllSql returns every tenant; both with
+  /// the columns ID, MODE ('dedicated' or 'shared'), SUSPENDED (0 or 1) and
+  /// PLAN (NULL when none). A row that breaks those rules raises
+  /// ETenantCatalogError. Every call reads the database: wrap it in a
+  /// TCachedTenantCatalog.
+  TDbTenantCatalog = class(TInterfacedObject, ITenantCatalog)
+  private
+    FFactory: IDBFactory;
+    FFindSql, FAllSql: string;
+    function ReadInfo(const AResult: IQueryResult): TTenantInfo;
+  public
+    constructor Create(const AFactory: IDBFactory; const AFindSql: string = 'TENANT.BY_ID';
+      const AAllSql: string = 'TENANT.ALL');
+    function Find(const AId: string; out AInfo: TTenantInfo): Boolean;
+    function All: TArray<TTenantInfo>;
+  end;
+
+  /// Another catalog's answers, kept for ATtlSeconds (TTicker). Only tenants
+  /// found are kept: an unknown id asks the inner catalog every time (a
+  /// login can name any id, so remembering misses would let clients grow
+  /// the cache without bound; and a tenant just provisioned is seen at
+  /// once). A change to a known tenant (suspended, plan) shows after the TTL,
+  /// or at once after Invalidate/InvalidateAll (e.g. on a pascal-redis-faa
+  /// Pub/Sub message, when several instances run). Thread-safe; the inner
+  /// catalog is asked outside the lock.
+  TCachedTenantCatalog = class(TInterfacedObject, ITenantCatalog)
+  private type
+    TCached = record
+      Info: TTenantInfo;
+      AtMs: UInt64;
+    end;
+  private
+    FInner: ITenantCatalog;
+    FTtlMs: UInt64;
+    FLock: TCriticalSection;
+    FItems: TDictionary<string, TCached>;
+    FAll: TArray<TTenantInfo>;
+    FAllAtMs: UInt64;
+    FAllValid: Boolean;
+  public
+    constructor Create(const AInner: ITenantCatalog; ATtlSeconds: Integer);
+    destructor Destroy; override;
+    function Find(const AId: string; out AInfo: TTenantInfo): Boolean;
+    function All: TArray<TTenantInfo>;
+    procedure Invalidate(const AId: string);
+    procedure InvalidateAll;
   end;
 
   TTenantDataScope = record
@@ -172,6 +228,7 @@ function PoolNameOf(const ATenant: TTenantInfo): string;
 implementation
 
 uses
+  PascalCommon.Optionals,
   PascalCommon.SystemContext,
   PascalApi.Http;
 
@@ -326,6 +383,12 @@ begin
     end
     else if LOption = 'suspended' then
       LInfo.Suspended := True
+    else if Copy(LOption, 1, 5) = 'plan:' then
+    begin
+      LInfo.Plan := Copy(LOption, 6, MaxInt);
+      if not ValidTenantId(LInfo.Plan) then
+        raise ETenantCatalogError.CreateFmt('Tenant "%s": invalid plan "%s".', [LInfo.Id, LInfo.Plan]);
+    end
     else if LOption <> '' then
       raise ETenantCatalogError.CreateFmt('Tenant "%s": unknown option "%s".', [LInfo.Id, LOption]);
   end;
@@ -352,6 +415,196 @@ end;
 function TConfigTenantCatalog.All: TArray<TTenantInfo>;
 begin
   Result := Copy(FItems);
+end;
+
+{ TDbTenantCatalog }
+
+constructor TDbTenantCatalog.Create(const AFactory: IDBFactory; const AFindSql, AAllSql: string);
+begin
+  inherited Create;
+  if AFactory = nil then
+    raise EArgumentException.Create('TDbTenantCatalog: no factory');
+  FFactory := AFactory;
+  FFindSql := AFindSql;
+  FAllSql := AAllSql;
+end;
+
+function TDbTenantCatalog.ReadInfo(const AResult: IQueryResult): TTenantInfo;
+var
+  LMode: string;
+  LPlan: INullString;
+begin
+  Result := Default(TTenantInfo);
+  Result.Id := AResult.Strings['ID'];
+  if not ValidTenantId(Result.Id) then
+    raise ETenantCatalogError.CreateFmt('Invalid tenant id "%s" in the catalog.', [Result.Id]);
+  LMode := LowerCase(Trim(AResult.Strings['MODE']));
+  if LMode = 'dedicated' then
+    Result.Mode := tmDedicated
+  else if LMode = 'shared' then
+    Result.Mode := tmShared
+  else
+    raise ETenantCatalogError.CreateFmt('Tenant "%s": mode "%s" in the catalog.', [Result.Id, LMode]);
+  Result.Suspended := AResult.Integers['SUSPENDED'] <> 0;
+  LPlan := AResult.NullableStrings['PLAN'];
+  if (LPlan <> nil) and not LPlan.IsNull then
+    Result.Plan := LPlan.Value;
+  if (Result.Plan <> '') and not ValidTenantId(Result.Plan) then
+    raise ETenantCatalogError.CreateFmt('Tenant "%s": plan "%s" in the catalog.', [Result.Id, Result.Plan]);
+end;
+
+function TDbTenantCatalog.Find(const AId: string; out AInfo: TTenantInfo): Boolean;
+var
+  LQuery: IQuery;
+  LScope: IScopeTransaction;
+  LResult: IQueryResult;
+begin
+  AInfo := Default(TTenantInfo);
+  // An id that can't be a tenant's never reaches the database.
+  if not ValidTenantId(AId) then
+    Exit(False);
+  LScope := FFactory.GetPool.AcquireQuery(LQuery);
+  LScope.StartTransaction;
+  try
+    LQuery.Sql := FFactory.SqlLoader[FFindSql].SQL;
+    LQuery.Params.Strings['ID'] := AId;
+    LResult := LQuery.Open;
+    Result := not LResult.Eof;
+    if Result then
+      AInfo := ReadInfo(LResult);
+    LScope.Commit;
+  except
+    LScope.Rollback;
+    raise;
+  end;
+end;
+
+function TDbTenantCatalog.All: TArray<TTenantInfo>;
+var
+  LQuery: IQuery;
+  LScope: IScopeTransaction;
+  LResult: IQueryResult;
+  LCount: Integer;
+begin
+  Result := nil;
+  LScope := FFactory.GetPool.AcquireQuery(LQuery);
+  LScope.StartTransaction;
+  try
+    LQuery.Sql := FFactory.SqlLoader[FAllSql].SQL;
+    LResult := LQuery.Open;
+    SetLength(Result, LResult.RecordCount);
+    LCount := 0;
+    while not LResult.Eof do
+    begin
+      if LCount >= Length(Result) then
+        SetLength(Result, LCount + 16);
+      Result[LCount] := ReadInfo(LResult);
+      Inc(LCount);
+      LResult.Next;
+    end;
+    SetLength(Result, LCount);
+    LScope.Commit;
+  except
+    LScope.Rollback;
+    raise;
+  end;
+end;
+
+{ TCachedTenantCatalog }
+
+constructor TCachedTenantCatalog.Create(const AInner: ITenantCatalog; ATtlSeconds: Integer);
+begin
+  inherited Create;
+  if AInner = nil then
+    raise EArgumentException.Create('TCachedTenantCatalog: no inner catalog');
+  if ATtlSeconds <= 0 then
+    raise EArgumentException.Create('TCachedTenantCatalog: the TTL must be positive');
+  FInner := AInner;
+  FTtlMs := UInt64(ATtlSeconds) * 1000;
+  FLock := TCriticalSection.Create;
+  FItems := TDictionary<string, TCached>.Create;
+end;
+
+destructor TCachedTenantCatalog.Destroy;
+begin
+  FItems.Free;
+  FLock.Free;
+  inherited;
+end;
+
+function TCachedTenantCatalog.Find(const AId: string; out AInfo: TTenantInfo): Boolean;
+var
+  LCached: TCached;
+begin
+  FLock.Acquire;
+  try
+    if FItems.TryGetValue(AId, LCached) and (TTicker.ElapsedMs(LCached.AtMs) < FTtlMs) then
+    begin
+      AInfo := LCached.Info;
+      Exit(True);
+    end;
+  finally
+    FLock.Release;
+  end;
+  // Outside the lock: a slow control database delays only this tenant's
+  // first request, not every request. Two threads may both ask; the last
+  // answer stays.
+  Result := FInner.Find(AId, AInfo);
+  FLock.Acquire;
+  try
+    if Result then
+    begin
+      LCached.Info := AInfo;
+      LCached.AtMs := TTicker.NowMs;
+      FItems.AddOrSetValue(AId, LCached);
+    end
+    else
+      FItems.Remove(AId);
+  finally
+    FLock.Release;
+  end;
+end;
+
+function TCachedTenantCatalog.All: TArray<TTenantInfo>;
+begin
+  FLock.Acquire;
+  try
+    if FAllValid and (TTicker.ElapsedMs(FAllAtMs) < FTtlMs) then
+      Exit(Copy(FAll));
+  finally
+    FLock.Release;
+  end;
+  Result := FInner.All;
+  FLock.Acquire;
+  try
+    FAll := Copy(Result);
+    FAllAtMs := TTicker.NowMs;
+    FAllValid := True;
+  finally
+    FLock.Release;
+  end;
+end;
+
+procedure TCachedTenantCatalog.Invalidate(const AId: string);
+begin
+  FLock.Acquire;
+  try
+    FItems.Remove(AId);
+    FAllValid := False;
+  finally
+    FLock.Release;
+  end;
+end;
+
+procedure TCachedTenantCatalog.InvalidateAll;
+begin
+  FLock.Acquire;
+  try
+    FItems.Clear;
+    FAllValid := False;
+  finally
+    FLock.Release;
+  end;
 end;
 
 { TTenantDataResolver }

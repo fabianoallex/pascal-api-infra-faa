@@ -4,12 +4,14 @@
 # all the cross-tenant attempts (a token of one tenant reading, creating over
 # or deleting another's rows), on dedicated databases and on the shared one.
 # Also the pool metrics named by mode (decision 9 of
-# docs/multitenancy-design.md).
+# docs/multitenancy-design.md), the rate limit by plan, and, when SERVER_LOG
+# names the server's output file, tenant.id in the access log.
 #
 #   sh tools/http_scenarios_tenants.sh [port]   (default 9350; TenantApiSample
 #                                               must be running, started with
 #                                               --reset, default TENANTS and
 #                                               JWT_SECRET)
+#   SERVER_LOG=path/server.log sh tools/http_scenarios_tenants.sh [port]
 #
 # Tokens the sample would never issue (a removed tenant, no tenant, a
 # suspended one) are signed here with Python's hmac, with the sample's
@@ -61,6 +63,26 @@ s = b(hmac.new(sys.argv[2].encode(), (h + "." + p).encode(), hashlib.sha256).dig
 print(h + "." + p + "." + s)' "$1" "$SECRET"
 }
 
+# raw METHOD PATH TOKEN LINE -> the whole response in $T/body; LINE is one
+# more header line, sent as it is (curl won't send a name starting with ':').
+# MSYS2_ARG_CONV_EXCL: Git Bash would rewrite ':name: value' as a path list
+# on its way to a Windows python (the request then never left); no effect
+# elsewhere.
+raw() {
+  MSYS2_ARG_CONV_EXCL='*' $PY -c '
+import socket, sys
+s = socket.create_connection(("127.0.0.1", int(sys.argv[1])))
+auth = ("Authorization: Bearer " + sys.argv[4] + "\r\n") if sys.argv[4] else ""
+s.sendall((sys.argv[2] + " " + sys.argv[3] + " HTTP/1.1\r\nHost: 127.0.0.1\r\n" + auth +
+  sys.argv[5] + "\r\nConnection: close\r\n\r\n").encode())
+d = b""
+while True:
+  c = s.recv(65536)
+  if not c: break
+  d += c
+sys.stdout.write(d.decode("utf-8", "replace"))' "$PORT" "$1" "$2" "$3" "$4" > "$T/body"
+}
+
 # --- login: the application's route, resolving the tenant from the body
 ACME="$(login acme ana)"
 [ -n "$ACME" ] && ok || fail "login acme (dedicated): $(cat "$T/body")"
@@ -89,18 +111,10 @@ req GET /tenant "" -H "Authorization: Bearer $UMBRELLA" -H "X-Tenant-Id: initech
 body_is '{"tenant":"umbrella","mode":"shared"}' "a header naming another tenant is ignored"
 # The middleware's internal mark, sent by hand: curl drops a header line that
 # starts with ':', so a raw request. Whatever the server makes of the line
-# (ignored, or a 400), it must not become the tenant.
-$PY -c '
-import socket, sys
-s = socket.create_connection(("127.0.0.1", int(sys.argv[1])))
-s.sendall(("GET /tenant HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer " + sys.argv[2] +
-  "\r\n:pascalapi-tenant: initech\r\nConnection: close\r\n\r\n").encode())
-d = b""
-while True:
-  c = s.recv(65536)
-  if not c: break
-  d += c
-sys.stdout.write(d.decode("utf-8", "replace"))' "$PORT" "$UMBRELLA" > "$T/body"
+# (fpWeb cuts the name at the first ':'; Indy kept such a line, which let a
+# client hide from the access log until the marks got a line feed in their
+# names), it must not become the tenant.
+raw GET /tenant "$UMBRELLA" ":pascalapi-tenant: initech"
 body_has 'HTTP/1.1 ' "the internal mark sent by hand: an answer"
 body_lacks '"tenant":"initech"' "the internal mark can't be sent"
 req GET /cities ""
@@ -181,6 +195,40 @@ status_is 200 "initech's city with the same code is still there"
 req GET /cities/4205407 "" -H "Authorization: Bearer $UMBRELLA"
 status_is 404 "umbrella's is gone"
 
+# --- rate limit: one window per tenant, its limit by the tenant's plan
+# (TRateLimitOptions.KeyExtractor and LimitFor)
+curl -s -D "$T/headers" -o /dev/null -H "Authorization: Bearer $ACME" "$BASE/tenant"
+grep -qi '^X-RateLimit-Limit: 1000' "$T/headers" && ok || fail "acme: the default limit, 1000 (headers: $(cat "$T/headers"))"
+HOOLI="$(login hooli eva)"
+[ -n "$HOOLI" ] && ok || fail "login hooli (plan free): $(cat "$T/body")"
+for N in 1 2 3 4 5; do
+  req GET /tenant "" -H "Authorization: Bearer $HOOLI"
+  status_is 200 "hooli (plan free), request $N of 5"
+done
+curl -s -D "$T/headers" -o "$T/body" -w '%{http_code}' -H "Authorization: Bearer $HOOLI" "$BASE/tenant" > "$T/status"
+status_is 429 "hooli, a 6th request within the minute"
+grep -qi '^X-RateLimit-Limit: 5' "$T/headers" && ok || fail "hooli: the plan's limit, 5 (headers: $(cat "$T/headers"))"
+req GET /tenant "" -H "Authorization: Bearer $INITECH"
+status_is 200 "initech, on the same shared database, has its own window"
+
+# --- tenant.id in the access log (TLoggerMiddleware.AddField), when the
+# runner says where the server's output goes
+if [ -n "$SERVER_LOG" ]; then
+  req GET "/tenant?probe=acme" "" -H "Authorization: Bearer $ACME"
+  # No token: the JWT middleware answers 401 before the tenant middleware
+  # runs, with a client's line under the tenant mark's name.
+  raw GET "/cities?probe=spoof" "" ":pascalapi-tenant: acme"
+  body_has ' 401 ' "a request without a token, with a raw tenant mark line"
+  # The logger's own mark, sent by hand: it must not hide the request.
+  raw GET "/health/live?probe=hidden" "" ":pascalapi-logged: 1"
+  sleep 1
+  grep 'probe=acme' "$SERVER_LOG" | grep -qF '"tenant.id":"acme"' && ok \
+    || fail "log: tenant.id of acme's request ($(grep 'probe=acme' "$SERVER_LOG"))"
+  grep -q 'probe=spoof' "$SERVER_LOG" && ok || fail "log: the 401 is logged"
+  grep 'probe=spoof' "$SERVER_LOG" | grep -qF 'tenant.id' && fail "log: a client's tenant mark reached the log" || ok
+  grep -q 'probe=hidden' "$SERVER_LOG" && ok || fail "log: a raw :pascalapi-logged line hid the request"
+fi
+
 # --- the routes that need no tenant
 req GET /health/live ""
 status_is 200 "health needs no tenant"
@@ -195,7 +243,8 @@ req GET /metrics ""
 status_is 200 "metrics"
 grep -q 'pool_name="dedicated"' "$T/body" && ok || fail "metrics: a pool named dedicated"
 grep -q 'pool_name="shared"' "$T/body" && ok || fail "metrics: a pool named shared"
-grep -qE 'pool_name="(acme|globex|initech|umbrella|soylent|tenant_)' "$T/body" && fail "metrics: a pool named by tenant" || ok
+grep -qE 'pool_name="(acme|globex|initech|umbrella|soylent|hooli|tenant_)' "$T/body" && fail "metrics: a pool named by tenant" || ok
+grep -q 'pool_name="control"' "$T/body" && ok || fail "metrics: the control database's pool (the catalog)"
 # Two dedicated pools of 5 under one name: their series add up.
 MAX_DEDICATED=$(metric_sum db_client_connection_max 'pool_name="dedicated"' "$T/body")
 [ "$MAX_DEDICATED" = "10" ] && ok || fail "metrics: db_client_connection_max of the dedicated pools is 2 x 5 (got $MAX_DEDICATED)"

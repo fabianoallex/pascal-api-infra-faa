@@ -23,7 +23,8 @@ security, `search_path`, `USE`) are never what the base relies on.
 - `TRateLimitOptions.KeyExtractor` already takes any key (`tenant:user` works today); the limit
   itself is one per process.
 - `TLoggerMiddleware` marks the request with a header no client can send (`:pascalapi-logged`):
-  the same trick can carry the resolved tenant through the chain.
+  the same trick can carry the resolved tenant through the chain. (Later found false on
+  Indy: see "Logging, rate limit and catalog: what was done".)
 - Horse's callbacks are plain procedures on FPC: one configuration per process (accepted
   2026-10-08), so a tenant middleware keeps its settings in its unit like the others.
 - pascal-db-faa's `TDBRegistry` registers factories by name, but `RegisterFactory` raises on a
@@ -204,10 +205,11 @@ In the sample (SQLite), provisioning is opening the file.
 - On a request it travels on the request, marked like the logger's mark (`:pascalapi-tenant`);
   `TTenantMiddleware.Current(AReq)` returns it, as `TJwtMiddleware.Claims` does. Horse's
   `Sessions` is the alternative (to measure on both compilers before choosing).
-- The mark is safe because the middleware **overwrites** it on every request it lets through,
-  not because a client can't send it: HTTP forbids ':' in a header name, but fpWeb accepted a
-  raw `:sample-tenant: initech` line (measured in sample 03; curl won't even send it, the
-  check uses a raw socket). Routes the middleware skips never read it.
+- The mark's name ends with a line feed (`':pascalapi-tenant'#10`), which no HTTP parser puts
+  in a header name, and the middleware removes the name from every request before deciding.
+  (First written as "safe because the middleware overwrites it"; that missed a request the
+  JWT middleware refuses before the tenant middleware runs, whose log line would have shown a
+  client's tenant. See "Logging, rate limit and catalog: what was done".)
 - **Passed explicitly** to services and repositories, never only through a `threadvar`: jobs,
   AMQP consumers and code outside a request have no request to read it from.
 
@@ -230,12 +232,12 @@ demand.
 
 ### What changes in the existing pieces
 
-- **Rate limit**: key `tenant:user` (works today); a limit per plan needs the per-key limit
-  lookup (decision 1).
-- **Access log**: `tenant.id` through the extra-fields hook. The logger writes after the chain
-  returns, so a tenant set later in the chain should be visible to it (to verify).
-- **Spans**: `tenant.id` as an attribute of the server span (spans aren't aggregated, so high
-  cardinality is fine there).
+- **Rate limit**: key by tenant through `KeyExtractor`, the limit by plan through
+  `TRateLimitOptions.LimitFor` (done).
+- **Access log**: `tenant.id` through `TLoggerMiddleware.AddField('tenant.id', TenantIdOf)`
+  (done; the logger writes after the chain returns, and does see the tenant: verified).
+- **Spans**: `tenant.id` as an attribute of the server span, by the same `AddField` (done;
+  spans aren't aggregated, so high cardinality is fine there).
 - **Metrics**: never labelled by tenant id (the same reason a metric is never labelled with the
   raw path); pool names per decision 9.
 - **OpenAPI/MCP**: the tenant header or claim documented; the MCP executor calls back through
@@ -261,8 +263,6 @@ demand.
 
 ## To measure before relying on it
 
-- **The access log sees the tenant**: the logger runs first and writes after the chain returns,
-  so a tenant set later should be visible to it; verify on both compilers.
 - **Horse's `Sessions`** as the carrier of `ITenantContext`, against the request mark: does it
   behave the same on Delphi and FPC, and who frees what.
 
@@ -337,6 +337,57 @@ eviction of idle pools (waits on decision 9's measurement), unit tests of the te
 Verified on Delphi 12 Win32 and Win64 too: 239 tests, 0 leaks, and sample 03's 57 checks. The
 first Delphi build failed on `PascalApi.Horse.Tenancy`: a `finalization` with no
 `initialization` before it, which FPC accepts and Delphi doesn't (fixed by the user).
+
+## Logging, rate limit and catalog: what was done (2026-10-13, after 0.12.0)
+
+Three generic extension points (decision 1: their defaults are today's behaviour, and none
+names a tenant) and what the tenancy builds on them:
+
+- **`TLoggerMiddleware.AddField(AName, AValueOf)`**: after the handler, `AValueOf(AReq)` (a plain
+  function: it reads the request, it captures nothing) goes into the access line
+  (`AccessLogLine`/`AccessLogJson` overloads with `TLogFields`: ` name=value` in text, a string
+  member in JSON) and onto the server span. Empty values and functions that raise are left
+  out. The tenancy gives `TenantIdOf`; sample 03 registers `tenant.id`.
+- **`TRateLimitOptions.LimitFor`** (`PASCALAPI_FUNCREFS`, like `KeyExtractor`): the limit of each
+  request, 0 or less for `Limit`; the `X-RateLimit-Limit` header follows it. `TTenantInfo.Plan`
+  (`plan:<name>` in the configuration catalog, a `PLAN` column in the database one) is what an
+  application maps to a limit. Sample 03: a window per tenant, plan `free` 5 a minute, others
+  1000.
+- **`TDbTenantCatalog`** (the application's SQL by name, columns `ID`, `MODE`, `SUSPENDED`,
+  `PLAN`; an id that can't be a tenant's never reaches the database) and
+  **`TCachedTenantCatalog`** (TTL through `TTicker`, found tenants only, `Invalidate`/
+  `InvalidateAll`). Sample 03 seeds `control.sqlite` from `TENANTS` at startup and serves from
+  it, cached 30 s.
+- Sample 03 also closes a database no request asked for in 10 minutes (`DB_IDLE_SECONDS`) and
+  exports spans; CI checks `tenant.id` on them (`tools/otlp_check.py`), and the scenario
+  script reads the server's log when the runner gives `SERVER_LOG`.
+
+**Found and fixed: a client could hide from the access log on Delphi.** The logger marked a
+request with the header name `:pascalapi-logged`, on the belief that no client can send a name
+starting with ':'. A raw `:pascalapi-logged: 1` line, sent with a socket (curl refuses to):
+
+| Server | The request | Logged? |
+|---|---|---|
+| FPC 3.2.2, fpWeb (sample 01) | answered 200 | yes: fpWeb cuts the name at the first ':' |
+| Delphi 12 Win32 and Win64, Indy (sample 01) | answered 200 | **no**: no access line, so no span either |
+
+Both marks now end with a line feed (`#10`), which no parser leaves in a header name; the
+tenant middleware also removes its name from every request first. Checked by
+`tools/http_scenarios.sh` (sample 01: the request is logged) and
+`tools/http_scenarios_tenants.sh` (sample 03: the same, and a 401 with a raw tenant line shows
+no `tenant.id`). The origin, delphi-api-infra-faa, isn't affected: its
+`Horse.Middleware.Logger` only sets `X-Request-Id` and never skips a request (read, 0.4.1).
+
+Verified: 254 unit tests with 0 leaks (FPC Windows and Linux); HTTP 147 + 65 + 73 checks
+and the OTLP spans on Linux (`tools/ci-test.sh`), 147 + 65 + 73 on FPC Windows; Delphi 12
+Win32 and Win64: 254 tests with 0 leaks, 147 + 65 + 73 checks (the raw `:pascalapi-logged`
+request is logged by Indy now).
+
+The Delphi run found one more thing: sample 03's hidden-request check failed although the
+request was logged. With stdout in a file, Delphi's RTL on Windows flushes `Writeln` only for a
+console and keeps a 128-byte buffer, so the end of the last line waited for more output
+(sample 03's JSON line was cut at `...,"dur`). Fixed in pascal-common-faa 1.8.1
+(`SafeWriteln` flushes on both compilers), now this library's minimum.
 
 ## Not in this design
 

@@ -7,7 +7,8 @@ Run by tools/test_http_docker.sh after tools/http_scenarios.sh and
 tools/http_scenarios_db.sh, with the samples exporting to the collector.
 What it checks follows those scripts' requests: the trace id they send in
 traceparent (4bf92f...), the MCP tool call, a 500, the not-sampled request,
-sample 02's routes and the spans pascal-db-faa (0.13.0) opens under them. Exit code 0 only if every check passed.
+sample 02's routes and the spans pascal-db-faa (0.13.0) opens under them, and
+sample 03's tenant.id. Exit code 0 only if every check passed.
 """
 import json
 import sys
@@ -130,6 +131,22 @@ def main():
           "sample 02: a transaction span is a child of a server span")
     check(any(any(s.get("parentSpanId") == t["spanId"] for s in stmts) for t in commits),
           "sample 02: statements inside a transaction are its children")
+
+    # Sample 03: tenant.id on the server spans (TLoggerMiddleware.AddField
+    # with TenantIdOf), only on requests the tenant middleware let through.
+    s03 = [s for s in spans if s["_service"] == "tenants-api"]
+    check(len(s03) > 10, "sample 03 spans: %d" % len(s03))
+    servers03 = [s for s in s03 if s["kind"] == 2]
+    tenants = {s["_attrs"].get("tenant.id") for s in servers03} - {None}
+    check({"acme", "globex", "initech", "umbrella"} <= tenants,
+          "sample 03: tenant.id on the server spans (%s)" % sorted(tenants))
+    # OTLP JSON writes an int64 as a string; compare as text.
+    status = lambda s: str(s["_attrs"].get("http.response.status_code"))
+    check(any(status(s) == "401" for s in servers03), "sample 03: a 401 server span")
+    check(not any(s["_attrs"].get("tenant.id") and status(s) == "401" for s in servers03),
+          "sample 03: no tenant.id on a 401")
+    check(not any(s["_attrs"].get("tenant.id") == "soylent" for s in servers03),
+          "sample 03: no tenant.id for the suspended tenant (refused)")
 
     print("%d failed" % failures)
     sys.exit(1 if failures else 0)

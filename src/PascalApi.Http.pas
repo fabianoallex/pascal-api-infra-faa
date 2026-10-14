@@ -125,6 +125,14 @@ type
 
   TAccessLogFormat = (alfText, alfJson);
 
+  /// An application's field in the access log line (and, through the
+  /// logger middleware, an attribute of the request's server span).
+  TLogField = record
+    Name: string;
+    Value: string;
+  end;
+  TLogFields = TArray<TLogField>;
+
   /// One readiness check's outcome, for HealthJson.
   THealthCheckResult = record
     Name: string;
@@ -184,7 +192,7 @@ function ResolveRequestTrace(const ATraceParent, ATraceState, ARequestId: string
 /// [yyyy-mm-dd hh:nn:ss] METHOD /path STATUS Xms IP BYTES "QUERY" "USER-AGENT" REQUEST-ID
 /// Empty IP, bytes, query or user agent are written as "-".
 function AccessLogLine(ATime: TDateTime; const AMethod, APath: string; AStatus: Integer;
-  AElapsedMs: Int64; const AIp, ABytes, AQuery, AUserAgent, ARequestId: string): string;
+  AElapsedMs: Int64; const AIp, ABytes, AQuery, AUserAgent, ARequestId: string): string; overload;
 
 /// The same request as one JSON object, for log collectors:
 /// {"time":"yyyy-mm-ddThh:nn:ss.zzz","trace_id":...,"span_id":...,
@@ -194,7 +202,20 @@ function AccessLogLine(ATime: TDateTime; const AMethod, APath: string; AStatus: 
 /// line). Empty values are left out; bytes is a number when it is one.
 function AccessLogJson(ATime: TDateTime; const AMethod, APath: string; AStatus: Integer;
   AElapsedMs: Int64; const AIp, ABytes, AQuery, AUserAgent: string;
-  const ATrace: TRequestTrace): string;
+  const ATrace: TRequestTrace): string; overload;
+
+/// The same, with the application's fields after the standard ones: in the
+/// text line as ' name=value' (the value in double quotes, '"' and '\'
+/// escaped with '\', when it has a space, a quote or a backslash), in JSON as string
+/// members. A field with an empty value is left out. A name is the
+/// application's: one that repeats a standard key gives a JSON object with
+/// the key twice.
+function AccessLogLine(ATime: TDateTime; const AMethod, APath: string; AStatus: Integer;
+  AElapsedMs: Int64; const AIp, ABytes, AQuery, AUserAgent, ARequestId: string;
+  const AExtra: TLogFields): string; overload;
+function AccessLogJson(ATime: TDateTime; const AMethod, APath: string; AStatus: Integer;
+  AElapsedMs: Int64; const AIp, ABytes, AQuery, AUserAgent: string;
+  const ATrace: TRequestTrace; const AExtra: TLogFields): string; overload;
 
 /// ALine + ' trace_id=<ATraceId>'; ALine unchanged when ATraceId is ''.
 /// For the error handler's line, so it can be found from the response's
@@ -561,18 +582,55 @@ end;
 function AccessLogLine(ATime: TDateTime; const AMethod, APath: string; AStatus: Integer;
   AElapsedMs: Int64; const AIp, ABytes, AQuery, AUserAgent, ARequestId: string): string;
 begin
+  Result := AccessLogLine(ATime, AMethod, APath, AStatus, AElapsedMs, AIp, ABytes, AQuery,
+    AUserAgent, ARequestId, nil);
+end;
+
+function LogFieldText(const AValue: string): string;
+var
+  I: Integer;
+begin
+  if (Pos(' ', AValue) = 0) and (Pos('"', AValue) = 0) and (Pos('\', AValue) = 0) then
+    Exit(AValue);
+  Result := '"';
+  for I := 1 to Length(AValue) do
+    if (AValue[I] = '"') or (AValue[I] = '\') then
+      Result := Result + '\' + AValue[I]
+    else
+      Result := Result + AValue[I];
+  Result := Result + '"';
+end;
+
+function AccessLogLine(ATime: TDateTime; const AMethod, APath: string; AStatus: Integer;
+  AElapsedMs: Int64; const AIp, ABytes, AQuery, AUserAgent, ARequestId: string;
+  const AExtra: TLogFields): string;
+var
+  I: Integer;
+begin
   Result := Format('[%s] %s %s %d %dms %s %s "%s" "%s" %s',
     [FormatDateTime('yyyy-mm-dd hh:nn:ss', ATime), AMethod, APath, AStatus, AElapsedMs,
      DashIfEmpty(AIp), DashIfEmpty(ABytes), DashIfEmpty(AQuery), DashIfEmpty(AUserAgent),
      ARequestId]);
+  for I := 0 to High(AExtra) do
+    if AExtra[I].Value <> '' then
+      Result := Result + ' ' + AExtra[I].Name + '=' + LogFieldText(AExtra[I].Value);
 end;
 
 function AccessLogJson(ATime: TDateTime; const AMethod, APath: string; AStatus: Integer;
   AElapsedMs: Int64; const AIp, ABytes, AQuery, AUserAgent: string;
   const ATrace: TRequestTrace): string;
+begin
+  Result := AccessLogJson(ATime, AMethod, APath, AStatus, AElapsedMs, AIp, ABytes, AQuery,
+    AUserAgent, ATrace, nil);
+end;
+
+function AccessLogJson(ATime: TDateTime; const AMethod, APath: string; AStatus: Integer;
+  AElapsedMs: Int64; const AIp, ABytes, AQuery, AUserAgent: string;
+  const ATrace: TRequestTrace; const AExtra: TLogFields): string;
 var
   LWriter: TJsonWriter;
   LBytes: Int64;
+  I: Integer;
 
   procedure Text(const AName, AValue: string);
   begin
@@ -607,6 +665,8 @@ begin
       Text('bytes', ABytes);
     Text('query', AQuery);
     Text('user_agent', AUserAgent);
+    for I := 0 to High(AExtra) do
+      Text(AExtra[I].Name, AExtra[I].Value);
     LWriter.EndObject;
     Result := LWriter.ToString;
   finally

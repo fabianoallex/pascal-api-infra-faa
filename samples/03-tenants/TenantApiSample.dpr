@@ -9,13 +9,25 @@
 
   The tenants come from TENANTS (environment or .env), by default
 
-    acme=dedicated;globex=dedicated;initech=shared;umbrella=shared;soylent=shared,suspended
+    acme=dedicated;globex=dedicated;initech=shared;umbrella=shared;
+    soylent=shared,suspended;hooli=shared,plan:free
+
+  On startup they are written to a control database, control.sqlite (the
+  sample's stand-in for provisioning: TenantApiSample.Control), which the
+  server reads through the library's TDbTenantCatalog, cached CATALOG_TTL
+  seconds (default 30) by TCachedTenantCatalog.
 
   A dedicated tenant has its own database file, tenant_<id>.sqlite; the
   others share shared.sqlite. Every file sits in DATA_DIR (by default next to
   the executable) and gets the same migrations on startup, every tenant's,
-  before the server listens (never on a tenant's first request). --reset
-  deletes the files first.
+  before the server listens (never on a tenant's first request). A database
+  no request asked for in DB_IDLE_SECONDS (default 600) is closed, and
+  opened again when needed. --reset deletes the files first.
+
+  Rate limit: one window per tenant, 1000 requests a minute, 5 for the plan
+  "free" (hooli). Each access line and server span carries tenant.id
+  (TLoggerMiddleware.AddField); spans go to an OpenTelemetry collector when
+  OTEL_EXPORTER_OTLP_ENDPOINT is set.
 
   The tenancy is the library's (PascalApi.Tenancy, PascalApi.Horse.Tenancy;
   it lived in this sample until it was proven). The tenant of a request is
@@ -58,6 +70,7 @@ uses
   PascalJsonMapper.Mapper,
   PascalCommon.JsonMapper.Optionals,
   PascalDb.Interfaces,
+  PascalDb.SqlSources,
   PascalDb.Migrations,
   PascalDb.Adapter.Base,
   {$IFDEF FPC}
@@ -71,13 +84,20 @@ uses
   PascalApi.Horse.Middlewares,
   PascalApi.Horse.OpenApi,
   PascalApi.Horse.Observability,
+  PascalCommon.Tracing,
+  PascalApi.Otlp,
   PascalApi.Tenancy,
   PascalApi.Horse.Tenancy,
-  TenantApiSample.Cities in 'TenantApiSample.Cities.pas';
+  TenantApiSample.Cities in 'TenantApiSample.Cities.pas',
+  TenantApiSample.Control in 'TenantApiSample.Control.pas';
 
 const
   DEFAULT_TENANTS =
-    'acme=dedicated;globex=dedicated;initech=shared;umbrella=shared;soylent=shared,suspended';
+    'acme=dedicated;globex=dedicated;initech=shared;umbrella=shared;soylent=shared,suspended;' +
+    'hooli=shared,plan:free';
+  // Requests per minute: the plan "free", and everyone else.
+  FREE_LIMIT = 5;
+  DEFAULT_LIMIT = 1000;
 
 var
   GSecret, GClaim, GDataDir: string;
@@ -87,19 +107,25 @@ var
 { Tenancy }
 
 type
-  // The resolver's callback is a method on FPC (PASCALAPI_FUNCREFS: "of
+  // The library's callbacks are methods on FPC (PASCALAPI_FUNCREFS: "of
   // object" there, "reference to" on Delphi).
-  TSampleDatabases = class
+  TSampleHooks = class
   public
+    /// TTenantDataResolver's: a tenant database.
     function NewFactory(const ADatabaseKey, APoolName: string): IDBFactory;
+    /// TRateLimitOptions.KeyExtractor: one window per tenant; requests with
+    /// no tenant (login, health) share one.
+    function RateKey(AReq: THorseRequest): string;
+    /// TRateLimitOptions.LimitFor: the tenant's plan.
+    function PlanLimit(AReq: THorseRequest): Integer;
   end;
 
-function TSampleDatabases.NewFactory(const ADatabaseKey, APoolName: string): IDBFactory;
+function NewSqliteFactory(const AFile, APoolName: string; const ASource: ISqlSource): IDBFactory;
 var
   LConfig: IDatabaseConfig; // an interface variable, never a class one (pascal-db-faa's rule)
   LFile: string;
 begin
-  LFile := GDataDir + ADatabaseKey + '.sqlite';
+  LFile := AFile;
   LConfig := TDatabaseConfig.Create;
   {$IFDEF FPC}
   LConfig.ConnectionParams.Values['ConnectorType'] := 'SQLite3';
@@ -115,7 +141,7 @@ begin
   {$ENDIF}
   LConfig.SQLDialect := 'SQLite';
   LConfig.SQLDirectory := 'SQLITE';
-  LConfig.SqlSource := CitySqlSource;
+  LConfig.SqlSource := ASource;
   LConfig.PoolName := APoolName;
   LConfig.PoolIniConnections := 1;
   LConfig.PoolMaxConnections := 5;
@@ -126,6 +152,30 @@ begin
   {$ELSE}
   Result := TFDFactory.Create(LConfig);
   {$ENDIF}
+end;
+
+function TSampleHooks.NewFactory(const ADatabaseKey, APoolName: string): IDBFactory;
+begin
+  Result := NewSqliteFactory(GDataDir + ADatabaseKey + '.sqlite', APoolName, CitySqlSource);
+end;
+
+function TSampleHooks.RateKey(AReq: THorseRequest): string;
+var
+  LInfo: TTenantInfo;
+begin
+  if TTenantMiddleware.TryCurrent(AReq, LInfo) then
+    Result := 'tenant:' + LInfo.Id
+  else
+    Result := 'anonymous';
+end;
+
+function TSampleHooks.PlanLimit(AReq: THorseRequest): Integer;
+var
+  LInfo: TTenantInfo;
+begin
+  Result := 0; // the options' Limit
+  if TTenantMiddleware.TryCurrent(AReq, LInfo) and (LInfo.Plan = 'free') then
+    Result := FREE_LIMIT;
 end;
 
 function CitiesOf(AReq: THorseRequest): TCityRepository;
@@ -320,24 +370,53 @@ end;
 // --reset. A file another process holds open (another instance on the same
 // DATA_DIR) can't be deleted on Windows: stop instead of starting on old data
 // (seen: a second Delphi Win64 instance kept the first one's rows).
-procedure DeleteDatabases;
-var
-  LTenants: TArray<TTenantInfo>;
-  LFile: string;
-  I: Integer;
-begin
-  LTenants := GCatalog.All;
-  for I := 0 to High(LTenants) do
+procedure DeleteDatabases(const ASpec: ITenantCatalog);
+
+  procedure DeleteDatabase(const AKey: string);
+  var
+    LFile: string;
   begin
-    LFile := GDataDir + DatabaseKeyOf(LTenants[I]) + '.sqlite';
+    LFile := GDataDir + AKey + '.sqlite';
     if FileExists(LFile) and not DeleteFile(LFile) then
       raise Exception.CreateFmt('--reset: can''t delete %s (another instance using it?)', [LFile]);
   end;
+
+var
+  LTenants: TArray<TTenantInfo>;
+  I: Integer;
+begin
+  DeleteDatabase('control');
+  LTenants := ASpec.All;
+  for I := 0 to High(LTenants) do
+    DeleteDatabase(DatabaseKeyOf(LTenants[I]));
+end;
+
+// The catalog: control.sqlite, seeded from TENANTS (the sample's stand-in
+// for provisioning), read through the library's TDbTenantCatalog and kept
+// CATALOG_TTL seconds by TCachedTenantCatalog.
+function OpenCatalog(const ASpec: ITenantCatalog; ALog: TSampleLog): ITenantCatalog;
+var
+  LControl: IDBFactory;
+  LEngine: TDBMigrationEngine;
+begin
+  LControl := NewSqliteFactory(GDataDir + 'control.sqlite', 'control', ControlSqlSource);
+  LEngine := TDBMigrationEngine.Create(LControl, ALog.Migration);
+  try
+    LEngine.Execute(ControlMigrations);
+    Writeln('database control at version ', LEngine.CurrentVersion);
+  finally
+    LEngine.Free;
+  end;
+  SeedTenants(LControl, ASpec);
+  Result := TCachedTenantCatalog.Create(TDbTenantCatalog.Create(LControl),
+    StrToIntDef(TAppConfig.Get('CATALOG_TTL', '30'), 30));
 end;
 
 var
   GLog: TSampleLog;
-  GDatabases: TSampleDatabases;
+  GHooks: TSampleHooks;
+  GSpec: ITenantCatalog;
+  GRateLimit: TRateLimitOptions;
   GPort, I: Integer;
   GReset: Boolean;
 
@@ -358,19 +437,33 @@ begin
   GClaim := TAppConfig.Get('TENANT_CLAIM', TENANT_DEFAULT_CLAIM);
 
   GLog := TSampleLog.Create;
-  GDatabases := TSampleDatabases.Create;
+  GHooks := TSampleHooks.Create;
   try
-    GCatalog := TConfigTenantCatalog.Create(TAppConfig.Get('TENANTS', DEFAULT_TENANTS));
+    GSpec := TConfigTenantCatalog.Create(TAppConfig.Get('TENANTS', DEFAULT_TENANTS));
     if GReset then
-      DeleteDatabases;
-    GResolver := TTenantDataResolver.Create(GDatabases.NewFactory);
+      DeleteDatabases(GSpec);
+    GCatalog := OpenCatalog(GSpec, GLog);
+    GResolver := TTenantDataResolver.Create(GHooks.NewFactory,
+      StrToIntDef(TAppConfig.Get('DB_IDLE_SECONDS', '600'), 600));
     MigrateAll(GLog);
 
+    if TAppConfig.Get('OTEL_EXPORTER_OTLP_ENDPOINT', '') <> '' then
+      TPcTracing.Start(TPcTracingOptions.FromEnvironment('tenants-api', '1.0.0', ReadAppConfig),
+        TOtlpHttpExporter.FromEnvironment, GLog.Error);
     TErrorHandlerMiddleware.Register(GLog.Error);
+    // tenant.id in each access line and on each server span.
+    TLoggerMiddleware.AddField('tenant.id', TenantIdOf);
     THorse.Use(TLoggerMiddleware.New(nil, alfJson));
     THorse.Use(TMetricsMiddleware.New);
     THorse.Use(TJwtMiddleware.New(GSecret, ['/health', '/metrics', '/auth/login', '/swagger']));
     THorse.Use(TTenantMiddleware.New(GCatalog, GClaim));
+    // After the tenant: one window per tenant, its limit by plan.
+    GRateLimit := TRateLimitOptions.Default;
+    GRateLimit.Limit := DEFAULT_LIMIT;
+    GRateLimit.WindowSeconds := 60;
+    GRateLimit.KeyExtractor := GHooks.RateKey;
+    GRateLimit.LimitFor := GHooks.PlanLimit;
+    THorse.Use(TRateLimitMiddleware.New(GRateLimit));
     TRouteDoc.Post('/auth/login').Summary('Get a token for one tenant (1 hour)').Tag('public')
       .NoContent(200, '{"token": "..."}')
       .Error(400, '"tenant" or "user" is missing')
@@ -416,7 +509,8 @@ begin
   finally
     GResolver := nil;
     GCatalog := nil;
-    GDatabases.Free;
+    GSpec := nil;
+    GHooks.Free;
     GLog.Free;
   end;
 end.

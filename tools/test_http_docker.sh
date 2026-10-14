@@ -4,7 +4,7 @@
 # (tools/http_scenarios.sh, the middlewares; tools/http_scenarios_db.sh,
 # SQLite through pascal-db-faa's SQLdb adapter, which loads Debian's
 # libsqlite3.so.0; tools/http_scenarios_tenants.sh, multi-tenant). Sample 03
-# has no MCP endpoint and exports no spans.
+# has no MCP endpoint; its spans (tenant.id) are checked with the others.
 #
 # Horse is used unchanged (external/horse, 3.3.12). The image needs FPC 3.2.2 and
 # curl, libsqlite3-0, openapi-spec-validator, the MCP Python SDK (mcp 2.0.0,
@@ -56,7 +56,8 @@ MSYS_NO_PATHCONV=1 docker run --rm --network "$NAME" -v "$NAME:/otel:ro" -v "$MO
     PID=$!
     for I in 1 2 3 4 5 6 7 8 9 10; do curl -s -o /dev/null http://127.0.0.1:$3/ && break; sleep 1; done
     RC=0
-    OPENAPI_OUT=/t/openapi-$2.json METRICS_OUT=/t/metrics-$2.txt sh /t/tools/$4 $3 || RC=$?
+    OPENAPI_OUT=/t/openapi-$2.json METRICS_OUT=/t/metrics-$2.txt SERVER_LOG=/t/server-$2.log \
+      sh /t/tools/$4 $3 || RC=$?
     # The document each sample serves, checked against the OpenAPI 3.0 spec.
     if [ $RC -eq 0 ]; then
       python3 -m openapi_spec_validator /t/openapi-$2.json || RC=$?

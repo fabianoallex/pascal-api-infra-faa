@@ -74,6 +74,8 @@ type
     procedure AccessLogLine_Format;
     procedure AccessLogJson_Format;
     procedure AccessLogJson_LeavesOutEmpty_EscapesText;
+    procedure AccessLog_ExtraFields_AfterTheStandardOnes;
+    procedure AccessLog_ExtraFields_QuotedInTheTextLine;
     procedure WithTraceId_AppendsOnlyWhenPresent;
     procedure MetricMethod_KnownOrOther;
     procedure MetricRoute_TemplateOrEmpty;
@@ -518,6 +520,47 @@ begin
     '","span_id":"b7ad6b7169203331","method":"POST","path":"/x","status":500,' +
     '"duration_ms":0,"user_agent":"a \"b\" São"}',
     AccessLogJson(EncodeDate(2025, 1, 1), 'POST', '/x', 500, 0, '', '', '', 'a "b" São', T));
+end;
+
+function Fields(const ANames, AValues: array of string): TLogFields;
+var
+  I: Integer;
+begin
+  Result := nil;
+  SetLength(Result, Length(ANames));
+  for I := 0 to High(ANames) do
+  begin
+    Result[I].Name := ANames[I];
+    Result[I].Value := AValues[I];
+  end;
+end;
+
+procedure THttpHelpersTests.AccessLog_ExtraFields_AfterTheStandardOnes;
+begin
+  TAssert.AssertEquals(
+    '[2025-01-01 00:00:00] GET /x 200 0ms - - "-" "-" id tenant.id=acme plan=gold',
+    AccessLogLine(EncodeDate(2025, 1, 1), 'GET', '/x', 200, 0, '', '', '', '', 'id',
+      Fields(['tenant.id', 'empty', 'plan'], ['acme', '', 'gold'])));
+  TAssert.AssertEquals('{"time":"2025-01-01T00:00:00.000","trace_id":"' + TRACE_ID +
+    '","span_id":"b7ad6b7169203331","parent_span_id":"' + PARENT_ID +
+    '","method":"GET","path":"/x","status":200,"duration_ms":0,"tenant.id":"acme"}',
+    AccessLogJson(EncodeDate(2025, 1, 1), 'GET', '/x', 200, 0, '', '', '', '', SampleTrace,
+      Fields(['tenant.id', 'empty'], ['acme', ''])));
+end;
+
+procedure THttpHelpersTests.AccessLog_ExtraFields_QuotedInTheTextLine;
+begin
+  TAssert.AssertEquals(
+    '[2025-01-01 00:00:00] GET /x 200 0ms - - "-" "-" id who="ana maria" q="a \"b\" c\\d" ' +
+    'utf8=São',
+    AccessLogLine(EncodeDate(2025, 1, 1), 'GET', '/x', 200, 0, '', '', '', '', 'id',
+      Fields(['who', 'q', 'utf8'], ['ana maria', 'a "b" c\d', 'São'])));
+  TAssert.AssertEquals('JSON escapes it as JSON',
+    '{"time":"2025-01-01T00:00:00.000","trace_id":"' + TRACE_ID +
+    '","span_id":"b7ad6b7169203331","parent_span_id":"' + PARENT_ID +
+    '","method":"GET","path":"/x","status":200,"duration_ms":0,"q":"a \"b\" c\\d"}',
+    AccessLogJson(EncodeDate(2025, 1, 1), 'GET', '/x', 200, 0, '', '', '', '', SampleTrace,
+      Fields(['q'], ['a "b" c\d'])));
 end;
 
 procedure THttpHelpersTests.WithTraceId_AppendsOnlyWhenPresent;

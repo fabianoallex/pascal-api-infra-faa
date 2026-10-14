@@ -66,6 +66,7 @@
             <MainSource>MainSource</MainSource>
         </DelphiCompile>
         <DCCReference Include="TenantApiSample.Cities.pas"/>
+        <DCCReference Include="TenantApiSample.Control.pas"/>
         <BuildConfiguration Include="Base">
             <Key>Base</Key>
         </BuildConfiguration>

@@ -70,7 +70,7 @@ all (measured, skill `references/rtti-gotchas.md`).
 
 ## Dependencies
 
-`external/` holds the dependencies as git submodules, pinned: pascal-common-faa `v1.8.0`,
+`external/` holds the dependencies as git submodules, pinned: pascal-common-faa `v1.8.1`,
 pascal-jsonmapper-faa `v0.3.0`, pascal-db-faa `v0.14.0`, Horse `3.3.12` (`fda6fed`; until 0.4.0
 this repository used 3.3.2, `72cc45f`; pascal-dfe-broker moved to 3.3.12 on 2026-10-09, delphi-api-starter is still on 3.3.2). They are **only for this
 repository's tests**: a consumer provides its own single copy of each (submodule + search path),
@@ -162,10 +162,17 @@ its own Horse `src` to the search path.
 - **When no route matches, Horse 3.3.12 runs the router twice** (the path, then `/*`:
   `Horse.Core.RouterTree`, `DoExecuteInternal`), so every global middleware runs twice for one
   request. Seen in samples/02-db's log (two access lines for one `GET /`). `TLoggerMiddleware`
-  marks the request (`:pascalapi-logged`, a name no client can send) and runs once; a new
-  global middleware with side effects must do the same. The others still run twice there; a
+  marks the request and runs once; a new global middleware with side effects must do the same.
+  The others still run twice there; a
   global `TRateLimitMiddleware` would presumably count such a request twice (not measured, not
   fixed: only routes that don't exist).
+- **An internal mark on the request ends with a line feed** (`':pascalapi-logged'#10`,
+  `':pascalapi-tenant'#10`). "No client can send a name starting with ':'" was false: Indy
+  (Delphi) kept a raw `:pascalapi-logged: 1` line and the logger skipped the request (no access
+  line, no span; measured on Delphi 12 Win32/Win64, fixed after 0.12.0). fpWeb cuts the name
+  at the first ':'. A line feed ends a header line in every parser. `tools/http_scenarios.sh`
+  and `tools/http_scenarios_tenants.sh` send such lines with a socket (curl won't) when the
+  runner gives `SERVER_LOG`.
 - **Observability** (`docs/observability-design.md`): the request id is the W3C trace id
   (`ResolveRequestTrace`, from pascal-common-faa's `PascalCommon.TraceContext`); metrics are
   pascal-common-faa's `PascalCommon.Metrics` (`PcMetrics`), named as OpenTelemetry names them;

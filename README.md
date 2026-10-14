@@ -10,7 +10,7 @@ threading), [pascal-jsonmapper-faa](https://github.com/fabianoallex/pascal-jsonm
 paging). It is not a drop-in replacement for the Delphi library: DTOs map **published**
 properties, because FPC 3.2.2's RTTI sees nothing else.
 
-Version **0.12.0** (see the [changelog](CHANGELOG.md)): the core, the Horse middlewares, OpenAPI, an MCP
+Version **0.13.0** (see the [changelog](CHANGELOG.md)): the core, the Horse middlewares, OpenAPI, an MCP
 server (protocol 2026-07-28), W3C trace context, metrics (Prometheus), health endpoints,
 spans exported to an OpenTelemetry collector (OTLP), and opt-in multi-tenancy
 ([docs/multitenancy-design.md](docs/multitenancy-design.md)).
@@ -30,15 +30,15 @@ Observability plan: [docs/observability-design.md](docs/observability-design.md)
 | `PascalApi.Http` | HTTP exceptions (`EValidationException`, `ENotFoundException`...), exception → status mapping, CORS, Bearer, client IP, trace context, access log line (text or JSON), metric labels, health answer; replaceable client messages (English or Portuguese) |
 | `PascalApi.Crypto` | SHA-256, HMAC-SHA256, Base64url (FPC 3.2.2 has no SHA-256) |
 | `PascalApi.Jwt` | HS256 JSON Web Tokens: sign, verify (alg, signature, exp, nbf), claims |
-| `PascalApi.Horse.Middlewares` (`src/horse`) | Horse middlewares: error handler, CORS, request log, Bearer auth, JWT, rate limit |
+| `PascalApi.Horse.Middlewares` (`src/horse`) | Horse middlewares: error handler, CORS, request log (with your own fields: `AddField`), Bearer auth, JWT, rate limit (key and limit per request: `KeyExtractor`, `LimitFor`) |
 | `PascalApi.OpenApi` | OpenAPI 3.0.3 document from routes and DTO types; `TApiSchema.Describe` for metadata |
 | `PascalApi.Horse.OpenApi` (`src/horse`) | `TRouteDoc`: register and document a route in one call; `/swagger` UI and `/swagger/doc.json`, with the JWT/Bearer scheme taken from the auth middleware |
 | `PascalApi.Mcp` | MCP (2026-07-28): the documented routes as tools, and the JSON-RPC dispatcher |
 | `PascalApi.Horse.Mcp` (`src/horse`) | `TMcpEndpoint.Register('/mcp', ...)`: the MCP endpoint; tool calls go through the API's own middlewares |
 | `PascalApi.Otlp` | OTLP/HTTP JSON for traces and `TOtlpHttpExporter` (an `IPcSpanExporter` for pascal-common-faa's `PascalCommon.Tracing`), configured by the standard `OTEL_*` variables |
 | `PascalApi.Horse.Observability` (`src/horse`) | `TMetricsMiddleware` (OpenTelemetry HTTP server metrics), `TMetricsEndpoint` (`/metrics`, Prometheus text), `THealthEndpoint` (`/health/live`, `/health/ready` with your checks) |
-| `PascalApi.Tenancy` | multi-tenancy, opt-in: the tenant catalog, `ITenantDataResolver` (a database per tenant or a shared one, pools named by mode, idle databases dropped), `TTenantFilter.Prepare` (the `TENANT_ID` condition and its parameter in one call), the 401/403 refusals. Design: [docs/multitenancy-design.md](docs/multitenancy-design.md) |
-| `PascalApi.Horse.Tenancy` (`src/horse`) | `TTenantMiddleware`: the tenant from the token's `tenant_id` claim, checked against the catalog, after `TJwtMiddleware`; `TTenantMiddleware.Current(AReq)` in a handler |
+| `PascalApi.Tenancy` | multi-tenancy, opt-in: the tenant catalog (configuration, or a control database with a TTL cache), `ITenantDataResolver` (a database per tenant or a shared one, pools named by mode, idle databases dropped), `TTenantFilter.Prepare` (the `TENANT_ID` condition and its parameter in one call), the 401/403 refusals. Design: [docs/multitenancy-design.md](docs/multitenancy-design.md) |
+| `PascalApi.Horse.Tenancy` (`src/horse`) | `TTenantMiddleware`: the tenant from the token's `tenant_id` claim, checked against the catalog, after `TJwtMiddleware`; `TTenantMiddleware.Current(AReq)` in a handler; `TenantIdOf` for `tenant.id` in the access log and spans |
 | `PascalApi.Version` | `PASCALAPI_VERSION`, for compile-time checks |
 
 ## A quick look
@@ -98,7 +98,7 @@ How to add them to an application, minimum versions and short examples:
 |---|---|---|
 | [01-api](samples/01-api/ApiSample.dpr) | every middleware (errors, CORS, log, metrics, JWT, rate limit), health, paging and validation, in memory | `tools/http_scenarios.sh` (146 checks) |
 | [02-db](samples/02-db/DbApiSample.dpr) | SQLite through pascal-db-faa (SQLdb on FPC, FireDAC on Delphi): migrations, paging and ordering in SQL, filters, 409 from a unique key, NULL as `null` | `tools/http_scenarios_db.sh` (65 checks; also the pool metrics pascal-db-faa records) |
-| [03-tenants](samples/03-tenants/TenantApiSample.dpr) | multi-tenant with `PascalApi.Tenancy`: the tenant from a JWT claim, a database per tenant and a shared one with `TENANT_ID`, 401/403 for a removed or suspended tenant | `tools/http_scenarios_tenants.sh` (57 checks, most of them one tenant trying another's rows) |
+| [03-tenants](samples/03-tenants/TenantApiSample.dpr) | multi-tenant with `PascalApi.Tenancy`: the tenant from a JWT claim, a database per tenant and a shared one with `TENANT_ID`, 401/403 for a removed or suspended tenant | `tools/http_scenarios_tenants.sh` (73 checks, most of them one tenant trying another's rows; also rate limit by plan and `tenant.id` in the log) |
 
 All run with one source on Delphi and Lazarus/FPC. On FPC for Windows, samples 02 and 03 need
 sqlite.org's `sqlite3.dll` next to the executable (see `tools/test_http.sh`).

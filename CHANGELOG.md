@@ -6,6 +6,53 @@ may change the API; each such change is listed here.
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-10-14
+
+The multi-tenancy follow-ups (`tenant.id` in the log and spans, rate limit by plan, the catalog
+from a control database) and two access-log fixes on Delphi.
+
+### Security
+
+- **A client could hide a request from the access log on Delphi.** `TLoggerMiddleware` marked
+  each request with the header name `:pascalapi-logged`, assuming no client can send a name
+  starting with ':'. Indy (the Delphi console provider) kept a raw `:pascalapi-logged: 1` line,
+  so the logger skipped that request: no access line and no server span (measured on Delphi 12
+  Win32 and Win64; fpWeb on FPC cuts the name at the first ':' and wasn't affected). Present
+  since 0.8.0. The mark's name now ends with a line feed, which no HTTP parser leaves in a
+  header name; so does the tenant middleware's (`':pascalapi-tenant'#10`), which also removes
+  its name from every request before deciding. `tools/http_scenarios.sh` and
+  `tools/http_scenarios_tenants.sh` send such lines with a socket.
+
+### Changed
+
+- **Minimum pascal-common-faa is 1.8.1** (`PascalApi.Dto`, the `.lpk`). On Delphi for Windows,
+  with stdout in a file or a pipe (a service, Docker), the end of the last access line stayed
+  in the RTL's 128-byte buffer until more output came, and was lost if the process died: the
+  RTL flushes `Writeln` only for a console. pascal-common-faa 1.8.1's `SafeWriteln` flushes on
+  both compilers. Found by sample 03's scenarios on Delphi 12 Win32/Win64 (a JSON access line
+  cut at `...,"dur`).
+
+### Added
+
+- `TLoggerMiddleware.AddField(AName, AValueOf)`: an application's field, read after the handler
+  (a plain `TRequestValueFunc`), in the access line and as an attribute of the server span; and
+  `AccessLogLine`/`AccessLogJson` overloads with `TLogFields` (` name=value` in text, quoted
+  when needed; a string member in JSON). None by default.
+- `TRateLimitOptions.LimitFor`: the limit of each request (e.g. by the tenant's plan); nil, or a
+  result of 0 or less, is `Limit`. `X-RateLimit-Limit` follows it.
+- `PascalApi.Tenancy`: `TTenantInfo.Plan` (`plan:<name>` in `TConfigTenantCatalog`),
+  `TDbTenantCatalog` (the catalog from a control database, through the application's SQL by
+  name: columns `ID`, `MODE`, `SUSPENDED`, `PLAN`), `TCachedTenantCatalog` (another catalog's
+  found tenants for a TTL, with `Invalidate`/`InvalidateAll`). `PascalApi.Horse.Tenancy`:
+  `TenantIdOf`, for `TLoggerMiddleware.AddField('tenant.id', TenantIdOf)`.
+- `samples/03-tenants`: the catalog in `control.sqlite` (seeded from `TENANTS`) through
+  `TDbTenantCatalog` and `TCachedTenantCatalog`; rate limit per tenant with the plan `free`
+  (tenant `hooli`) at 5 a minute; `tenant.id` in the access log and on the spans, exported to an
+  OpenTelemetry collector (checked in CI by `tools/otlp_check.py`); idle tenant databases closed
+  after `DB_IDLE_SECONDS`. `tools/http_scenarios_tenants.sh`: 73 checks.
+- `tools/test_http.sh` and `tools/test_http_docker.sh` pass `SERVER_LOG` (the server's output
+  file) to the scenario scripts.
+
 ## [0.12.0] - 2026-10-13
 
 Multi-tenancy, opt-in (`docs/multitenancy-design.md`): ten decisions taken with the user, proven

@@ -25,6 +25,7 @@ uses
   DUnitX.TestFramework,
   PascalApi.DUnitXCompat,
   SysUtils,
+  Variants,
   PascalCommon.SystemContext,
   PascalJsonMapper.Json,
   PascalDb.Interfaces,
@@ -39,6 +40,16 @@ type
   public
     procedure Advance(AMs: UInt64);
     function NowMs: UInt64;
+  end;
+
+  /// Another catalog, its calls counted; Inner can be swapped to change the
+  /// answers.
+  TCountingCatalog = class(TInterfacedObject, ITenantCatalog)
+  public
+    Inner: ITenantCatalog;
+    Finds, Alls: Integer;
+    function Find(const AId: string; out AInfo: TTenantInfo): Boolean;
+    function All: TArray<TTenantInfo>;
   end;
 
   /// The resolver's callback: a new mock per call, counted.
@@ -58,6 +69,7 @@ type
     function Catalog: ITenantCatalog;
     function Info(const AId: string): TTenantInfo;
     function CatalogError(const ASpec: string): string;
+    function DbCatalogError(const AMode, AId: string): string;
   public
     [Setup] procedure Setup;
     [TearDown] procedure TearDown;
@@ -71,6 +83,19 @@ type
     [Test] procedure Catalog_RejectsARepeatedId;
     [Test] procedure Catalog_RejectsAnEntryWithoutMode;
     [Test] procedure Catalog_RejectsAnUnknownOption;
+    [Test] procedure Catalog_ReadsAPlan;
+    [Test] procedure Catalog_RejectsAnInvalidPlan;
+    [Test] procedure DbCatalog_Find_ReadsTheRow;
+    [Test] procedure DbCatalog_Find_NullPlanAndSuspended;
+    [Test] procedure DbCatalog_Find_Unknown;
+    [Test] procedure DbCatalog_Find_AnImpossibleIdNeverQueries;
+    [Test] procedure DbCatalog_RejectsABadRow;
+    [Test] procedure DbCatalog_All_ReadsEveryRow;
+    [Test] procedure Cached_FoundTenant_KeptForTheTtl;
+    [Test] procedure Cached_Change_SeenAfterTheTtl;
+    [Test] procedure Cached_UnknownTenant_NotKept;
+    [Test] procedure Cached_Invalidate_AsksAgain;
+    [Test] procedure Cached_All_KeptAndInvalidated;
     [Test] procedure CheckTenant_EachOutcome;
     [Test] procedure TenantIdFromClaims_OnlyAStringClaim;
     [Test] procedure Rejection_NoTenantAndUnknown_Are401;
@@ -103,6 +128,20 @@ end;
 function TManualTicker.NowMs: UInt64;
 begin
   Result := FNowMs;
+end;
+
+{ TCountingCatalog }
+
+function TCountingCatalog.Find(const AId: string; out AInfo: TTenantInfo): Boolean;
+begin
+  Inc(Finds);
+  Result := Inner.Find(AId, AInfo);
+end;
+
+function TCountingCatalog.All: TArray<TTenantInfo>;
+begin
+  Inc(Alls);
+  Result := Inner.All;
 end;
 
 { TFactoryMaker }
@@ -238,6 +277,223 @@ end;
 procedure TTenancyTests.Catalog_RejectsAnUnknownOption;
 begin
   TAssert.AssertEquals('Tenant "acme": unknown option "shard".', CatalogError('acme=shared,shard'));
+end;
+
+procedure TTenancyTests.Catalog_ReadsAPlan;
+var
+  LCatalog: ITenantCatalog;
+  LInfo: TTenantInfo;
+begin
+  LCatalog := TConfigTenantCatalog.Create('acme=dedicated,plan:Gold;initech=shared');
+  TAssert.AssertTrue(LCatalog.Find('acme', LInfo));
+  TAssert.AssertEquals('lowercase, as every option', 'gold', LInfo.Plan);
+  TAssert.AssertTrue(LCatalog.Find('initech', LInfo));
+  TAssert.AssertEquals('no plan', '', LInfo.Plan);
+end;
+
+procedure TTenancyTests.Catalog_RejectsAnInvalidPlan;
+begin
+  TAssert.AssertEquals('Tenant "acme": invalid plan "".', CatalogError('acme=shared,plan:'));
+  TAssert.AssertEquals('Tenant "acme": invalid plan "g/1".', CatalogError('acme=shared,plan:g/1'));
+end;
+
+function TTenancyTests.DbCatalogError(const AMode, AId: string): string;
+var
+  LMock: TMockDBFactory;
+  LCatalog: ITenantCatalog;
+  LInfo: TTenantInfo;
+begin
+  Result := '';
+  LMock := TMockDBFactory.Create;
+  LCatalog := TDbTenantCatalog.Create(LMock);
+  LMock.AddResult('TENANT.BY_ID', TMockQueryResult.SingleRow(['ID', 'MODE', 'SUSPENDED', 'PLAN'],
+    [AId, AMode, 0, Null]));
+  try
+    LCatalog.Find('acme', LInfo);
+  except
+    on E: ETenantCatalogError do
+      Result := E.Message;
+  end;
+end;
+
+procedure TTenancyTests.DbCatalog_Find_ReadsTheRow;
+var
+  LMock: TMockDBFactory;
+  LCatalog: ITenantCatalog;
+  LInfo: TTenantInfo;
+begin
+  LMock := TMockDBFactory.Create;
+  LCatalog := TDbTenantCatalog.Create(LMock);
+  LMock.AddResult('TENANT.BY_ID', TMockQueryResult.SingleRow(['ID', 'MODE', 'SUSPENDED', 'PLAN'],
+    ['acme', 'dedicated', 0, 'gold']));
+  TAssert.AssertTrue(LCatalog.Find('acme', LInfo));
+  TAssert.AssertEquals('the id is the parameter', 'acme',
+    LMock.LastExecution('TENANT.BY_ID').AsString('ID'));
+  TAssert.AssertEquals('acme', LInfo.Id);
+  TAssert.AssertTrue('dedicated', LInfo.Mode = tmDedicated);
+  TAssert.AssertFalse(LInfo.Suspended);
+  TAssert.AssertEquals('gold', LInfo.Plan);
+end;
+
+procedure TTenancyTests.DbCatalog_Find_NullPlanAndSuspended;
+var
+  LMock: TMockDBFactory;
+  LCatalog: ITenantCatalog;
+  LInfo: TTenantInfo;
+begin
+  LMock := TMockDBFactory.Create;
+  LCatalog := TDbTenantCatalog.Create(LMock);
+  LMock.AddResult('TENANT.BY_ID', TMockQueryResult.SingleRow(['ID', 'MODE', 'SUSPENDED', 'PLAN'],
+    ['soylent', ' Shared ', 1, Null]));
+  TAssert.AssertTrue(LCatalog.Find('soylent', LInfo));
+  TAssert.AssertTrue('mode trimmed, any case', LInfo.Mode = tmShared);
+  TAssert.AssertTrue(LInfo.Suspended);
+  TAssert.AssertEquals('NULL is no plan', '', LInfo.Plan);
+end;
+
+procedure TTenancyTests.DbCatalog_Find_Unknown;
+var
+  LMock: TMockDBFactory;
+  LCatalog: ITenantCatalog;
+  LInfo: TTenantInfo;
+begin
+  LMock := TMockDBFactory.Create;
+  LCatalog := TDbTenantCatalog.Create(LMock);
+  LMock.AddResult('TENANT.BY_ID', TMockQueryResult.Empty);
+  TAssert.AssertFalse(LCatalog.Find('wayne', LInfo));
+  TAssert.AssertEquals('', LInfo.Id);
+end;
+
+procedure TTenancyTests.DbCatalog_Find_AnImpossibleIdNeverQueries;
+var
+  LMock: TMockDBFactory;
+  LCatalog: ITenantCatalog;
+  LInfo: TTenantInfo;
+begin
+  LMock := TMockDBFactory.Create;
+  LCatalog := TDbTenantCatalog.Create(LMock);
+  TAssert.AssertFalse(LCatalog.Find('../etc', LInfo));
+  TAssert.AssertFalse(LCatalog.Find('', LInfo));
+  TAssert.AssertEquals(0, LMock.ExecutionCount('TENANT.BY_ID'));
+end;
+
+procedure TTenancyTests.DbCatalog_RejectsABadRow;
+begin
+  TAssert.AssertEquals('Tenant "acme": mode "sharded" in the catalog.', DbCatalogError('sharded', 'acme'));
+  TAssert.AssertEquals('Invalid tenant id "Acme" in the catalog.', DbCatalogError('shared', 'Acme'));
+end;
+
+procedure TTenancyTests.DbCatalog_All_ReadsEveryRow;
+var
+  LMock: TMockDBFactory;
+  LCatalog: ITenantCatalog;
+  LAll: TArray<TTenantInfo>;
+begin
+  LMock := TMockDBFactory.Create;
+  LCatalog := TDbTenantCatalog.Create(LMock);
+  LMock.AddResult('TENANT.ALL', TMockQueryResult.MultiRows(['ID', 'MODE', 'SUSPENDED', 'PLAN'],
+    [TArray<Variant>.Create('acme', 'dedicated', 0, 'gold'),
+     TArray<Variant>.Create('initech', 'shared', 0, Null)]));
+  LAll := LCatalog.All;
+  TAssert.AssertEquals(2, Length(LAll));
+  TAssert.AssertEquals('acme', LAll[0].Id);
+  TAssert.AssertEquals('initech', LAll[1].Id);
+  TAssert.AssertTrue(LAll[1].Mode = tmShared);
+end;
+
+procedure TTenancyTests.Cached_FoundTenant_KeptForTheTtl;
+var
+  LInner: TCountingCatalog;
+  LCached: ITenantCatalog;
+  LInfo: TTenantInfo;
+begin
+  LInner := TCountingCatalog.Create;
+  LInner.Inner := Catalog;
+  LCached := TCachedTenantCatalog.Create(LInner, 30);
+  TAssert.AssertTrue(LCached.Find('acme', LInfo));
+  FTicker.Advance(29 * 1000);
+  TAssert.AssertTrue(LCached.Find('acme', LInfo));
+  TAssert.AssertEquals('asked once within the TTL', 1, LInner.Finds);
+  FTicker.Advance(1000);
+  TAssert.AssertTrue(LCached.Find('acme', LInfo));
+  TAssert.AssertEquals('asked again after it', 2, LInner.Finds);
+end;
+
+procedure TTenancyTests.Cached_Change_SeenAfterTheTtl;
+var
+  LInner: TCountingCatalog;
+  LCached: ITenantCatalog;
+  LInfo: TTenantInfo;
+begin
+  LInner := TCountingCatalog.Create;
+  LInner.Inner := TConfigTenantCatalog.Create('acme=dedicated');
+  LCached := TCachedTenantCatalog.Create(LInner, 30);
+  LCached.Find('acme', LInfo);
+  LInner.Inner := TConfigTenantCatalog.Create('acme=dedicated,suspended');
+  LCached.Find('acme', LInfo);
+  TAssert.AssertFalse('the cached answer within the TTL', LInfo.Suspended);
+  FTicker.Advance(30 * 1000);
+  LCached.Find('acme', LInfo);
+  TAssert.AssertTrue('the change after it', LInfo.Suspended);
+end;
+
+procedure TTenancyTests.Cached_UnknownTenant_NotKept;
+var
+  LInner: TCountingCatalog;
+  LCached: ITenantCatalog;
+  LInfo: TTenantInfo;
+begin
+  LInner := TCountingCatalog.Create;
+  LInner.Inner := Catalog;
+  LCached := TCachedTenantCatalog.Create(LInner, 30);
+  TAssert.AssertFalse(LCached.Find('wayne', LInfo));
+  TAssert.AssertFalse(LCached.Find('wayne', LInfo));
+  TAssert.AssertEquals('every miss asks', 2, LInner.Finds);
+  LInner.Inner := TConfigTenantCatalog.Create(SPEC + ';wayne=shared');
+  TAssert.AssertTrue('a tenant just provisioned is seen at once', LCached.Find('wayne', LInfo));
+end;
+
+procedure TTenancyTests.Cached_Invalidate_AsksAgain;
+var
+  LInner: TCountingCatalog;
+  LCached: TCachedTenantCatalog;
+  LRef: ITenantCatalog;
+  LInfo: TTenantInfo;
+begin
+  LInner := TCountingCatalog.Create;
+  LInner.Inner := Catalog;
+  LCached := TCachedTenantCatalog.Create(LInner, 30);
+  LRef := LCached;
+  LCached.Find('acme', LInfo);
+  LCached.Find('globex', LInfo);
+  LCached.Invalidate('acme');
+  LCached.Find('acme', LInfo);
+  LCached.Find('globex', LInfo);
+  TAssert.AssertEquals('acme again, globex still kept', 3, LInner.Finds);
+  LCached.InvalidateAll;
+  LCached.Find('globex', LInfo);
+  TAssert.AssertEquals(4, LInner.Finds);
+end;
+
+procedure TTenancyTests.Cached_All_KeptAndInvalidated;
+var
+  LInner: TCountingCatalog;
+  LCached: TCachedTenantCatalog;
+  LRef: ITenantCatalog;
+begin
+  LInner := TCountingCatalog.Create;
+  LInner.Inner := Catalog;
+  LCached := TCachedTenantCatalog.Create(LInner, 30);
+  LRef := LCached;
+  TAssert.AssertEquals(5, Length(LCached.All));
+  TAssert.AssertEquals(5, Length(LCached.All));
+  TAssert.AssertEquals('kept', 1, LInner.Alls);
+  LCached.Invalidate('acme');
+  LCached.All;
+  TAssert.AssertEquals('a change to one tenant also drops the list', 2, LInner.Alls);
+  FTicker.Advance(30 * 1000);
+  LCached.All;
+  TAssert.AssertEquals('and so does the TTL', 3, LInner.Alls);
 end;
 
 procedure TTenancyTests.CheckTenant_EachOutcome;

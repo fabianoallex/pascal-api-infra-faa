@@ -14,11 +14,12 @@
   (health, metrics, the application's login route), so TJwtMiddleware must
   be configured first.
 
-  The mark is a request header named ':pascalapi-tenant'. HTTP forbids ':'
-  in a header name, but fpWeb and Indy both accept a raw line
-  ':pascalapi-tenant: x' (measured with sample 03's ':sample-tenant'): what
-  keeps the mark trustworthy is that the middleware overwrites it on every
-  request it lets through, and Current is only meaningful on those.
+  The mark is a request header named ':pascalapi-tenant' plus a line feed,
+  a name no HTTP parser yields (a raw ':name: x' line is cut at the first
+  ':' by fpWeb but was kept by Indy, measured on the logger's mark). The
+  middleware also removes the name from every request before deciding, and
+  sets it only on those it lets through. TenantIdOf reads it for the access
+  log and the server span (TLoggerMiddleware.AddField).
 
   Horse's FPC callbacks are plain procedures, so the settings live in this
   unit: one tenant configuration per process (as the other middlewares). }
@@ -50,6 +51,11 @@ type
     class function Configured: Boolean; static;
   end;
 
+/// The id of the tenant the middleware let through, '' otherwise: for
+/// TLoggerMiddleware.AddField('tenant.id', TenantIdOf), which puts it in
+/// the access log and on the server span.
+function TenantIdOf(AReq: THorseRequest): string;
+
 implementation
 
 uses
@@ -57,7 +63,9 @@ uses
   PascalApi.Horse.Middlewares;
 
 const
-  TENANT_KEY = ':pascalapi-tenant';
+  // The line feed: no parser yields a header name with one (see LOGGED_KEY
+  // in PascalApi.Horse.Middlewares: Indy kept a raw ':name' line).
+  TENANT_KEY = ':pascalapi-tenant'#10;
 
 var
   GCatalog: ITenantCatalog;
@@ -81,6 +89,10 @@ var
   LCheck: TTenantCheck;
   LStatus: Integer;
 begin
+  // Whatever came in under the mark's name goes: only this middleware sets
+  // it, so TenantIdOf (the access log) never shows a client's value on an
+  // excluded path or a refused request.
+  AReq.Headers.Dictionary.Remove(TENANT_KEY);
   if TJwtMiddleware.Excludes(AReq.PathInfo) then
   begin
     ANext();
@@ -133,6 +145,12 @@ begin
   if not TryCurrent(AReq, Result) then
     raise ETenantContextError.Create(
       'No tenant on this request: is the route excluded from the token, or TTenantMiddleware not registered?');
+end;
+
+function TenantIdOf(AReq: THorseRequest): string;
+begin
+  if not AReq.Headers.Dictionary.TryGetValue(TENANT_KEY, Result) then
+    Result := '';
 end;
 
 class function TTenantMiddleware.Configured: Boolean;
