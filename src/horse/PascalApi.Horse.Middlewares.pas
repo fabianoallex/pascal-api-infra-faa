@@ -57,17 +57,6 @@ type
   /// AddField). A plain function: it reads the request, it captures nothing.
   TRequestValueFunc = function(AReq: THorseRequest): string;
 
-  /// Answers exceptions that escape the handlers with {"error": "..."} and
-  /// the status of PascalApi.Http.MapException, through THorse.OnError (not
-  /// a middleware in the chain: register it any time before Listen). AOnError
-  /// gets the log line of the errors worth monitoring (500, 503, 422, lock
-  /// conflicts), ending with " trace_id=<X-Request-Id>" when
-  /// TLoggerMiddleware is in use (without it, no id: a client's own
-  /// X-Request-Id is never copied); client errors aren't passed to it. The
-  /// answers to those same errors carry the id in the body too
-  /// ({"error": ..., "requestId": ...}), so a user can quote it to support.
-  /// Any exception not mapped by MapException is a 500 with a fixed message
-  /// (TApiMessages.InternalError); its own message reaches the log only.
   /// Sends AJson with AStatus as "application/json; charset=utf-8", as UTF-8
   /// bytes. Use it instead of Res.Send(string) for JSON: on Delphi,
   /// Send(string) goes through the web response's Content, which encodes by
@@ -81,6 +70,20 @@ type
     class procedure Send(ARes: THorseResponse; const AJson: string; AStatus: Integer = 200); static;
   end;
 
+  /// Answers exceptions that escape the handlers with {"error": "..."} and
+  /// the status of PascalApi.Http.MapException, through THorse.OnError (not
+  /// a middleware in the chain: register it any time before Listen). AOnError
+  /// gets the log line of the errors worth monitoring (500, 503, 422, lock
+  /// conflicts), ending with " trace_id=<X-Request-Id>" when
+  /// TLoggerMiddleware is in use (without it, no id: a client's own
+  /// X-Request-Id is never copied); client errors aren't passed to it. The
+  /// answers to those same errors carry the id in the body too
+  /// ({"error": ..., "requestId": ...}), so a user can quote it to support.
+  /// Any exception not mapped by MapException is a 500 with a fixed message
+  /// (TApiMessages.InternalError); its own message reaches the log only.
+  /// A middleware's exception doesn't reach OnError on FPC: TLoggerMiddleware
+  /// answers it the same way (and uses AOnError), so register the logger
+  /// first.
   TErrorHandlerMiddleware = class
   public
     class procedure Register; overload; static;
@@ -116,6 +119,11 @@ type
   /// exported with the HTTP semantic-convention attributes; named
   /// '<method> <route>' ('<method>' when no route matched), status error
   /// for a 5xx.
+  ///
+  /// An exception raised by a middleware after it (a token check, a tenant
+  /// catalog, a rate-limit key) is answered here as TErrorHandlerMiddleware
+  /// answers a handler's: on FPC, Horse would otherwise pass it to fpWeb,
+  /// which sent its message and stack addresses as a 500 HTML page.
   TLoggerMiddleware = class
   public
     class function New: THorseCallback; overload; static;
@@ -405,6 +413,28 @@ begin
   SetLength(Result, N);
 end;
 
+// Runs the rest of the chain and answers an exception a middleware raised
+// the way the error handler answers a handler's. Horse sends a handler's
+// exception to THorse.OnError itself, so only a middleware's reaches here.
+// On FPC, Horse 3.3.12's router re-raises it without OnError
+// (TRouterTreeExecutor.Run), and fpWeb answered 500 text/html with the
+// exception's message and stack addresses while this logger wrote 200
+// (measured, FPC 3.2.2/Windows, 2026-10-14). Delphi's router calls OnError
+// there (read in Horse's code), after this logger's line was written.
+procedure NextOrAnswer(AReq: THorseRequest; ARes: THorseResponse; ANext: TNextProc);
+begin
+  try
+    ANext();
+  except
+    on E: Exception do
+    begin
+      if E is EHorseCallbackInterrupted then
+        raise;
+      HandleError(AReq, ARes, E);
+    end;
+  end;
+end;
+
 procedure LoggerHandler(AReq: THorseRequest; ARes: THorseResponse; ANext: TNextProc);
 var
   LTrace: TRequestTrace;
@@ -422,7 +452,7 @@ begin
   LHeaders := AReq.Headers.Dictionary;
   if LHeaders.ContainsKey(LOGGED_KEY) then
   begin
-    ANext();
+    NextOrAnswer(AReq, ARes, ANext);
     Exit;
   end;
   LHeaders.Add(LOGGED_KEY, '1');
@@ -447,7 +477,7 @@ begin
     LTrace.TraceState, LTrace.Sampled, LMethod, skServer);
   LStart := PcTickMs;
   try
-    ANext();
+    NextOrAnswer(AReq, ARes, ANext);
   finally
     LIp := ClientIp(AReq.Headers['X-Forwarded-For'], RemoteAddrOf(AReq), '');
     LRoute := MetricRoute(AReq.MatchedRoute, AReq.PathInfo);

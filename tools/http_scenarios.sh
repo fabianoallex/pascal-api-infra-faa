@@ -170,6 +170,16 @@ req GET /fail/database "" -H "$AUTH"
 status_is 503 "database down"
 body_is "{\"error\":\"The database is unavailable. Try again shortly.\",\"requestId\":\"$(header X-Request-Id)\"}" "database down"
 body_lacks 'db.internal' "database down: no driver detail"
+# A middleware's exception: on FPC, Horse passes it to fpWeb, not to
+# THorse.OnError (fpWeb sent its message and stack as HTML); the logger
+# answers it like the error handler.
+req GET /fail/middleware "" -H "$AUTH"
+status_is 500 "middleware error"
+MW_ID="$(header X-Request-Id)"
+body_is "{\"error\":\"An unexpected error occurred.\",\"requestId\":\"$MW_ID\"}" "middleware error: fixed message and the request id"
+req GET '/fail/middleware?kind=validation' "" -H "$AUTH"
+status_is 400 "middleware validation error"
+body_is '{"error":"\"kind\" was rejected by a middleware."}' "middleware validation error"
 
 # --- rate limit: 3 per minute per X-Client
 for N in 2 1 0; do
@@ -330,6 +340,10 @@ while s.recv(65536):
   # The 500's detail, findable by the id the client got.
   grep -q "something broke trace_id=$FAIL_ID" "$SERVER_LOG" && ok \
     || fail "log: the 500's message with trace_id=$FAIL_ID"
+  grep -q "middleware broke at db.internal:3050 trace_id=$MW_ID" "$SERVER_LOG" && ok \
+    || fail "log: the middleware's 500 with trace_id=$MW_ID"
+  grep -q "GET /fail/middleware 500 .*$MW_ID" "$SERVER_LOG" && ok \
+    || fail "log: the access line has the middleware error's status"
 fi
 
 rm -rf "$T"

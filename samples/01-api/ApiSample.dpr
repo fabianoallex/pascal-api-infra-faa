@@ -15,6 +15,7 @@
     POST /cities              {"name":"...","state":"..","population":123}; 201
     GET  /fail/server         an unexpected exception: 500
     GET  /fail/database       the database is down: 503
+    GET  /fail/middleware     a middleware raises: 500 (?kind=validation: 400)
     GET  /limited             rate limited: 3 requests per minute per X-Client header
     GET  /trace               the request's trace context, as the handler sees it
     PUT  /maintenance         {"on":true|false}; while on, /health/ready answers 503
@@ -161,6 +162,21 @@ begin
   end;
 end;
 
+// A middleware that raises, as a token check or a tenant catalog would. The
+// logger answers its exception like the error handler answers a handler's
+// (on FPC, Horse doesn't pass it to THorse.OnError).
+procedure FailingMiddleware(AReq: THorseRequest; ARes: THorseResponse; ANext: TNextProc);
+begin
+  if AReq.Query['kind'] = 'validation' then
+    raise EValidationException.Create('"kind" was rejected by a middleware.');
+  raise EInvalidOpException.Create('middleware broke at db.internal:3050');
+end;
+
+procedure NeverReached(AReq: THorseRequest; ARes: THorseResponse; ANext: TNextProc);
+begin
+  TJsonSend.Send(ARes, '{"reached":true}');
+end;
+
 procedure GetLimited(AReq: THorseRequest; ARes: THorseResponse; ANext: TNextProc);
 begin
   TJsonSend.Send(ARes, '{"ok":true}');
@@ -290,6 +306,9 @@ begin
     .Error(500).Register(FailServer);
   TRouteDoc.Get('/fail/database').Summary('Always 503').Tag('errors').NoMcp
     .Error(503).Register(FailDatabase);
+  THorse.Use('/fail/middleware', FailingMiddleware);
+  TRouteDoc.Get('/fail/middleware').Summary('A middleware raises').Tag('errors').NoMcp
+    .QueryParam('kind', 'validation: a 400').Error(400).Error(500).Register(NeverReached);
   THorse.Use('/limited', TRateLimitMiddleware.New(GRateLimit));
   TRouteDoc.Get('/limited').Summary('3 requests a minute per X-Client').Tag('limits')
     .NoContent(200).Error(429).Register(GetLimited);

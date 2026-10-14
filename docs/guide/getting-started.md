@@ -3,7 +3,7 @@
 From an empty folder to a Horse API that answers JSON, turns exceptions into HTTP statuses, logs
 every request and checks a token, on Delphi and on Lazarus/FPC from one source. The code comes
 from `samples/01-api`, which compiles on both compilers and is checked over HTTP by
-`tools/http_scenarios.sh` (149 checks), except the smallest program below, which says where it
+`tools/http_scenarios.sh` (155 checks), except the smallest program below, which says where it
 was checked.
 
 ## What it solves
@@ -278,8 +278,8 @@ outcomes: they aren't logged and carry no id.
 Until 0.13.0 the 500 sent the exception's message to the client.
 
 The messages come from `TApiMessages` (English by default, `TApiMessages.Portuguese` available;
-the 500's is `InternalError`). The full list will be in the Errors and validation guide
-(planned; until then, `MapException` in `PascalApi.Http`).
+the 500's is `InternalError`). The full list, validation and the database's errors are in
+[Errors and validation](errors.md).
 
 ### 5. Read a request body into a DTO
 
@@ -408,15 +408,14 @@ Horse runs global middlewares in the order of the `THorse.Use` calls. Why this o
 
 | Position | Why | Checked by |
 |---|---|---|
-| logger first | it times the whole request and sets `X-Request-Id`, which the others and the handler read | the handler sees the trace id (`GET /trace`) |
+| logger first | it times the whole request, sets `X-Request-Id`, which the others and the handler read, and answers an exception raised by a middleware after it ([Errors and validation](errors.md), step 5) | the handler sees the trace id (`GET /trace`); `/fail/middleware` answers JSON |
 | CORS before JWT | a browser's preflight (`OPTIONS`) carries no token | preflight answered 204 with the CORS headers, no token |
 | JWT, with the public paths excluded | login, health and metrics must work without a token | 401 without a token; `/auth/login` and `/health` open; `/auth/login-admin` is **not** excluded by `/auth/login` (whole segments) |
 | the rate limit on a path | `THorse.Use('/limited', ...)` limits only that path | `/cities/1` still 200 when `/limited` answers 429 |
 
 `TAppConfig.Get('JWT_SECRET', default)` reads the environment first, then a `.env` file in the
 executable's folder, then the default. The development default is for the sample: give the real secret through the
-environment in production. More in the Configuration guide (planned; until then
-`PascalApi.Config`).
+environment in production. More in [Configuration](configuration.md).
 
 The login route signs a token with `TJwt.SignHS256(LClaims, GSecret)`, and a handler reads the
 verified claims with `TJwtMiddleware.Claims(AReq)` (the caller frees the result). Both are in
@@ -537,7 +536,7 @@ on both (FastMM, heaptrc); see the `dual-compiler-delphi-lazarus` skill for mirr
 
 - `samples/01-api`: `ApiSample.dpr` (the program, the middleware order), `ApiSample.Cities.pas`
   (the DTO, ordering, paging).
-- `tools/http_scenarios.sh`: the 149 checks against sample 01.
+- `tools/http_scenarios.sh`: the 155 checks against sample 01.
 - `PascalApi.Horse.Middlewares` (`src/horse`): the comment at the top of the unit and each
   middleware's declaration.
 - `PascalApi.Http`: `MapException` (exception → status and message), `TApiMessages`.

@@ -170,6 +170,11 @@ its own Horse `src` to the search path.
   The others still run twice there; a
   global `TRateLimitMiddleware` would presumably count such a request twice (not measured, not
   fixed: only routes that don't exist).
+- **A middleware's exception never reaches `THorse.OnError` on FPC**: Horse 3.3.12's FPC router
+  (`TRouterTreeExecutor.Run`) re-raises it, and fpWeb sent `500 text/html` with the message and
+  stack addresses (measured 2026-10-14). `TLoggerMiddleware` catches it (`NextOrAnswer`) and
+  answers through `HandleError`, so it must stay first; `/fail/middleware` in sample 01 is the
+  check. A handler's exception goes to `OnError` on both compilers.
 - **An internal mark on the request ends with a line feed** (`':pascalapi-logged'#10`,
   `':pascalapi-tenant'#10`). "No client can send a name starting with ':'" was false: Indy
   (Delphi) kept a raw `:pascalapi-logged: 1` line and the logger skipped the request (no access
@@ -256,7 +261,7 @@ exception in a helper and assert on what it returned.
 | Delphi | open `PascalApi.groupproj`, build `PascalApi.UnitTests`, `ApiSample`, `DbApiSample` and `TenantApiSample` (Win32 and Win64); run the tests; start `ApiSample.exe` and run `sh tools/http_scenarios.sh 9310`; start `DbApiSample.exe 9330 --reset` and run `sh tools/http_scenarios_db.sh 9330`; start `TenantApiSample.exe 9350 --reset` and run `sh tools/http_scenarios_tenants.sh 9350` |
 
 The middlewares are tested in two layers: their decisions in `PascalApi.HttpTests` (no server),
-and over real HTTP by `tools/http_scenarios.sh` (curl, 149 checks) against `samples/01-api`,
+and over real HTTP by `tools/http_scenarios.sh` (curl, 155 checks) against `samples/01-api`,
 which uses every middleware. In-process servers aren't used: on FPC, Horse's `Listen` blocks in
 `THTTPApplication.Run` and there is no `StopListen`.
 

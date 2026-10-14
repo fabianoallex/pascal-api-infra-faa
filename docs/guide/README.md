@@ -12,6 +12,7 @@ way it does.
 |---|---|
 | [Getting started](getting-started.md) | you start an API: the dependencies, the program file, JSON out, errors, a DTO, paging, the middleware order, the samples |
 | [Configuration](configuration.md) | settings from the environment, a `.env` file or a default; the variables the library reads |
+| [Errors and validation](errors.md) | a request fails: the exceptions and their statuses, validating input, the database's errors, the client messages (English/Portuguese) |
 | [Multi-tenancy](multitenancy.md) | one API serves several customers, each seeing only its own data |
 
 ## Planned
@@ -22,7 +23,6 @@ are the reference.
 
 | Guide | Covers | Today, see |
 |---|---|---|
-| Errors and validation | the exceptions that become 400/404/409/500, the client messages (English/Portuguese) | `PascalApi.Http`, `samples/01-api` |
 | Authentication | JWT (HS256) and Bearer, excluded paths, issuing a token | `PascalApi.Jwt`, `samples/01-api` |
 | Rate limiting | the window, the key, a limit per request | `PascalApi.Horse.Middlewares` |
 | Database access | pascal-db-faa from a handler: paging, ordering, filters, migrations | `samples/02-db` |

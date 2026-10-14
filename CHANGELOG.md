@@ -17,6 +17,15 @@ may change the API; each such change is listed here.
 - **The error handler copied a client's `X-Request-Id` into the log** when `TLoggerMiddleware`
   wasn't in use: `trace_id=` took the raw header. It now takes only the id the logger set, and
   none without the logger (measured on FPC/Windows with a program without the logger).
+- **An exception raised in a middleware reached the client with its message and stack (FPC).**
+  Horse 3.3.12's FPC router re-raises a middleware's exception without calling
+  `THorse.OnError`, and fpWeb answered `500 text/html` with the message and the stack addresses,
+  while the access line said 200 (measured, FPC 3.2.2/Windows). A `TDbTenantCatalog` with its
+  database down, or a raising rate-limit key function, would take that path.
+  `TLoggerMiddleware` now answers such an exception as the error handler does (status, fixed
+  message, `requestId`, log line), so the middlewares after it are covered on both compilers and
+  the access line has the real status. Sample 01 gains `/fail/middleware`;
+  `tools/http_scenarios.sh` checks it (155 checks).
 
 ### Changed
 
@@ -32,15 +41,15 @@ may change the API; each such change is listed here.
   id the log line ends with (`trace_id=`) and the `X-Request-Id` header, so a user can quote it
   to support. Client errors (400, 404, 409 from a unique key) are unchanged. New
   `ErrorJson(AMessage, ARequestId)` overload; the OpenAPI `Error` schema gains an optional
-  `requestId`. `tools/http_scenarios.sh` (149 checks) checks the body, that the exception's
+  `requestId`. `tools/http_scenarios.sh` checks the body, that the exception's
   message isn't in it, and that the sample's log has it with the client's id.
 
 ### Added
 
 - `docs/guide/`: guides for the library's users, one per topic, to one template (index:
   `docs/guide/README.md`). The first is multi-tenancy (`docs/guide/multitenancy.md`); the others
-  are listed there as planned. Then getting started (`docs/guide/getting-started.md`) and configuration
-  (`docs/guide/configuration.md`).
+  are listed there as planned. Then getting started (`docs/guide/getting-started.md`), configuration
+  (`docs/guide/configuration.md`) and errors and validation (`docs/guide/errors.md`).
 - **`${TENANT.alias}` in tenant SQL, for a JOIN.** `TTenantFilter.Prepare` replaces each
   `${TENANT.c}` with `c.TENANT_ID = :TENANT_ID` (plain `${TENANT}` is unchanged). Measured on
   SQLite: plain `${TENANT}` with two joined tables that have the column is "ambiguous column
