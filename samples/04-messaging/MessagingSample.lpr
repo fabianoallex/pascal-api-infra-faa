@@ -10,15 +10,17 @@ program MessagingSample;
   Not like samples 01-03: FPC only, built by hand (build_fpc.sh), not by CI,
   since the two libraries aren't dependencies of this repository. Measured
   on FPC 3.2.2/Windows on 2026-10-14 with pascal-redis-faa 0.2.0 and
-  pascal-amqp-faa 0.2.0, against Redis 7.2 and RabbitMQ 3 in Docker; Delphi
-  wasn't tried.
+  pascal-amqp-faa 0.2.0, against Redis 7.2 and RabbitMQ 3 in Docker; the
+  reconnection again on 2026-10-15 with pascal-amqp-faa 0.3.0, which it now
+  needs (OnReconnectError). Delphi wasn't tried.
 
     MessagingSample [port [redisPort [amqpPort [reconnect [declare-both]]]]]
 
   Defaults: 9420, Redis on 127.0.0.1:6379, RabbitMQ on 127.0.0.1:5672.
-  "reconnect" turns on AutoReconnect; "declare-both" also declares the queue
-  on the consuming channel (without it, AutoReconnect never recovered after
-  a broker restart: the guide, step 4).
+  "reconnect" turns on AutoReconnect, and each failed reconnect attempt is
+  logged. "declare-both" also declares the queue on the consuming channel:
+  what 0.2.0 needed to recover after a broker restart (the guide, step 4);
+  0.3.0 recovers without it.
 
   Routes:
     GET  /cache/:key          cache-aside through Redis
@@ -44,6 +46,8 @@ type
   public
     procedure Line(const AText: string);
     procedure OnOrder(AChannel: TAMQPChannel; const ADelivery: TAMQPDelivery);
+    procedure OnReconnectError(AConnection: TAMQPConnection; AAttempt: Integer;
+      const AError: string);
   end;
 
   TPrintExporter = class(TInterfacedObject, IPcSpanExporter)
@@ -86,6 +90,14 @@ begin
   else
     Line('consumed ' + ADelivery.BodyAsText);
   AChannel.Ack(ADelivery.DeliveryTag);
+end;
+
+procedure TApp.OnReconnectError(AConnection: TAMQPConnection; AAttempt: Integer;
+  const AError: string);
+begin
+  // On the library's thread; no request, so no request id.
+  TErrorHandlerMiddleware.LogError(Format('AMQP reconnect attempt %d failed: %s',
+    [AAttempt, AError]), '');
 end;
 
 function TPrintExporter.ExportSpans(const ASpans: TPcSpanDataArray; out AError: string): Boolean;
@@ -179,6 +191,7 @@ begin
   GAmqpParams.Port := StrToIntDef(ParamStr(3), 5672);
   GAmqpParams.AutoReconnect := ParamStr(4) = 'reconnect';
   GAmqp := TAMQPConnection.Create(GAmqpParams);
+  GAmqp.OnReconnectError := GApp.OnReconnectError;
   GAmqp.Open;
   GPublisher := GAmqp.CreateChannel;
   GQueue := 'probe-orders-' + IntToStr(GetTickCount64);

@@ -113,7 +113,9 @@ may change the API; each such change is listed here.
   against Redis and RabbitMQ with `samples/04-messaging`).
 - `samples/04-messaging`: the API behind the messaging guide (pascal-redis-faa and
   pascal-amqp-faa inside a Horse API). FPC only and built by hand (`build_fpc.sh`), not by CI:
-  those two libraries aren't this repository's dependencies.
+  those two libraries aren't this repository's dependencies. It logs each failed AMQP reconnect
+  attempt (`OnReconnectError`, pascal-amqp-faa 0.3.0); the guide's reconnection measurements were
+  repeated with 0.3.0, which fixed the silent failure to reconnect that 0.2.0 showed.
 - `TErrorHandlerMiddleware.LogError`: writes a line through the callback given to `Register`, for
   an error handled away from `OnError`. `LogError(ALine, ARequestId)` is the MCP executor's;
   `LogError(AReq, ALine)` is a handler's (a cache that falls back when Redis is down), with the id

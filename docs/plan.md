@@ -206,13 +206,16 @@ testing, reference), with code taken from the samples. Done: multi-tenancy
 (`docs/guide/openapi.md`), MCP (`docs/guide/mcp.md`), messaging, Redis and IPC (`docs/guide/messaging.md`): every topic
 the index planned.
 
-A candidate for pascal-amqp-faa, found while measuring for the messaging guide and left for later,
-like the FireDAC one below: with `AutoReconnect` on, a non-durable queue declared on one channel
+Fixed in pascal-amqp-faa 0.3.0 (2026-10-15; the messaging guide re-measured with it), found while
+measuring for the messaging guide: with `AutoReconnect` on, a non-durable queue declared on one channel
 and consumed on another never recovered after a broker restart (90 s of `EAMQPConnection`, no
 callback, nothing logged), because each channel replays only its own topology and a failed attempt
 is swallowed; declaring the queue on the consuming channel too recovered in 16 s. Also, without
 `AutoReconnect`, a publish on a dead connection raised `EWriteError` ("Stream write error"), not
 the `EAMQPConnection` its README lists (pascal-amqp-faa 0.2.0, FPC 3.2.2/Windows, RabbitMQ 3).
+0.3.0 replays the whole connection, raises `EAMQPConnection` with the reason, and adds
+`OnReconnectError`/`LastReconnectError`; with it the same restart recovered with the queue
+declared on one channel only.
 
 A candidate for pascal-db-faa, found while measuring for the OpenAPI guide and left for later
 (the user's decision, 2026-10-14): FireDAC raises `[FireDAC][DatS]-32 Variable length column

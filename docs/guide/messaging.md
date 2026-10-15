@@ -11,7 +11,9 @@ it is down.
 **Where the code comes from.** The code below comes from
 [samples/04-messaging](../../samples/04-messaging/MessagingSample.lpr) (the "probe" below), written for
 this guide and run on FPC 3.2.2/Windows on 2026-10-14, against Redis 7.2 and RabbitMQ 3 in
-Docker, with pascal-redis-faa 0.2.0 and pascal-amqp-faa 0.2.0. Unlike samples 01-03 it is built
+Docker, with pascal-redis-faa 0.2.0 and pascal-amqp-faa 0.2.0; the reconnection measurements
+(steps 4 and 6) were repeated on 2026-10-15 with pascal-amqp-faa 0.3.0, which fixed what 0.2.0
+did there. Use **pascal-amqp-faa 0.3.0 or later**. Unlike samples 01-03 it is built
 by hand (`sh samples/04-messaging/build_fpc.sh`, with your clones of the two libraries in
 `REDIS_FAA` and `AMQP_FAA`), not by CI: those libraries aren't this repository's dependencies, so
 it can go out of date; each library's own samples and tests are the reference. Delphi wasn't
@@ -154,9 +156,8 @@ begin
   AChannel.Ack(ADelivery.DeliveryTag);
 end;
 
-// At startup, on its own channel:
+// At startup, on its own channel (the queue was declared on GPublisher):
 GConsumer := GAmqp.CreateChannel;
-GConsumer.DeclareQueue(TAMQPQueueDeclare.Create(GQueue, False));
 GConsumer.Consume(GQueue, GApp.OnOrder);
 ```
 
@@ -164,14 +165,16 @@ The callback runs on pascal-common-faa's thread pool (`PcPool`), several at a ti
 threads and not in order (pascal-amqp-faa's README, "Concurrency and message ordering", which also
 shows how to get ordering). It is a method (`of object`) on both compilers.
 
-**Declare the queue on the channel that consumes it**, even when another channel declared it
-already. Measured with automatic reconnection on (`AutoReconnect := True`) and a non-durable queue
-declared only on the publishing channel: after a broker restart the connection **never
-recovered**, and every publish answered 500 for the 90 s the probe kept trying, with nothing in
-the log but those 500s. The library replays each channel's own topology; the consumer channel
-tried to consume a queue the restart had deleted, and each attempt failed silently. With the
-`DeclareQueue` above on the consuming channel too, publishing worked again 16 s after the restart,
-and consuming too.
+**With pascal-amqp-faa 0.2.0, declare the queue on the consuming channel too.** Measured there
+with automatic reconnection on (`AutoReconnect := True`) and this non-durable queue declared only
+on the publishing channel: after a broker restart the connection **never recovered**, and every
+publish answered 500 for the 90 s the probe kept trying, with nothing in the log but those 500s.
+0.2.0 replayed each channel's own topology, the consumer's first; its consume hit a queue the
+restart had deleted, and each attempt failed silently. 0.3.0 replays the whole connection
+(exchanges, queues, bindings, then consumers): measured with the code above, unchanged, publishing
+worked again about 16 s after `docker restart` was issued and the consumer took every message
+accepted after it. On 0.2.0 (the sample itself now needs 0.3.0), the declaration on the consuming channel too
+recovered the same way; the sample's `declare-both` argument adds it.
 
 ### 5. Spans: one trace through Redis and the broker
 
@@ -200,14 +203,37 @@ Measured with the probe:
 | What failed | What the handler raised | What the API answered |
 |---|---|---|
 | Redis unreachable (nothing on the port) | `ERedisConnectionLost` (after ~2 s per request, the connect attempt) | 500, fixed message, logged |
-| RabbitMQ stopped, no `AutoReconnect` | `EWriteError: Stream write error` | 500, and **still 500 after the broker came back**: the connection stays dead until the process restarts |
-| RabbitMQ stopped, `AutoReconnect := True` | `EAMQPConnection: connection unavailable right now (reconnecting?)` | 500 until reconnected (16 s after the restart, with step 4's declaration) |
+| RabbitMQ stopped, no `AutoReconnect` | `EAMQPConnection: connection closed by server: 320 CONNECTION_FORCED - broker forced connection closure with reason 'shutdown'` (0.2.0 raised `EWriteError: Stream write error`) | 500, and **still 500 after the broker came back**: the connection stays dead until the process restarts |
+| RabbitMQ restarted, `AutoReconnect := True` | `EAMQPConnection: connection unavailable right now (reconnecting; connection closed by server: 320 ...; last attempt failed: end of stream while reading frame ...)` | 500 until reconnected (about 16 s after `docker restart`) |
 | RabbitMQ paused, confirm mode | `WaitForConfirm` returned False | 503 (step 3) |
 
 A 500 is the error handler's answer to an exception it doesn't know: the message stays in the log,
 and the client gets `An unexpected error occurred.` with the request id
 ([Errors and validation](errors.md), step 4). **Turn on `AutoReconnect`** for a long-running API:
 without it, one broker restart breaks publishing until the API restarts.
+
+**Log the failed reconnection attempts.** With `MaxReconnectAttempts = 0` the library tries for
+ever, so an attempt that keeps failing is only visible through `OnReconnectError` (or
+`LastReconnectError`, the last one's reason, '' once reconnected), both new in pascal-amqp-faa
+0.3.0. The sample logs each one:
+
+```pascal
+procedure TApp.OnReconnectError(AConnection: TAMQPConnection; AAttempt: Integer;
+  const AError: string);
+begin
+  // On the library's thread; no request, so no request id.
+  TErrorHandlerMiddleware.LogError(Format('AMQP reconnect attempt %d failed: %s',
+    [AAttempt, AError]), '');
+end;
+
+// At startup, before Open:
+GAmqp.OnReconnectError := GApp.OnReconnectError;
+```
+
+Measured during the restart above: six lines, `AMQP reconnect attempt 1 failed: end of stream
+while reading frame (connection closed?)` and so on, one about every 2 s while the broker was
+coming back, then none. `LastReconnectError` would also fit a readiness check
+([Logging and observability](observability.md)); not tried here.
 
 Where the server is optional, handle the failure in the handler. A cache is the usual case:
 
@@ -275,8 +301,10 @@ another API, HTTP. Remember the platforms: Delphi on Windows, FPC on Linux.
 - **A 202 after a plain publish** taken as "the broker has it" (step 3).
 - **A retried 503 from a confirm timeout** sends the message twice: make the consumer idempotent.
 - **No `AutoReconnect`**: one broker restart, and publishing fails until the API restarts (step 6).
-- **A queue not declared on the consuming channel**: after a broker restart the connection never
-  recovers, silently (step 4).
+- **pascal-amqp-faa 0.2.0 and a queue not declared on the consuming channel**: after a broker restart the connection never
+  recovers, silently (step 4). Fixed in 0.3.0.
+- **Reconnection attempts nobody logs**: with unlimited attempts, a reconnection that never
+  succeeds shows only as 500s; log `OnReconnectError` (step 6).
 - **A consumer callback that blocks forever** stalls the channel's shutdown (pascal-amqp-faa's
   README, "The consumer callback must always finish on its own").
 - **A fallback that catches `ERedisException`**: it also hides bugs (step 6).
