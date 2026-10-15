@@ -18,12 +18,14 @@
     GET    /cities/:code    404 when it doesn't exist
     POST   /cities          {"code":"4205407","name":"...","state":"SC","population":123}
                             201; 409 when the code exists (the database says so), 400 invalid
+    PATCH  /cities/:code    {"name":"...","state":"..","population":123|null}: only the
+                            members that came change; null clears population; 200
     DELETE /cities/:code    204; 404 when it doesn't exist
     GET    /metrics         Prometheus text (http.server.* metrics)
     GET    /health/live     200 while the process answers
     GET    /health/ready    the readiness check "database" (SELECT 1 through the pool)
     GET    /swagger         Swagger UI; /swagger/doc.json is the OpenAPI 3.0.3 document
-    POST   /mcp             MCP (2026-07-28): the four routes above as tools, with the
+    POST   /mcp             MCP (2026-07-28): the five routes above as tools, with the
                             schemas of their DTOs; browser origin allowed: the MCP
                             Inspector's (http://localhost:6274)
 
@@ -83,8 +85,8 @@ var
 begin
   // The query string into the Find DTO the route documents (QueryParams).
   LFind := TCityFind.Create;
-  LFind.Page := ParseQueryInt(AReq.Query['page']);
-  LFind.Limit := ParseQueryInt(AReq.Query['limit']);
+  LFind.Page := ParseQueryInt('page', AReq.Query['page']);
+  LFind.Limit := ParseQueryInt('limit', AReq.Query['limit']);
   LFind.OrderBy := ParseQueryStr(AReq.Query['orderBy']);
   LFind.SetState(ParseQueryStr(AReq.Query['state']));
   LPage := GCities.FindPage(LFind.GetState, LFind.OrderBy.Value,
@@ -102,6 +104,12 @@ procedure PostCity(AReq: THorseRequest; ARes: THorseResponse; ANext: TNextProc);
 begin
   TJsonSend.Send(ARes, TJsonMapper.Shared.ToJson<ICity>(
     GCities.Insert(TJsonMapper.Shared.FromJson<ICityInsert>(AReq.Body))), 201);
+end;
+
+procedure PatchCity(AReq: THorseRequest; ARes: THorseResponse; ANext: TNextProc);
+begin
+  TJsonSend.Send(ARes, TJsonMapper.Shared.ToJson<ICity>(GCities.Update(AReq.Params['code'],
+    TJsonMapper.Shared.FromJson<ICityPatch>(AReq.Body))));
 end;
 
 procedure DeleteCity(AReq: THorseRequest; ARes: THorseResponse; ANext: TNextProc);
@@ -185,6 +193,9 @@ begin
   {$IFDEF FPC}
   SetMultiByteConversionCodePage(CP_UTF8);
   {$ENDIF}
+  // A member the DTO doesn't have is a 400 with its path ("$.popultion"),
+  // not silently dropped (the mapper's default ignores it).
+  TJsonMapper.Shared.UnknownMembers := umError;
   GPort := 9330;
   GReset := False;
   for I := 1 to ParamCount do
@@ -234,6 +245,14 @@ begin
       .Error(400, 'Invalid data')
       .Error(409, 'A city with this code already exists')
       .Register(PostCity);
+    TRouteDoc.Patch('/cities/:code')
+      .Summary('Change some members of a city').Tag('cities')
+      .PathParam('code', 'IBGE code (7 digits)')
+      .Body<ICityPatch>
+      .Response<ICity>(200, 'The city after the change')
+      .Error(400, 'Invalid data')
+      .Error(404, 'No city with this code')
+      .Register(PatchCity);
     TRouteDoc.Delete('/cities/:code')
       .Summary('Delete a city').Tag('cities')
       .PathParam('code', 'IBGE code (7 digits)')

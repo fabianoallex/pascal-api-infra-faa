@@ -204,7 +204,24 @@ testing, reference), with code taken from the samples. Done: multi-tenancy
 (`docs/guide/authentication.md`), rate limiting (`docs/guide/rate-limiting.md`), database access
 (`docs/guide/database.md`), logging and observability (`docs/guide/observability.md`), OpenAPI
 (`docs/guide/openapi.md`), MCP (`docs/guide/mcp.md`), messaging, Redis and IPC (`docs/guide/messaging.md`): every topic
-the index planned.
+the index planned. Added on 2026-10-15, at the user's request: DTOs and JSON
+(`docs/guide/dtos-json.md`), which also brought `ParseQueryInt`'s 400 and `umError` in the samples.
+
+Candidates for the sibling libraries, found while measuring for the DTOs and JSON guide and left
+for their own sessions (the user's decision, 2026-10-15):
+
+- **pascal-jsonmapper-faa 0.3.0: a member sent twice keeps the first value**
+  (`{"name":"First","name":"Second"}` stored `First`); many parsers keep the last, so a gateway in
+  front of the API can read the same body differently. Options there: refuse duplicates (with
+  `umError`, say), or document. `tools/http_scenarios.sh` checks today's behaviour.
+- **pascal-amqp-faa 0.3.0: an exception in a consumer callback is swallowed** by
+  pascal-common-faa's pool (`TAMQPDeliveryWork.Execute` re-raises into it): the message is neither
+  acknowledged nor rejected, nothing is logged, and it comes back on every restart (measured with a
+  JSON consumer and RabbitMQ 3). Options there: an event or a log for it, or a default `Nack`.
+  The guide shows the `try`/`Nack` an application needs today.
+- **pascal-pipes-faa 0.1.1: an exception in `OnMessage` reaches nobody**: `OnError` isn't called
+  on either side (measured on FPC/Windows). Also, its README's headline lists FPC on Linux only,
+  while its suites and this guide's sample run on FPC for Windows.
 
 Fixed in pascal-amqp-faa 0.3.0 (2026-10-15; the messaging guide re-measured with it), found while
 measuring for the messaging guide: with `AutoReconnect` on, a non-durable queue declared on one channel

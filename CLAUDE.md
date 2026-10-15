@@ -22,8 +22,10 @@ Same author and dual-compiler rules, and they share pascal-common-faa with this 
 per application). How to add them, the minimum versions, sketches and why there is no layer here
 (`PascalApi.Messaging` was removed in 0.6.0): **`docs/related-libraries.md`**; inside an API (one
 client per process, spans, a server that is down, measured): `docs/guide/messaging.md`, from
-`samples/04-messaging` (FPC only, `build_fpc.sh` with `REDIS_FAA`/`AMQP_FAA`; not in CI, so
-rebuild it by hand after changing what it uses). The index of every
+`samples/04-messaging` (FPC only, `build_fpc.sh` with `REDIS_FAA`/`AMQP_FAA`/`PIPES_FAA`; not
+in CI, so rebuild it by hand after changing what it uses). JSON DTOs on a queue or a pipe:
+`docs/guide/dtos-json.md`; every receiver catches (an exception in an AMQP consumer or a Pipes
+`OnMessage` is lost silently, measured). The index of every
 `*-faa` library is the `dual-compiler-delphi-lazarus` skill's `references/faa-libraries.md`.
 
 For the general dual-compiler rules (project anatomy, `.inc`, mirrored tests, CI), use the
@@ -77,7 +79,8 @@ all (measured, skill `references/rtti-gotchas.md`).
 
 ## Dependencies
 
-`external/` holds the dependencies as git submodules, pinned: pascal-common-faa `v1.8.1`,
+`external/` holds the dependencies as git submodules, pinned: pascal-common-faa `v1.9.0` (the library itself needs 1.8.1; sample 02 uses 1.9.0's
+string normalizers, `TOptionals.Trim`/`Upper`),
 pascal-jsonmapper-faa `v0.3.0`, pascal-db-faa `v0.14.2`, Horse `3.3.12` (`fda6fed`; until 0.4.0
 this repository used 3.3.2, `72cc45f`; pascal-dfe-broker moved to 3.3.12 on 2026-10-09, delphi-api-starter is still on 3.3.2). They are **only for this
 repository's tests**: a consumer provides its own single copy of each (submodule + search path),
@@ -144,6 +147,8 @@ with the user: `docs/multitenancy-design.md`.
   Don't add a header/host/path source without the user (decision 5: later, on a real case).
 - **Every repository query goes through `TTenantFilter.Prepare`**: an unbound `:TENANT_ID` is a
   silent 404 on SQLdb/SQLite (measured), so the condition and its parameter are set together.
+  SQL with tagged blocks goes through the `TSQLResult` overload (`SqlLoader[...].ProcessTag(...)`
+  first), never through `AQuery.Sql :=` by hand.
 - Pools are named by mode, never by tenant (metric cardinality); pools sharing a name add up
   and a freed pool gives its series back (pascal-db-faa 0.14.0's `PoolMetricsTests`).
 - The cross-tenant checks of `tools/http_scenarios_tenants.sh` are the safety net: a change to
@@ -274,12 +279,19 @@ exception in a helper and assert on what it returned.
 | Delphi | open `PascalApi.groupproj`, build `PascalApi.UnitTests`, `ApiSample`, `DbApiSample` and `TenantApiSample` (Win32 and Win64); run the tests; start `ApiSample.exe` and run `sh tools/http_scenarios.sh 9310`; start `DbApiSample.exe 9330 --reset` and run `sh tools/http_scenarios_db.sh 9330`; start `TenantApiSample.exe 9350 --reset` and run `sh tools/http_scenarios_tenants.sh 9350` |
 
 The middlewares are tested in two layers: their decisions in `PascalApi.HttpTests` (no server),
-and over real HTTP by `tools/http_scenarios.sh` (curl, 168 checks) against `samples/01-api`,
+and over real HTTP by `tools/http_scenarios.sh` (curl, 173 checks) against `samples/01-api`,
 which uses every middleware. In-process servers aren't used: on FPC, Horse's `Listen` blocks in
 `THTTPApplication.Run` and there is no `StopListen`.
 
 Sending non-ASCII bodies with curl from Git Bash on Windows: put them in a file with explicit
 UTF-8 bytes (`printf 'Macei\303\263'`), since curl.exe gets its arguments in the ANSI code page.
+The same for JSON unicode escapes (a backslash, `u` and four hex digits): a test that types them
+on the command line may send something else (it did, 2026-10-15, and looked like a mapper bug
+that wasn't there).
+
+The samples set `TJsonMapper.Shared.UnknownMembers := umError` (an unknown member is a 400 with
+its path). `ParseQueryInt(AName, AText)` answers 400 for anything but digits: never go back to
+`TryStrToInt` (it wraps around on FPC 3.2.2 and reads `$3`/`0x3`/`+3`).
 
 Acceptance on every side: 0 errors, 0 failures, 0 leaks (heaptrc / FastMM). Delphi Community
 Edition can't build from the command line: the user builds in the IDE, then the executable

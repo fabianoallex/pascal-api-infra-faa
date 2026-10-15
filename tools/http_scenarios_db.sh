@@ -51,6 +51,16 @@ req GET '/cities?limit=1&orderBy=population' ""
 body_has '"name":"Florianópolis","state":"SC","population":null' "NULL population sorts first in SQLite, and is JSON null"
 req GET '/cities?limit=500' ""
 body_has '"limit":50' "limit clamped to the maximum"
+# Only digits, within Integer: anything else is a 400 naming the parameter.
+# Until 0.13.0 'abc' silently became the default, '$3' was read as 3, and on
+# FPC page=99999999999 wrapped around to page 1215752191 (measured).
+req GET '/cities?limit=abc' ""
+status_is 400 "limit not a number"
+body_is '{"error":"\"limit\" must be an integer."}' "limit not a number: names the parameter"
+req GET '/cities?page=99999999999' ""
+status_is 400 "page past Integer (wrapped around on FPC until 0.13.0)"
+req GET '/cities?limit=%243' ""
+status_is 400 "limit in hex"
 req GET '/cities?orderBy=bad' ""
 status_is 400 "order by a field not allowed"
 body_has 'Invalid order field: \"bad\"' "order by a field not allowed"
@@ -106,6 +116,41 @@ req POST /cities "@$T/long"
 status_is 201 "name: 100 two-byte characters are 100 characters"
 req DELETE /cities/1000001 ""
 status_is 204 "delete the 100-character city"
+# umError (the sample's setting): a member the DTO doesn't have is a 400 with
+# its path, not dropped in silence (a typo kept population null until then).
+req POST /cities '{"code":"1000001","name":"X","state":"SP","popultion":5}'
+status_is 400 "unknown member"
+body_has '$.popultion' "unknown member: its path"
+# A JSON escape (the file holds backslash, u, 00e3) comes back as UTF-8.
+printf '{"code":"1000002","name":"Jo\\u00e3o","state":"SP"}' > "$T/escape"
+req POST /cities "@$T/escape"
+body_is '{"code":"1000002","name":"João","state":"SP","population":null}' "escape stored as UTF-8"
+req DELETE /cities/1000002 ""
+
+# --- PATCH: absent leaves a member, null clears population, a value sets it
+req PATCH /cities/2408102 '{"population":890480}'
+status_is 200 "patch a value"
+body_is '{"code":"2408102","name":"Natal","state":"RN","population":890480}' "patch a value: the others stay"
+req PATCH /cities/2408102 '{}'
+status_is 200 "empty patch"
+body_is '{"code":"2408102","name":"Natal","state":"RN","population":890480}' "empty patch changes nothing"
+req PATCH /cities/2408102 '{"population":null}'
+body_is '{"code":"2408102","name":"Natal","state":"RN","population":null}' "patch null clears population"
+req PATCH /cities/2408102 '{"name":"  Natal RN  ","state":" rn"}'
+body_is '{"code":"2408102","name":"Natal RN","state":"RN","population":null}' "patch two members, normalized (TOptionals.Trim, Upper)"
+req GET /cities/2408102 ""
+body_is '{"code":"2408102","name":"Natal RN","state":"RN","population":null}' "patch read back"
+req PATCH /cities/2408102 '{"name":null}'
+status_is 400 "patch null into a NOT NULL member"
+body_has '$.name: null is not allowed here' "patch null name: the path"
+req PATCH /cities/2408102 '{"population":-1}'
+status_is 400 "patch: the same limits as create"
+req PATCH /cities/2408102 '{"popultion":1}'
+status_is 400 "patch: unknown member"
+req PATCH /cities/9999999 '{"population":1}'
+status_is 404 "patch an unknown city"
+req PATCH /cities/9999999 '{}'
+status_is 404 "empty patch of an unknown city"
 req DELETE /cities/2408102 ""
 status_is 204 "delete"
 req DELETE /cities/2408102 ""
@@ -120,6 +165,8 @@ body_has '"openapi":"3.0.3"' "OpenAPI document"
 body_has '"CityInsert":{"type":"object","description":"A new city"' "DTO schema with its description"
 body_has '"population":{"type":"integer","format":"int32","nullable":true' "INullInteger is nullable"
 body_has '"required":["code","name","state"]' "IOptInteger is not required"
+body_has '"CityPatch":{"type":"object","description":"The members to change; the others stay"' "PATCH DTO schema"
+body_has '"patch":{' "PATCH route documented"
 body_has 'Florianópolis' "UTF-8 example"
 body_lacks 'securitySchemes' "no authentication middleware, no security scheme"
 body_has '"$ref":"#/components/schemas/Error"' "error responses"

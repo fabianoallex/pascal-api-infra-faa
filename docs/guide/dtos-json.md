@@ -1,0 +1,490 @@
+# DTOs and JSON
+
+How JSON comes in and goes out of an API built on this library: request and response DTOs,
+values that may be absent or null, the query string, the database, and the same DTOs on a queue
+(pascal-amqp-faa) or between two processes (pascal-pipes-faa). The mapper is
+[pascal-jsonmapper-faa](https://github.com/fabianoallex/pascal-jsonmapper-faa); the optional
+types are pascal-common-faa's (`PascalCommon.Optionals`, and the bridge
+`PascalCommon.JsonMapper.Optionals`).
+
+**Where the code comes from.** Samples 01 and 02 (request DTOs, the PATCH, the query string),
+checked over HTTP by `tools/http_scenarios.sh` and `tools/http_scenarios_db.sh` on every build;
+and sample 04 (`MessagingSample.lpr`, `PipesJsonSample.lpr`), built by hand and run on
+FPC 3.2.2/Windows on 2026-10-15. The behaviour of the mapper itself is backed by its own suite
+(99 tests on both compilers; the test names are given where a claim rests on one). The table of
+malformed bodies in step 2 was measured on FPC; the rows marked "checked" run on every build.
+
+## What it solves
+
+A request body has to become typed values, and a client can send anything: a missing member, a
+`null`, a string where a number goes, a member the API doesn't know, a typo, a body that isn't
+JSON. A response must be valid UTF-8 JSON, the same on Delphi and FPC. And the same DTO often
+travels further: to the database, to a queue, to another process. The library gives one mapper
+for all of it, DTOs mapped from **published** properties (the only ones FPC 3.2.2's RTTI sees),
+and three optional types that say, member by member, whether absent and null are allowed.
+
+## The smallest working program
+
+From `samples/01-api` (`ApiSample.Cities.pas` and `ApiSample.dpr`, shortened):
+
+```pascal
+type
+  ICityInsert = interface(IInsertDTOBase)
+    ['{FD6E7D51-6C63-4083-A65E-50DDB992FE61}']   // generate your own GUID
+    function GetName: string;
+    function GetState: string;
+    function GetPopulation: IOptInteger;
+  end;
+
+{$M+}
+  TCityInsert = class(TInsertDTOBase, ICityInsert)
+  private
+    FName: string;
+    FState: string;
+    FPopulation: IOptInteger;
+  public
+    function GetName: string;
+    function GetState: string;
+    function GetPopulation: IOptInteger;   // Result := TOptionals.Safe(FPopulation)
+  published
+    property Name: string read FName write FName;
+    property State: string read FState write FState;
+    property Population: IOptInteger read FPopulation write FPopulation;
+  end;
+{$M-}
+
+initialization
+  TJsonMapper.Shared.RegisterMapping<ICityInsert, TCityInsert>;
+
+// the program: once, at startup
+uses PascalCommon.JsonMapper.Optionals;      // registers the optional types' converter
+TJsonMapper.Shared.UnknownMembers := umError;
+
+procedure PostCity(AReq: THorseRequest; ARes: THorseResponse; ANext: TNextProc);
+begin
+  TJsonSend.Send(ARes, AddCity(TJsonMapper.Shared.FromJson<ICityInsert>(AReq.Body)), 201);
+end;
+```
+
+`{"name":"Natal","state":"rn"}` creates a city whose population is `null`; `"population":"many"`
+is a 400 naming `$.population`; `"popultion":5` is a 400 naming `$.popultion` (all checked).
+
+## Step by step
+
+### 1. Declare a DTO
+
+- **An interface for the callers, a class for the mapper.** The handler asks for `ICityInsert`;
+  `RegisterMapping<I, C>` tells the mapper which class to create. The class's own constructor
+  runs. Register in the `initialization` of the unit that declares the DTO.
+- **Published properties under `{$M+}`**, the members the JSON has. Public properties are
+  ignored on both compilers (FPC 3.2.2's RTTI doesn't see them, so Delphi ignores them too;
+  mapper test `PublicProperty_IsIgnored`). Read-only properties are written, never read
+  (`ReadOnlyProperty_IsIgnored`).
+- **The bases in `PascalApi.Dto`** (`TInsertDTOBase`, `TUpdateDTOBase`, `TResponseDTOBase`,
+  `TFindPaginationDTOBase`, `TResponsePaginationDTOBase`) are markers with no members, except the
+  two paging ones. They add nothing to the JSON; they say what a DTO is for.
+- **A GUID per interface**, generated, never typed.
+- **Getters of optional members return `TOptionals.Safe(FField)`**: an absent member leaves the
+  field `nil`, and `Safe` turns `nil` into the type's Undefined (or Null for `INullXxx`), so callers
+  test `HasValue`/`IsNull` and never `Assigned`.
+
+### 2. Read a request body
+
+`TJsonMapper.Shared.FromJson<I>(AReq.Body)`. The error handler turns what the parser and the
+mapper raise into a 400 with the reason (`TApiMessages.InvalidJson`); nothing to catch in the
+handler. Measured against sample 01 on FPC:
+
+| Body sent to `POST /cities` | Answer |
+|---|---|
+| `{"name":"Natal","state":"RN","population":"abc"}` | 400 `$.population: expected integer, found JSON string` (checked) |
+| `"population":1.5` / `true` | 400 `expected integer, found JSON number` / `boolean` |
+| `"population":99999999999` | 400 `99999999999 is out of range for LongInt` (mapper test `Error_NumberOutOfRange_HasPath`) |
+| `"name":123` | 400 `$.name: expected string, found JSON number` |
+| `"popultion":10` (a typo) | 400 `$.popultion: unknown member ...` with `umError` (checked); **201 and population `null`** without it |
+| `{"NAME":"Natal","STATE":"RN"}` | 201: names are read case-insensitively (`Names_AreCaseInsensitive_UnknownIgnored`) |
+| `{"name":"First","name":"Second",...}` | 201 with `"First"`: **the first value wins** (checked; see Pitfalls) |
+| `{"name":"Natal",` / `` (empty) | 400 `Member name expected (at position 17)` / `Value expected (at position 1)` (checked) |
+| `[1,2]` / `"x"` / `null` | 400 `$: expected object, found JSON array` / `string` / `null` |
+| `{...} xyz` | 400 `Unexpected content after the JSON value` |
+| comments, single quotes, `NaN`, `010` | 400: strict JSON only |
+| `[[[...]]]` 600 levels deep | 400 `Maximum nesting depth exceeded`; the process answers on (512 levels; `Parse_DeepNesting_Raises`) |
+| `"Jo\u00e3o \ud83d\ude00"` | 201, stored and answered as UTF-8 `João 😀` (sample 02 checks the `\u00e3`) |
+| a lone `\ud83d` | 201 with U+FFFD in its place (`Parse_LoneSurrogate_BecomesReplacementChar`) |
+| `"a\u0000b"` | 201, written back as `"a\u0000b"` |
+| a body of 50 MB | **201** after 1.4 s; the process grew from 11 MB to 60 MB (step 10) |
+
+**Turn on `UnknownMembers := umError`.** Without it, a misspelled member is dropped in silence:
+the client thinks it set `popultion` and gets a city with no population. With it, the body is
+rejected before anything is assigned (`Strict_RejectedBody_ChangesNothing`). The samples set it
+at startup since this guide; a client that sends extra members on purpose (a newer client against
+an older API) then gets 400s, which is the trade.
+
+**`null` into a plain scalar keeps the value it had** (`Null_IntoScalar_KeepsValue`): `"name":null`
+into a `string` leaves `''`, which sample 01's own check turns into `"name" is required.` A member
+that may be null is an `INullXxx` or `IOptNullXxx` (step 3), never a plain type.
+
+### 3. Absent, null or a value: the three optional types
+
+pascal-common-faa has three flavors of each type (`String`, `Integer`, `Int64`, `Double`,
+`Single`, `Currency`, `DateTime`, `Boolean`, `Guid`):
+
+| Type | Absent | `null` | Written when unset |
+|---|---|---|---|
+| `IOptXxx` | allowed (Undefined) | **400** (`null is not allowed here (optional, not nullable)`, checked) | member omitted |
+| `INullXxx` | reads as Null | Null | **`null`**, never omitted |
+| `IOptNullXxx` | Undefined | Null | member omitted |
+
+The rule of thumb: `IOptXxx` for what a client may leave out of a request (`population` in a
+create), `INullXxx` for what a response always has but may be empty (a `NULL` column),
+`IOptNullXxx` for a PATCH, where absent, null and a value mean three different things. The
+bridge's table and its two deliberate differences from delphi-api-infra-faa are in
+pascal-jsonmapper-faa's `docs/converters.md`.
+
+Sample 02's PATCH (`DbApiSample.Cities.pas`):
+
+```pascal
+type
+  /// Name and state may not be null (the columns are NOT NULL); population may.
+  ICityPatch = interface(IUpdateDTOBase)
+    ['{D69D9227-473F-495A-95B3-C505E3E4BB25}']
+    function GetName: IOptString;
+    function GetState: IOptString;
+    function GetPopulation: IOptNullInteger;
+  end;
+
+{$M+}
+  TCityPatch = class(TUpdateDTOBase, ICityPatch)
+  ...
+  published
+    property Name: IOptString read FName write FName;
+    property State: IOptString read FState write FState;
+    property Population: IOptNullInteger read FPopulation write FPopulation;
+  end;
+{$M-}
+```
+
+| `PATCH /cities/2408102` | Answer (all checked) |
+|---|---|
+| `{"population":890480}` | 200, the other members unchanged |
+| `{}` | 200, nothing changed (no `UPDATE` is sent) |
+| `{"population":null}` | 200, population `null` |
+| `{"name":"Natal RN","state":"rn"}` | 200, both changed, population untouched |
+| `{"name":null}` | 400 `$.name: null is not allowed here ...` |
+| `{"population":-1}` / `{"popultion":1}` | 400: the same limits as the create / unknown member |
+| an unknown code | 404 |
+
+### 4. From the DTO to the database, and back
+
+The PATCH's repository method normalizes the members inside their optionals, then turns each
+member that came into a block of SQL, so an absent member never reaches the `UPDATE`
+(pascal-db-faa's `ProcessTag`, the same as its sample 06):
+
+```pascal
+// Normalized inside the optionals (pascal-common-faa 1.9.0): an absent
+// member stays absent, so there is no if here.
+LName := TOptionals.Trim(APatch.GetName);
+LState := TOptionals.Upper(TOptionals.Trim(APatch.GetState));
+LPopulation := APatch.GetPopulation;
+... // the checks: "name" not empty, at most 100 characters, "state" 2 letters...
+
+// 'UPDATE CITIES SET CODE = CODE [NAME {], NAME = :NAME [} NAME] ' +
+// '[STATE {], STATE = :STATE [} STATE] [POPULATION {], POPULATION = :POPULATION [} POPULATION] ' +
+// 'WHERE CODE = :CODE'
+LQuery.Sql := FFactory.SqlLoader['CITY.UPDATE']
+  .ProcessTag('NAME', LName.HasValue)
+  .ProcessTag('STATE', LState.HasValue)
+  .ProcessTag('POPULATION', LPopulation.HasValue).SQL;
+// No if per member: an absent optional binds nothing (its block is gone),
+// a Null binds NULL, a value binds it.
+LQuery.Params.Strings['CODE'] := ACode;
+LQuery.Params.OptStrings['NAME'] := LName;
+LQuery.Params.OptStrings['STATE'] := LState;
+LQuery.Params.OptNullIntegers['POPULATION'] := LPopulation;
+```
+
+This is what the optional types are for: the DTO's member goes to its parameter as it is, and
+the three states need no `if`. pascal-common-faa 1.9.0's normalizers keep the state (Undefined
+stays Undefined, Null stays Null, only a value changes): `TOptionals.Trim`, `Upper`, `Lower`,
+`NullIfEmpty` (`''` becomes Null), `UndefinedIfEmpty`, and `Map(AValue, AFunc)` with a plain
+function (`function(const AValue: string): string`, not a method: the same on both compilers),
+for `IOptString`, `INullString` and `IOptNullString` (tested there). They work wherever the
+value goes: a parameter, a message, a response. The checks before the `UPDATE` still test
+`HasValue`: deciding is their job. Sample 02's scenario sends `"  Natal RN  "` and `" rn"` and
+gets `"Natal RN"` and `"RN"` back.
+
+The create works the same way: its population is a tagged block in the `INSERT`, gone when the
+member is absent (the column takes its default, `NULL`), and bound with
+`OptIntegers['POPULATION'] := ACity.GetPopulation`, no `if`. Sample 03 does it through the tenant
+filter: `TTenantFilter.Prepare` takes the processed SQL ([Multi-tenancy](multitenancy.md)).
+
+For an `IOptNullXxx`, **`HasValue` means "the member came"**, with a value or with `null`;
+`IsNull` tells the two apart. Back from the database, `AResult.NullableIntegers['POPULATION']`
+gives an `INullInteger` straight into the response DTO, and a `NULL` column is written as `null`
+(sample 02 checks `"population":null` for Florianópolis). Details: [Database access](database.md).
+
+### 5. Write a response
+
+- **A DTO:** `TJsonMapper.Shared.ToJson<ICity>(LCity)`; a list:
+  `Serialize<TCityArray>(LItems)` with a **named** array type (`TCityArray = TArray<ICity>`: on
+  FPC, `Serialize<TArray<ICity>>` doesn't parse, `>>` reads as `shr`).
+- **Small answers by hand:** `TJsonWriter` (it escapes for you), as sample 01's `WriteCity` and
+  sample 04's `/consumed` do. Never concatenate a value into JSON text yourself.
+- **Always out through `TJsonSend.Send`**: UTF-8 bytes and `charset=utf-8` on both compilers
+  ([Getting started](getting-started.md), step 3).
+- **Names** are camelCase by default (`PopulationTotal` → `populationTotal`). `Naming := jnSnakeCase`
+  or `jnAsDeclared` for the whole mapper, `RenameMember(TCity, 'Kind', 'type')` for one member
+  (a Pascal keyword, say). The mapper refuses two properties that would share a JSON name.
+- **Paged responses:** `PageEnvelopeJson` around the items ([Getting started](getting-started.md),
+  step 6).
+
+### 6. Types beyond strings and integers
+
+From the mapper's contract and suite, not measured again here:
+
+- **Numbers** keep their source text: an `Int64` above 2^53 survives a round trip
+  (`Parse_BigInteger_KeepsExactText`); `Double`/`Single` are written as the shortest text that
+  reads back exactly, the same on both compilers (`RoundTrip_Double_RandomBits`); `Currency` too.
+  A JavaScript client still loses an integer above 2^53: send such ids as strings.
+- **Dates** (`TDateTime`, `IOptDateTime`...) are ISO 8601. **No zone is written**, and an offset
+  on input is converted to UTC (`Parse_WithOffset_ConvertsToUtc`): keep `TDateTime` values in UTC
+  inside the API, or the client can't tell what a written time means.
+- **Enums** by name; an unknown name is a 400 with the path (`Error_UnknownEnumName`).
+- **GUIDs** only through `IOptGuid`/`INullGuid`/`IOptNullGuid` (the bridge writes them with
+  braces); the mapper has no rule for a bare `TGUID`.
+- **Nested DTOs and arrays** of DTOs or scalars (`Nested_InterfaceAndArrays`). A class-typed
+  property is never created by the mapper: it fills the instance the property already holds.
+- Anything else: a converter (`IJsonConverter`, pascal-jsonmapper-faa's `docs/converters.md`).
+
+The OpenAPI document is built from the same mapper (`TJsonMapper.Members`), so it can't name a
+member the wire doesn't have; the optional types become "not required" and "nullable" there
+([OpenAPI](openapi.md)). Sample 02 checks the PATCH DTO's schema in its document.
+
+### 7. The query string
+
+Query parameters are text, not JSON: read them with `ParseQueryInt`/`ParseQueryStr`
+(`PascalApi.Pagination`), which give optionals, into a Find DTO (sample 02's `GetCities`):
+
+```pascal
+LFind := TCityFind.Create;
+LFind.Page := ParseQueryInt('page', AReq.Query['page']);
+LFind.Limit := ParseQueryInt('limit', AReq.Query['limit']);
+LFind.OrderBy := ParseQueryStr(AReq.Query['orderBy']);
+```
+
+An empty or missing parameter is absent. `ParseQueryInt` takes only an optional `-` and decimal
+digits within `Integer`; anything else is a 400 naming the parameter (`"limit" must be an
+integer.`, `TApiMessages.InvalidQueryInteger`). Until 0.13.0 it used `TryStrToInt`: `abc`
+silently became the default, `$3`, `0x3`, `+3` and ` 3` were read as 3, and on FPC 3.2.2 a number
+past `Integer` wrapped around (`page=99999999999` became page 1215752191, measured). Tested in
+`PascalApi.PaginationTests` and checked over HTTP by samples 01 and 02.
+
+### 8. Beyond HTTP: the same DTO in a message
+
+A DTO doesn't care where its JSON goes. Two rules carry over from HTTP:
+
+- **Check before you send.** Read the body into the DTO in the handler, so a bad request is a
+  400 to its client and never a message nobody can read.
+- **Every receiver catches.** On a queue or a pipe there is no error handler to turn an exception
+  into an answer; what isn't caught is lost (steps 9 and 10, measured).
+
+### 9. On a queue (pascal-amqp-faa)
+
+Sample 04 (`MessagingSample.lpr`):
+
+```pascal
+/// The body read into an IOrder and checked, written back by the mapper.
+function OrderJson(AReq: THorseRequest): string;
+var
+  LOrder: IOrder;
+begin
+  LOrder := TJsonMapper.Shared.FromJson<IOrder>(AReq.Body);
+  if Trim(LOrder.GetItem) = '' then
+    raise EValidationException.Create('"item" is required.');
+  if LOrder.GetQuantity <= 0 then
+    raise EValidationException.Create('"quantity" must be positive.');
+  Result := TJsonMapper.Shared.ToJson<IOrder>(LOrder);
+end;
+
+/// UTF-8 bytes with content type application/json (PublishText says text/plain).
+function PublishJson(AChannel: TAMQPChannel; const AJson: string): UInt64;
+var
+  LProps: TAMQPBasicProperties;
+begin
+  LProps := TAMQPBasicProperties.Empty;
+  LProps.SetContentType('application/json');
+  LProps.SetPersistent;
+  Result := AChannel.Publish('', GQueue, PaStringToUtf8Bytes(AJson), LProps);
+end;
+```
+
+The consumer reads it back, and **catches**:
+
+```pascal
+procedure TApp.OnOrder(AChannel: TAMQPChannel; const ADelivery: TAMQPDelivery);
+var
+  LOrder: IOrder;
+begin
+  try
+    LOrder := TJsonMapper.Shared.FromJson<IOrder>(ADelivery.BodyAsText);
+  except
+    on E: Exception do
+    begin
+      TErrorHandlerMiddleware.LogError(Format('order rejected: %s: %s', [E.ClassName, E.Message]),
+        TraceIdOf(TPcTracing.Current));
+      AChannel.Nack(ADelivery.DeliveryTag, False);   // no requeue: to the dead-letter exchange, if any
+      Exit;
+    end;
+  end;
+  ... // the work
+  AChannel.Ack(ADelivery.DeliveryTag);
+end;
+```
+
+Measured on FPC with RabbitMQ 3 and pascal-amqp-faa 0.3.0:
+
+- `POST /orders` with `"quantity":"x"`, an unknown member or a quantity of 0: 400, nothing
+  published. A good order with `"café"`: 202, and the consumer read `café` as UTF-8 (`/consumed`
+  answered `"lastItem":"caf\xc3\xa9"`).
+- A bad message published on purpose (`/orders/raw`, `"quantity":"x"` and `not json`): each logged
+  (`order rejected: EJsonMapperError: $.quantity: expected integer, found JSON string trace_id=...`)
+  and rejected; the queue ended with nothing ready and nothing unacknowledged.
+- **Without the `try`**, the same bad message stayed unacknowledged, with nothing in the log: the
+  consumer callback runs on pascal-common-faa's thread pool, which swallows the exception. After
+  the process restarted, the broker delivered it again, and it got stuck again, on every restart.
+  The other six messages of that run were consumed normally. With `Qos(1)` (one unacknowledged
+  message at a time), one such message would hold up the consumer; that wasn't measured.
+
+The rest of messaging inside an API (one connection per process, confirms, spans, a broker that
+is down): [Messaging, Redis, IPC](messaging.md).
+
+### 10. Between processes (pascal-pipes-faa)
+
+pascal-pipes-faa carries bytes; text and JSON are up to the application. It ships an optional
+`Pipes.Json` unit over each compiler's own JSON library (`System.JSON` on Delphi, `fpjson` on FPC),
+which write different text for the same value. To keep one JSON on both ends, use the mapper
+with `SendText`/`RequestText`, as sample 04's `PipesJsonSample.lpr` does:
+
+```pascal
+procedure TServerSide.OnRequest(Sender: TObject; AConnId: TPipeConnectionId;
+  const ARequest: TBytes; out AReply: TBytes);
+var
+  LOrder: IOrder;
+  LReply: TOrderReply;
+  LReplyIntf: IOrderReply;
+begin
+  // An exception here goes back to the client as an error reply.
+  LOrder := TJsonMapper.Shared.FromJson<IOrder>(FrameText(ARequest));
+  LReply := TOrderReply.Create;
+  LReplyIntf := LReply;
+  LReply.Accepted := LOrder.GetQuantity > 0;
+  LReply.Item := LOrder.GetItem;
+  AReply := PaStringToUtf8Bytes(TJsonMapper.Shared.ToJson<IOrderReply>(LReplyIntf));
+end;
+
+procedure TServerSide.OnMessage(Sender: TObject; AConnId: TPipeConnectionId; const AData: TBytes);
+var
+  LOrder: IOrder;
+begin
+  // Nobody hears an exception from here: catch it.
+  try
+    LOrder := TJsonMapper.Shared.FromJson<IOrder>(FrameText(AData));
+    ...
+  except
+    on E: Exception do
+      Writeln('message rejected: ', E.ClassName, ': ', E.Message);
+  end;
+end;
+```
+
+(`FrameText` decodes the frame's UTF-8 and raises when it isn't.) Measured on FPC 3.2.2/Windows
+with pascal-pipes-faa 0.1.1:
+
+- A request: `{"accepted":true,"item":"rice"}`. A bad one: the client's `RequestText` raised
+  `EPipeError: servidor respondeu erro: $.quantity: expected integer, found JSON string`. The
+  server's exception text reaches the client (with the library's Portuguese prefix), so keep
+  messages that the other process may see free of secrets.
+- **A fire-and-forget message whose handler raises is lost without a trace**: `OnError` wasn't
+  called, on either side; the connection kept working. Hence the `try` above.
+
+### 11. How big a body may be
+
+Nothing in Horse or in this library limits a request body: Horse reads it whole before any
+middleware runs, so a middleware could only refuse it after paying for it. A 50 MB body (a member
+the DTO doesn't have, before `umError`) was accepted in 1.4 s and the process grew from 11 MB to
+60 MB (FPC, measured). **Limit it in front of the API**, at the reverse proxy (nginx's
+`client_max_body_size`, for example; not measured here), with a size your largest real request
+fits in. The parser's own limit is nesting depth (512), not size.
+
+## Choices
+
+### `umError` or ignoring unknown members
+
+`umError` catches typos and fields the API never had, at the cost of refusing a client that
+sends extra members on purpose. Ignoring is the mapper's default and the right choice only when
+clients are expected to run ahead of the API. The samples use `umError`.
+
+### `IOptXxx`, `INullXxx` or `IOptNullXxx`
+
+Step 3's rule of thumb. A plain `Integer` with `0` for "unknown" is never right in a DTO: the
+client can't tell "unknown" from zero, and `null` would keep the previous value.
+
+### The mapper or `TJsonWriter`
+
+The mapper for DTOs (and for anything the OpenAPI document describes); `TJsonWriter` for small,
+fixed answers. Both escape and both write the same bytes on both compilers.
+
+### The mapper or a compiler's JSON library
+
+`System.JSON` and `fpjson` don't agree on numbers or on `\u` escapes (fpjson 3.2.2 decodes them
+through the system code page unless it is UTF-8; pascal-jsonmapper-faa's `PascalJsonMapper.Json`
+header). Where both ends must agree, one library on both: the mapper.
+
+## Pitfalls
+
+- **A typo in a member name, accepted** (step 2): turn on `umError`.
+- **A member sent twice**: pascal-jsonmapper-faa 0.3.0 keeps the first value; many parsers keep
+  the last. If something in front of the API (a gateway, a WAF) reads the body too, the two can
+  disagree about the same request. Checked in `tools/http_scenarios.sh` so a change in the mapper
+  shows up; recorded as a candidate for pascal-jsonmapper-faa (`docs/plan.md`, section 8).
+- **`null` into a plain type keeps the old value** (step 2).
+- **Public properties**: invisible to the mapper on both compilers.
+- **`Length` for a "max N characters" rule**: it counts bytes on FPC and UTF-16 units on Delphi;
+  use `PaCharCount` ([OpenAPI](openapi.md), step 5).
+- **Times without a zone** (step 6).
+- **A consumer callback or a pipe handler that raises**: the message is lost or stuck, silently
+  (steps 9 and 10).
+- **`PublishText` for JSON**: it labels the message `text/plain`; publish bytes with
+  `application/json` (step 9).
+- **No body size limit** (step 11).
+- **Testing with curl from Git Bash on Windows**: put non-ASCII and `\u` escapes in a file
+  (`--data-binary @file`); curl.exe gets its arguments in the ANSI code page, and a test that
+  types them on the command line sends something else.
+- **Reading non-ASCII in a console log on Windows (FPC)**: `Writeln` converts to the console's
+  code page, so `é` showed as the byte `0x82` (code page 850) in sample 04's log while the message
+  itself was UTF-8 (measured). Check bytes in the response, not in the console.
+
+## Testing your application
+
+- **Over HTTP**, as `tools/http_scenarios_db.sh` does: for each DTO, a wrong type, an unknown
+  member, `null` where it isn't allowed, and each limit; for a PATCH, absent, `null` and a value
+  for every member that allows them.
+- **Bytes, not text**: compare the response's bytes for non-ASCII (the scenarios use `body_is`
+  with UTF-8 in the script, and send bodies from files).
+- **Both compilers**: the same script against the Delphi and the FPC build of the sample. The
+  mapper is meant to answer the same on both; the checks are what show it.
+- **Messages**: publish a bad message on purpose (sample 04's `/orders/raw`) and check that it
+  is logged and that the queue is left with nothing unacknowledged
+  (`rabbitmqctl list_queues name messages_ready messages_unacknowledged`).
+
+## Reference
+
+- [pascal-jsonmapper-faa](https://github.com/fabianoallex/pascal-jsonmapper-faa): the contract
+  (README), converters and the optionals bridge's rules (`docs/converters.md`).
+- pascal-common-faa: `PascalCommon.Optionals` (the 27 interfaces, `TOptionals.Safe`) and
+  `bridges/jsonmapper/PascalCommon.JsonMapper.Optionals`.
+- `PascalApi.Dto` (the bases), `PascalApi.Pagination` (`ParseQueryInt`, `ParseQueryStr`,
+  `PageRequestFrom`), `PascalApi.Http` (`TJsonSend`, `EValidationException`, `TApiMessages`).
+- Samples: `samples/01-api` (POST), `samples/02-db` (PATCH, the query string, `NULL`),
+  `samples/04-messaging` (`MessagingSample.lpr`, `PipesJsonSample.lpr`).
+- Guides: [Errors and validation](errors.md), [Database access](database.md),
+  [OpenAPI](openapi.md), [Messaging, Redis, IPC](messaging.md).

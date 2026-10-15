@@ -97,6 +97,7 @@ type
     TenantSuspended: string;
     InternalError: string;             // 500: any exception not mapped above
     ServerBusy: string;                // 503: no free database connection in time
+    InvalidQueryInteger: string;       // Format: %s = the query parameter (PascalApi.Pagination)
     class function English: TApiMessages; static;
     class function Portuguese: TApiMessages; static;
     /// The messages in use. Assign once, at startup.
@@ -357,6 +358,7 @@ begin
   Result.TenantSuspended := 'This tenant is suspended.';
   Result.InternalError := 'An unexpected error occurred.';
   Result.ServerBusy := 'The server is busy. Try again shortly.';
+  Result.InvalidQueryInteger := '"%s" must be an integer.';
 end;
 
 class function TApiMessages.Portuguese: TApiMessages;
@@ -382,6 +384,7 @@ begin
   Result.TenantSuspended := 'Este tenant está suspenso.';
   Result.InternalError := 'Ocorreu um erro inesperado.';
   Result.ServerBusy := 'O servidor está ocupado. Tente novamente em instantes.';
+  Result.InvalidQueryInteger := '"%s" deve ser um número inteiro.';
 end;
 
 { Error mapping }

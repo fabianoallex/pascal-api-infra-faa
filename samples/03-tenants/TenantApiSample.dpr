@@ -455,6 +455,9 @@ begin
   {$IFDEF FPC}
   SetMultiByteConversionCodePage(CP_UTF8);
   {$ENDIF}
+  // A member the DTO doesn't have is a 400 with its path ("$.popultion"),
+  // not silently dropped (the mapper's default ignores it).
+  TJsonMapper.Shared.UnknownMembers := umError;
   GPort := 9350;
   GReset := False;
   for I := 1 to ParamCount do

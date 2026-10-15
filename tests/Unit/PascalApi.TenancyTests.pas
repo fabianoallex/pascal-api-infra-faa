@@ -30,6 +30,7 @@ uses
   PascalJsonMapper.Json,
   PascalDb.Interfaces,
   PascalDb.Mock,
+  PascalDb.SqlLoader,
   PascalApi.Http,
   PascalApi.Tenancy;
 
@@ -113,6 +114,8 @@ type
     [Test] procedure Filter_Prepare_ReplacesAndBinds;
     [Test] procedure Filter_Prepare_AliasedTags_ForAJoin;
     [Test] procedure Filter_Prepare_AliasTagNotAnIdentifier_LeftAsIs;
+    [Test] procedure Filter_PrepareProcessedSql_BlockRemoved_ReplacesAndBinds;
+    [Test] procedure Filter_PrepareProcessedSql_BlockKept_ReplacesAndBinds;
   end;
 
 implementation
@@ -749,6 +752,57 @@ begin
   LTransaction := LScope.Factory.GetPool.AcquireQuery(LQuery);
   TTenantFilter.Prepare(LQuery, LScope, SQL);
   TAssert.AssertEquals(SQL, LQuery.Sql);
+end;
+
+const
+  // A block per optional member (sample 03's CITY.INSERT).
+  INSERT_SQL = 'INSERT INTO CITIES (TENANT_ID, CODE[POPULATION {], POPULATION[} POPULATION]) ' +
+    'VALUES (:TENANT_ID, :CODE[POPULATION {], :POPULATION[} POPULATION])';
+
+procedure TTenancyTests.Filter_PrepareProcessedSql_BlockRemoved_ReplacesAndBinds;
+const
+  EXPECTED = 'INSERT INTO CITIES (TENANT_ID, CODE) VALUES (:TENANT_ID, :CODE)';
+var
+  LMock: TMockDBFactory;
+  LScope: TTenantDataScope;
+  LQuery: IQuery;
+  LTransaction: IScopeTransaction;
+begin
+  LMock := TMockDBFactory.Create;
+  LScope.Factory := LMock;
+  LScope.Discriminator := 'initech';
+  LTransaction := LScope.Factory.GetPool.AcquireQuery(LQuery);
+  TTenantFilter.Prepare(LQuery, LScope,
+    LScope.Factory.SqlLoader[INSERT_SQL].ProcessTag('POPULATION', False));
+  LQuery.Params.Strings['CODE'] := '4314902';
+  TAssert.AssertEquals(EXPECTED, LQuery.Sql);
+  LQuery.ExecSql;
+  TAssert.AssertEquals('bound in the same call', 'initech',
+    LMock.LastExecution(EXPECTED).AsString('TENANT_ID'));
+end;
+
+procedure TTenancyTests.Filter_PrepareProcessedSql_BlockKept_ReplacesAndBinds;
+const
+  EXPECTED = 'INSERT INTO CITIES (TENANT_ID, CODE, POPULATION) ' +
+    'VALUES (:TENANT_ID, :CODE, :POPULATION)';
+var
+  LMock: TMockDBFactory;
+  LScope: TTenantDataScope;
+  LQuery: IQuery;
+  LTransaction: IScopeTransaction;
+begin
+  LMock := TMockDBFactory.Create;
+  LScope.Factory := LMock;
+  LScope.Discriminator := 'initech';
+  LTransaction := LScope.Factory.GetPool.AcquireQuery(LQuery);
+  TTenantFilter.Prepare(LQuery, LScope,
+    LScope.Factory.SqlLoader[INSERT_SQL].ProcessTag('POPULATION', True));
+  LQuery.Params.Strings['CODE'] := '4314902';
+  LQuery.Params.Integers['POPULATION'] := 1332845;
+  TAssert.AssertEquals(EXPECTED, LQuery.Sql);
+  LQuery.ExecSql;
+  TAssert.AssertEquals('bound in the same call', 'initech',
+    LMock.LastExecution(EXPECTED).AsString('TENANT_ID'));
 end;
 
 initialization

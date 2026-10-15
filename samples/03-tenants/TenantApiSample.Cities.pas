@@ -204,9 +204,11 @@ begin
       'SELECT CODE, NAME, STATE, POPULATION FROM CITIES WHERE ${TENANT} ORDER BY NAME, CODE')
     .Add(DIR, 'CITY.BY_CODE',
       'SELECT CODE, NAME, STATE, POPULATION FROM CITIES WHERE CODE = :CODE AND ${TENANT}')
+    // The POPULATION blocks are kept only when it came; without them the
+    // column takes its default, NULL.
     .Add(DIR, 'CITY.INSERT',
-      'INSERT INTO CITIES (TENANT_ID, CODE, NAME, STATE, POPULATION) ' +
-      'VALUES (:TENANT_ID, :CODE, :NAME, :STATE, :POPULATION)')
+      'INSERT INTO CITIES (TENANT_ID, CODE, NAME, STATE[POPULATION {], POPULATION[} POPULATION]) ' +
+      'VALUES (:TENANT_ID, :CODE, :NAME, :STATE[POPULATION {], :POPULATION[} POPULATION])')
     .Add(DIR, 'CITY.DELETE', 'DELETE FROM CITIES WHERE CODE = :CODE AND ${TENANT}')
     .Add(DIR, 'MIG.0003',
       'CREATE TABLE STATES (TENANT_ID VARCHAR(40) NOT NULL, CODE VARCHAR(2) NOT NULL, ' +
@@ -369,14 +371,15 @@ begin
   LScope := FScope.Factory.GetPool.AcquireQuery(LQuery);
   LScope.StartTransaction;
   try
-    TTenantFilter.Prepare(LQuery, FScope, 'CITY.INSERT');
+    // SQL already processed (the POPULATION block), then the tenant's
+    // condition and :TENANT_ID in the same call.
+    TTenantFilter.Prepare(LQuery, FScope, FScope.Factory.SqlLoader['CITY.INSERT']
+      .ProcessTag('POPULATION', ACity.GetPopulation.HasValue));
     LQuery.Params.Strings['CODE'] := LCode;
     LQuery.Params.Strings['NAME'] := Trim(ACity.GetName);
     LQuery.Params.Strings['STATE'] := UpperCase(Trim(ACity.GetState));
-    if ACity.GetPopulation.HasValue then
-      LQuery.Params.OptNullIntegers['POPULATION'] := TOptNullInteger.From(ACity.GetPopulation.Value)
-    else
-      LQuery.Params.OptNullIntegers['POPULATION'] := TOptNullInteger.Null;
+    // No if: absent, the column and its parameter are gone (NULL).
+    LQuery.Params.OptIntegers['POPULATION'] := ACity.GetPopulation;
     LQuery.ExecSql; // EConstraintViolationException (cvUnique) -> 409
     LScope.Commit;
   except

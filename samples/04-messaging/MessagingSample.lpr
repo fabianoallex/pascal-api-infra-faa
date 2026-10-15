@@ -25,9 +25,16 @@ program MessagingSample;
   Routes:
     GET  /cache/:key          cache-aside through Redis
     GET  /cache2/:key         the same, computing the value when Redis is down
-    POST /orders              publish the body; 202
-    POST /orders/confirmed    publish and wait for the broker's confirm; 202, or 503 after 3 s
-    GET  /consumed            how many messages the consumer took *)
+    POST /orders              {"item":"...","quantity":N}: read into an IOrder (400 when
+                              it isn't one), published as application/json; 202
+    POST /orders/confirmed    the same, and wait for the broker's confirm; 202, or 503 after 3 s
+    POST /orders/raw          sample only, like sample 01's /fail/*: publish the body
+                              unchecked, to show what the consumer does with a bad message
+    GET  /consumed            how many orders the consumer took, and the last item
+
+  The queue is ORDERS_QUEUE (environment or .env), by default a new name per
+  run. The consumer reads each message into an IOrder; one it can't read is
+  logged and rejected without requeue (Nack), never left unacknowledged. *)
 
 {$MODE DELPHI}{$H+}
 
@@ -37,11 +44,33 @@ uses
   Horse,
   PascalCommon.Tracing,
   Redis.Types, Redis.Client, Redis.Commands.Strings,
-  AMQP.Connection, AMQP.Queue.Methods,
-  PascalApi.Http,
+  AMQP.Connection, AMQP.Queue.Methods, AMQP.Basic.Methods,
+  PascalJsonMapper.Json, PascalJsonMapper.Mapper,
+  PascalApi.Http, PascalApi.Text, PascalApi.Config,
   PascalApi.Horse.Middlewares;
 
 type
+  /// The message: what POST /orders reads and the consumer reads back.
+  IOrder = interface
+    ['{3ABC5334-03C4-4455-908F-3C52DB19953C}']
+    function GetItem: string;
+    function GetQuantity: Integer;
+  end;
+
+{$M+}
+  TOrder = class(TInterfacedObject, IOrder)
+  private
+    FItem: string;
+    FQuantity: Integer;
+  public
+    function GetItem: string;
+    function GetQuantity: Integer;
+  published
+    property Item: string read FItem write FItem;
+    property Quantity: Integer read FQuantity write FQuantity;
+  end;
+{$M-}
+
   TApp = class
   public
     procedure Line(const AText: string);
@@ -66,6 +95,7 @@ var
   GPublisher, GConsumer, GConfirmed: TAMQPChannel;
   GQueue: string;
   GConsumed: Integer;
+  GLastItem: string; // under GOut
   GPort: Integer;
   GRedisParams: TRedisParams;
   GAmqpParams: TAMQPConnectionParams;
@@ -81,14 +111,54 @@ begin
   end;
 end;
 
-procedure TApp.OnOrder(AChannel: TAMQPChannel; const ADelivery: TAMQPDelivery);
+/// The span's trace id, or '' without tracing.
+function TraceIdOf(const ASpan: IPcSpan): string;
 begin
-  // On the library's thread pool; ack after the work.
-  InterlockedIncrement(GConsumed);
-  if TPcTracing.Current <> nil then
-    Line('consumed ' + ADelivery.BodyAsText + ' trace=' + TPcTracing.Current.TraceId)
+  if ASpan <> nil then
+    Result := ASpan.TraceId
   else
-    Line('consumed ' + ADelivery.BodyAsText);
+    Result := '';
+end;
+
+function TOrder.GetItem: string;
+begin
+  Result := FItem;
+end;
+
+function TOrder.GetQuantity: Integer;
+begin
+  Result := FQuantity;
+end;
+
+procedure TApp.OnOrder(AChannel: TAMQPChannel; const ADelivery: TAMQPDelivery);
+var
+  LOrder: IOrder;
+begin
+  // On the library's thread pool. An exception raised here is swallowed by
+  // the pool: the message would stay unacknowledged, with nothing logged,
+  // and come back on every restart (measured). So a message that can't be
+  // read is logged and rejected without requeue (with a dead-letter
+  // exchange on the queue, it goes there).
+  try
+    LOrder := TJsonMapper.Shared.FromJson<IOrder>(ADelivery.BodyAsText);
+  except
+    on E: Exception do
+    begin
+      TErrorHandlerMiddleware.LogError(Format('order rejected: %s: %s', [E.ClassName, E.Message]),
+        TraceIdOf(TPcTracing.Current));
+      AChannel.Nack(ADelivery.DeliveryTag, False);
+      Exit;
+    end;
+  end;
+  InterlockedIncrement(GConsumed);
+  GOut.Enter;
+  try
+    GLastItem := LOrder.GetItem;
+  finally
+    GOut.Leave;
+  end;
+  Line(Format('consumed %d x %s trace=%s', [LOrder.GetQuantity, LOrder.GetItem,
+    TraceIdOf(TPcTracing.Current)]));
   AChannel.Ack(ADelivery.DeliveryTag);
 end;
 
@@ -150,10 +220,43 @@ begin
   TJsonSend.Send(ARes, '{"hit":false,"value":"' + LValue + '"}');
 end;
 
+/// The body read into an IOrder and checked, written back by the mapper: a
+/// bad order is a 400 here, never a message the consumer can't read.
+function OrderJson(AReq: THorseRequest): string;
+var
+  LOrder: IOrder;
+begin
+  LOrder := TJsonMapper.Shared.FromJson<IOrder>(AReq.Body);
+  if Trim(LOrder.GetItem) = '' then
+    raise EValidationException.Create('"item" is required.');
+  if LOrder.GetQuantity <= 0 then
+    raise EValidationException.Create('"quantity" must be positive.');
+  Result := TJsonMapper.Shared.ToJson<IOrder>(LOrder);
+end;
+
+/// UTF-8 bytes with content type application/json (PublishText says
+/// text/plain), persistent.
+function PublishJson(AChannel: TAMQPChannel; const AJson: string): UInt64;
+var
+  LProps: TAMQPBasicProperties;
+begin
+  LProps := TAMQPBasicProperties.Empty;
+  LProps.SetContentType('application/json');
+  LProps.SetPersistent;
+  Result := AChannel.Publish('', GQueue, PaStringToUtf8Bytes(AJson), LProps);
+end;
+
 procedure PostOrder(AReq: THorseRequest; ARes: THorseResponse; ANext: TNextProc);
 begin
   // One channel shared by every request thread.
-  GPublisher.PublishText('', GQueue, AReq.Body);
+  PublishJson(GPublisher, OrderJson(AReq));
+  TJsonSend.Send(ARes, '{"queued":true}', 202);
+end;
+
+procedure PostOrderRaw(AReq: THorseRequest; ARes: THorseResponse; ANext: TNextProc);
+begin
+  // Sample only: no check, so a bad message reaches the consumer.
+  PublishJson(GPublisher, AReq.Body);
   TJsonSend.Send(ARes, '{"queued":true}', 202);
 end;
 
@@ -162,7 +265,7 @@ var
   LSeq: UInt64;
 begin
   // Confirm mode: answer 202 only once the broker has taken the message.
-  LSeq := GConfirmed.PublishText('', GQueue, AReq.Body);
+  LSeq := PublishJson(GConfirmed, OrderJson(AReq));
   if not GConfirmed.WaitForConfirm(LSeq, 3000) then
   begin
     TErrorHandlerMiddleware.LogError(AReq, 'broker did not confirm publish ' + IntToStr(LSeq));
@@ -172,8 +275,26 @@ begin
 end;
 
 procedure GetConsumed(AReq: THorseRequest; ARes: THorseResponse; ANext: TNextProc);
+var
+  LWriter: TJsonWriter;
 begin
-  TJsonSend.Send(ARes, '{"consumed":' + IntToStr(GConsumed) + '}');
+  LWriter := TJsonWriter.Create;
+  try
+    LWriter.BeginObject;
+    LWriter.Name('consumed');
+    LWriter.WriteInt64(GConsumed);
+    LWriter.Name('lastItem');
+    GOut.Enter;
+    try
+      LWriter.WriteString(GLastItem);
+    finally
+      GOut.Leave;
+    end;
+    LWriter.EndObject;
+    TJsonSend.Send(ARes, LWriter.ToString);
+  finally
+    LWriter.Free;
+  end;
 end;
 
 begin
@@ -194,7 +315,7 @@ begin
   GAmqp.OnReconnectError := GApp.OnReconnectError;
   GAmqp.Open;
   GPublisher := GAmqp.CreateChannel;
-  GQueue := 'probe-orders-' + IntToStr(GetTickCount64);
+  GQueue := TAppConfig.Get('ORDERS_QUEUE', 'probe-orders-' + IntToStr(GetTickCount64));
   GPublisher.DeclareQueue(TAMQPQueueDeclare.Create(GQueue, False));
   GConfirmed := GAmqp.CreateChannel;
   GConfirmed.ConfirmSelect;
@@ -203,12 +324,15 @@ begin
     GConsumer.DeclareQueue(TAMQPQueueDeclare.Create(GQueue, False));
   GConsumer.Consume(GQueue, GApp.OnOrder);
 
+  TJsonMapper.Shared.RegisterMapping<IOrder, TOrder>;
+  TJsonMapper.Shared.UnknownMembers := umError;
   TErrorHandlerMiddleware.Register(GApp.Line);
   THorse.Use(TLoggerMiddleware.New(GApp.Line));
   THorse.Get('/cache/:key', GetCache);
   THorse.Get('/cache2/:key', GetCacheOrCompute);
   THorse.Post('/orders', PostOrder);
   THorse.Post('/orders/confirmed', PostOrderConfirmed);
+  THorse.Post('/orders/raw', PostOrderRaw);
   THorse.Get('/consumed', GetConsumed);
   GApp.Line('MessagingSample listening on port ' + IntToStr(GPort) + ', queue ' + GQueue);
   THorse.Listen(GPort);

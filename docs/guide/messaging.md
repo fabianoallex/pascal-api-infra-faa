@@ -17,8 +17,11 @@ did there. Use **pascal-amqp-faa 0.3.0 or later**. Unlike samples 01-03 it is bu
 by hand (`sh samples/04-messaging/build_fpc.sh`, with your clones of the two libraries in
 `REDIS_FAA` and `AMQP_FAA`), not by CI: those libraries aren't this repository's dependencies, so
 it can go out of date; each library's own samples and tests are the reference. Delphi wasn't
-tried. The Pipes part
-wasn't run at all: pascal-pipes-faa supports FPC on Linux only, not on Windows, and says so.
+tried. Since 2026-10-15 the orders are a JSON DTO, read and written by pascal-jsonmapper-faa
+([DTOs and JSON](dtos-json.md), step 9). The Pipes part is
+[PipesJsonSample](../../samples/04-messaging/PipesJsonSample.lpr), run on FPC 3.2.2/Windows with
+pascal-pipes-faa 0.1.1 (its README's headline lists FPC on Linux, but its own suites run on FPC for
+Windows too); what this guide says of Pipes beyond that comes from its README.
 
 ## What it solves
 
@@ -89,7 +92,8 @@ Create the client before `THorse.Listen`, keep it in a global, and share it with
   `docs/related-libraries.md` used one, and it is fine in a single-threaded program only.
 - **AMQP: one `TAMQPConnection`**, opened at startup, and a channel for publishing shared by the
   requests. Measured: 400 publishes from 32 request threads at once on one channel, all 202, and
-  the consumer received all of them.
+  the same for the confirmed route; the consumer received all 800 (repeated with the JSON
+  orders on 2026-10-15).
 - **Pipes: one `TPipeClient`**. "Concurrent calls from multiple threads on the same client are
   supported" (pascal-pipes-faa's README; not measured here).
 
@@ -102,10 +106,14 @@ The pool belongs to the client: a command waits for a free connection (10 by def
 procedure PostOrder(AReq: THorseRequest; ARes: THorseResponse; ANext: TNextProc);
 begin
   // One channel shared by every request thread.
-  GPublisher.PublishText('', GQueue, AReq.Body);
+  PublishJson(GPublisher, OrderJson(AReq));
   TJsonSend.Send(ARes, '{"queued":true}', 202);
 end;
 ```
+
+`OrderJson` reads the body into the order DTO and checks it (a bad order is a 400 here, never a
+message the consumer can't read), and `PublishJson` publishes its UTF-8 bytes as
+`application/json`: [DTOs and JSON](dtos-json.md), step 9.
 
 **A plain publish returning means the bytes were written, not that the broker has them.**
 Measured: with the RabbitMQ container paused, `POST /orders` still answered 202 in 5 ms (the
@@ -124,7 +132,7 @@ var
   LSeq: UInt64;
 begin
   // Confirm mode: answer 202 only once the broker has taken the message.
-  LSeq := GConfirmed.PublishText('', GQueue, AReq.Body);
+  LSeq := PublishJson(GConfirmed, OrderJson(AReq));
   if not GConfirmed.WaitForConfirm(LSeq, 3000) then
   begin
     TErrorHandlerMiddleware.LogError(AReq, 'broker did not confirm publish ' + IntToStr(LSeq));
@@ -149,10 +157,21 @@ treated as an answer the client caused), which is why the handler logs first.
 
 ```pascal
 procedure TApp.OnOrder(AChannel: TAMQPChannel; const ADelivery: TAMQPDelivery);
+var
+  LOrder: IOrder;
 begin
-  // On the library's thread pool; ack after the work.
-  InterlockedIncrement(GConsumed);
-  ...
+  try
+    LOrder := TJsonMapper.Shared.FromJson<IOrder>(ADelivery.BodyAsText);
+  except
+    on E: Exception do
+    begin
+      TErrorHandlerMiddleware.LogError(Format('order rejected: %s: %s', [E.ClassName, E.Message]),
+        TraceIdOf(TPcTracing.Current));
+      AChannel.Nack(ADelivery.DeliveryTag, False);
+      Exit;
+    end;
+  end;
+  ... // the work
   AChannel.Ack(ADelivery.DeliveryTag);
 end;
 
@@ -164,6 +183,15 @@ GConsumer.Consume(GQueue, GApp.OnOrder);
 The callback runs on pascal-common-faa's thread pool (`PcPool`), several at a time, not on Horse's
 threads and not in order (pascal-amqp-faa's README, "Concurrency and message ordering", which also
 shows how to get ordering). It is a method (`of object`) on both compilers.
+
+**An exception in the callback is lost**, and so is the message's fate: the pool swallows it, so
+the message is neither acknowledged nor rejected and nothing is logged. Measured with a consumer
+that read the JSON without the `try` above: of 7 messages, the one with `"quantity":"x"` stayed
+unacknowledged, and after the process restarted the broker delivered it again, to be stuck again,
+on every restart. Hence the `try`: log it and `Nack` without requeue (to the dead-letter exchange,
+when the queue has one). Measured with the code above: the bad message logged
+(`order rejected: EJsonMapperError: $.quantity: expected integer, ... trace_id=...`), the queue
+left with nothing ready or unacknowledged.
 
 **With pascal-amqp-faa 0.2.0, declare the queue on the consuming channel too.** Measured there
 with automatic reconnection on (`AutoReconnect := True`) and this non-durable queue declared only
@@ -293,7 +321,9 @@ database for what must survive.
 pascal-pipes-faa talks to another process on the same machine (a Named Pipe on Windows, a Unix
 socket on Linux) or over TCP/TLS, with request/reply and pub/sub. For a service on the same
 machine that isn't an HTTP server (a device driver, a desktop program), it is the natural fit; for
-another API, HTTP. Remember the platforms: Delphi on Windows, FPC on Linux.
+another API, HTTP. Remember the platforms: pascal-pipes-faa's README lists Delphi (Win64,
+Android) and FPC on Linux; its suites also run on FPC for Windows, where `PipesJsonSample` was
+measured.
 
 ## Pitfalls
 
@@ -305,6 +335,8 @@ another API, HTTP. Remember the platforms: Delphi on Windows, FPC on Linux.
   recovers, silently (step 4). Fixed in 0.3.0.
 - **Reconnection attempts nobody logs**: with unlimited attempts, a reconnection that never
   succeeds shows only as 500s; log `OnReconnectError` (step 6).
+- **A consumer callback that raises**: the message stays unacknowledged, silently, and comes
+  back on every restart (step 4). Catch, log, `Nack`.
 - **A consumer callback that blocks forever** stalls the channel's shutdown (pascal-amqp-faa's
   README, "The consumer callback must always finish on its own").
 - **A fallback that catches `ERedisException`**: it also hides bugs (step 6).

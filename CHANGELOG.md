@@ -72,6 +72,25 @@ may change the API; each such change is listed here.
 
 ### Changed
 
+- `external/pascal-common-faa` on v1.9.0, for its string normalizers (`TOptionals.Trim`,
+  `Upper`...: the value changes inside the optional, the state stays), which sample 02's PATCH
+  uses so it binds each member with no `if` (asked for by the user; the normalizers were added
+  there for this). Sample 02's INSERT lost its `if` too: the population's column is a tagged
+  block, gone when the member is absent (the database writes NULL). The library's own minimum stays 1.8.1 (`PascalApi.Dto`): nothing in `src`
+  uses them.
+- **Breaking: `ParseQueryInt(AName, AText)`** (`PascalApi.Pagination`) takes the parameter's name
+  and answers **400** (`EValidationException`, `TApiMessages.InvalidQueryInteger`:
+  `"limit" must be an integer.`) for anything but an optional `-` and decimal digits within
+  `Integer`; empty is still absent. It used `TryStrToInt` and returned an absent value for text it
+  couldn't read: `abc` silently became the default, `$3`, `0x3`, `+3` and ` 3` were read as 3, and
+  on FPC 3.2.2 a number past `Integer` wrapped around (`page=99999999999` became page 1215752191,
+  measured through sample 02). New `TryParseQueryInteger`. Tests in `PascalApi.PaginationTests`
+  (277 in all); samples 01 and 02 check it over HTTP. Callers add the name:
+  `ParseQueryInt('page', AReq.Query['page'])`.
+- Samples 01-04 set `TJsonMapper.Shared.UnknownMembers := umError`: a member the DTO doesn't have
+  is a 400 with its path (`$.popultion`), where the mapper's default dropped it in silence (a typo
+  gave a 201 with the value missing, measured). Checked by all three scenario scripts (sample 03:
+  a `tenantId` in the body is refused).
 - `external/pascal-db-faa` on v0.14.2, two FireDAC + SQLite fixes measured through sample 02 on
   Delphi 12 (FPC's SQLdb already behaved): a row whose text is longer than its `VARCHAR(n)`
   (SQLite stores it) is read whole, where 0.14.0 raised `[FireDAC][DatS]-32` on every read and
@@ -108,6 +127,20 @@ may change the API; each such change is listed here.
 
 ### Added
 
+- `TTenantFilter.Prepare(AQuery, AScope, ASql: TSQLResult)` (`PascalApi.Tenancy`): the same as
+  the one that takes the SQL's name, from SQL already processed (`ProcessTag`), so a block per
+  optional member needs no `if`; the tenant's condition and `:TENANT_ID` still come in the same
+  call. Sample 03's INSERT uses it (its population is a tagged block, like sample 02's). Tests
+  `Filter_PrepareProcessedSql_BlockRemoved_ReplacesAndBinds` and `..._BlockKept_...` (279 in all).
+- `docs/guide/dtos-json.md`: DTOs and JSON, from request bodies (what each kind of bad body gets,
+  measured) and the three optional types to the query string, the database, and the same DTOs on
+  a queue and between processes. Sample 02 gains `PATCH /cities/:code` (`ICityPatch`: absent
+  leaves a member, `null` clears population, a value sets it; `tools/http_scenarios_db.sh`, 93
+  checks). Sample 04's orders are a JSON DTO (checked before publishing, `application/json`, a
+  consumer that logs and rejects what it can't read: without that, a bad message stayed
+  unacknowledged and silent, and came back on every restart, measured), and
+  `PipesJsonSample.lpr` sends DTOs over pascal-pipes-faa (`build_fpc.sh` builds it with
+  `PIPES_FAA`).
 - `docs/guide/`: guides for the library's users, one per topic, to one template (index:
   `docs/guide/README.md`). The first is multi-tenancy (`docs/guide/multitenancy.md`); the others
   are listed there as planned. Then getting started (`docs/guide/getting-started.md`), configuration

@@ -260,6 +260,7 @@ TApiMessages.Current := LMessages;
 | `RateLimited` | Rate limit exceeded. Try again in %d second(s). | 429 (`%d`: seconds) |
 | `TenantMissing`, `TenantUnknown`, `TenantSuspended` | | multi-tenancy, see [Multi-tenancy](multitenancy.md) |
 | `ServerBusy` | The server is busy. Try again shortly. | 503, no free database connection in time |
+| `InvalidQueryInteger` | "%s" must be an integer. | 400, from `ParseQueryInt` (`%s` is the parameter) |
 | `InternalError` | An unexpected error occurred. | 500 |
 
 A field with `%s` or `%d` goes through `Format`: keep the placeholder when you replace it.
@@ -313,8 +314,9 @@ translates, which the library doesn't have today.
   the probe). Horse's typed readers raise it too:
   `AReq.Query.Field('n').AsInteger` with `n=abc` answered `400 {"error":"The n param 'abc' is not
   valid a integer type."}`, in English only. Read the text and convert it yourself:
-  `ParseQueryInt` (`PascalApi.Pagination`) gives an absent value for a non-number, and
-  `EValidationException` reports it.
+  `ParseQueryInt('n', AReq.Query['n'])` (`PascalApi.Pagination`) gives an absent value for an
+  empty one and a 400 naming the parameter for anything but digits (`"n" must be an integer.`,
+  in `TApiMessages`; tested, and checked over HTTP by both samples' scenarios).
 - **A middleware before `TLoggerMiddleware`.** Its exceptions aren't covered (step 5). Keep the
   logger first.
 - **An id that isn't a number.** Sample 01 reads `/cities/:id` with `StrToIntDef(..., 0)`, so

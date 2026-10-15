@@ -9,14 +9,22 @@
   around it:
 
     LPage := PageRequestFrom(ADto.Page, ADto.Limit);       // from a Find DTO
-    LPage := PageRequestFrom(ParseQueryInt(Req.Query['page']),
-      ParseQueryInt(Req.Query['limit']));                  // or straight from the URL
+    LPage := PageRequestFrom(ParseQueryInt('page', Req.Query['page']),
+      ParseQueryInt('limit', Req.Query['limit']));         // or straight from the URL
     ...
     Res.Send(PageEnvelopeJson(TPageMeta.Create(LPage, LTotal), LItemsJson));
 
   ParseQueryInt/ParseQueryStr return an absent optional, never nil (they
   returned nil until 0.1.1, as in the origin, and a caller testing HasValue on
   a missing parameter got an access violation: found by samples/02-db).
+
+  ParseQueryInt takes only an optional '-' and decimal digits, within
+  Integer, and raises EValidationException (400) naming the parameter for
+  anything else. Until 0.13.0 it used TryStrToInt and returned an absent
+  value for text it couldn't read: 'abc' silently became the default, '$3',
+  '0x3', '+3' and ' 3' were read as 3, and on FPC 3.2.2 a number past
+  Integer wrapped around (page=99999999999 became page 1215752191,
+  measured through samples/02-db).
 
   Ported from Common.Pagination (delphi-api-infra-faa). Its TPageParams and
   TPageMeta were the same idea as PascalDb.Paging's records, so they are not
@@ -29,10 +37,16 @@ uses
   PascalCommon.Optionals,
   PascalDb.Paging;
 
-/// The value of a query-string parameter as an optional integer: absent when
-/// the text is empty or not an integer. Never nil (since 0.2.0): callers test
-/// HasValue directly.
-function ParseQueryInt(const AText: string): IOptInteger;
+/// The value of the query-string parameter AName (AText) as an optional
+/// integer: absent when AText is empty, never nil. AText must be an optional
+/// '-' and decimal digits within Integer; anything else raises
+/// EValidationException (400) with TApiMessages.InvalidQueryInteger, naming
+/// AName.
+function ParseQueryInt(const AName, AText: string): IOptInteger;
+
+/// True with AValue when AText is an optional '-' and decimal digits within
+/// Integer; never wraps around (FPC 3.2.2's TryStrToInt does).
+function TryParseQueryInteger(const AText: string; out AValue: Integer): Boolean;
 
 /// The value of a query-string parameter as an optional string: absent when
 /// the text is empty. Never nil (since 0.2.0).
@@ -53,7 +67,8 @@ function PageEnvelopeJson(const AMeta: TPageMeta; const AItemsJson: string): str
 implementation
 
 uses
-  SysUtils;
+  SysUtils,
+  PascalApi.Http;
 
 function BoolJson(AValue: Boolean): string;
 begin
@@ -63,14 +78,48 @@ begin
     Result := 'false';
 end;
 
-function ParseQueryInt(const AText: string): IOptInteger;
+function TryParseQueryInteger(const AText: string; out AValue: Integer): Boolean;
+var
+  I, LFirst: Integer;
+  LAcc: Int64;
+  LNegative: Boolean;
+begin
+  AValue := 0;
+  Result := False;
+  LNegative := (AText <> '') and (AText[1] = '-');
+  if LNegative then
+    LFirst := 2
+  else
+    LFirst := 1;
+  if LFirst > Length(AText) then
+    Exit;
+  LAcc := 0;
+  for I := LFirst to Length(AText) do
+  begin
+    if (AText[I] < '0') or (AText[I] > '9') then
+      Exit;
+    LAcc := LAcc * 10 + (Ord(AText[I]) - Ord('0'));
+    if LAcc > Int64(High(Integer)) + 1 then // stops long before Int64 could wrap
+      Exit;
+  end;
+  if LNegative then
+    LAcc := -LAcc;
+  if (LAcc < Low(Integer)) or (LAcc > High(Integer)) then
+    Exit;
+  AValue := Integer(LAcc);
+  Result := True;
+end;
+
+function ParseQueryInt(const AName, AText: string): IOptInteger;
 var
   N: Integer;
 begin
-  if (AText <> '') and TryStrToInt(AText, N) then
+  if AText = '' then
+    Result := TOptNullInteger.Undefined
+  else if TryParseQueryInteger(AText, N) then
     Result := TOptNullInteger.From(N)
   else
-    Result := TOptNullInteger.Undefined;
+    raise EValidationException.Create(Format(TApiMessages.Current.InvalidQueryInteger, [AName]));
 end;
 
 function ParseQueryStr(const AText: string): IOptString;

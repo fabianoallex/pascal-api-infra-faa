@@ -133,7 +133,8 @@ var
   LTotal: Int64;
   LItems: string;
 begin
-  LPage := PageRequestFrom(ParseQueryInt(AReq.Query['page']), ParseQueryInt(AReq.Query['limit']), 2, 10);
+  LPage := PageRequestFrom(ParseQueryInt('page', AReq.Query['page']),
+    ParseQueryInt('limit', AReq.Query['limit']), 2, 10);
   LItems := CityPageJson(AReq.Query['orderBy'], LPage, LTotal);
   TJsonSend.Send(ARes, PageEnvelopeJson(TPageMeta.Create(LPage, LTotal), LItems));
 end;
@@ -276,6 +277,9 @@ begin
   {$IFDEF FPC}
   SetMultiByteConversionCodePage(CP_UTF8);
   {$ENDIF}
+  // A member the DTO doesn't have is a 400 with its path ("$.popultion"),
+  // not silently dropped (the mapper's default ignores it).
+  TJsonMapper.Shared.UnknownMembers := umError;
   GPort := StrToIntDef(ParamStr(1), 9310);
   GSecret := TAppConfig.Get('JWT_SECRET', 'development-secret-change-me');
   GCallbacks := TSampleCallbacks.Create;

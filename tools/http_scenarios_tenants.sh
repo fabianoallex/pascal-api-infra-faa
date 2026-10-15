@@ -162,6 +162,9 @@ req POST /cities '{"code":"4205407","name":"Again","state":"SC"}' -H "Authorizat
 status_is 409 "the same code twice in one shared tenant"
 req POST /cities '{"code":"4205407","name":"Again","state":"SC"}' -H "Authorization: Bearer $ACME"
 status_is 409 "the same code twice in one dedicated tenant"
+req POST /cities '{"code":"4205407","name":"Again","state":"SC","tenantId":"initech"}' -H "Authorization: Bearer $ACME"
+status_is 400 "a tenantId member in the body is refused (umError), never taken as the tenant"
+body_has '$.tenantId' "unknown member tenantId: its path"
 # The limits the OpenAPI document declares (sample 02 has the same checks).
 req POST /cities '{"code":"+123456","name":"X","state":"SP"}' -H "Authorization: Bearer $ACME"
 status_is 400 "code: digits only"

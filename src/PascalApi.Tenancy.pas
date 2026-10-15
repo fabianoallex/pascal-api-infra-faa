@@ -53,6 +53,7 @@ uses
   SyncObjs,
   Generics.Collections,
   PascalJsonMapper.Json,
+  PascalDb.SqlLoader,
   PascalDb.Interfaces;
 
 const
@@ -203,7 +204,15 @@ type
     /// rows come from every tenant. Other parameters are bound after it
     /// (setting the SQL resets them).
     class procedure Prepare(const AQuery: IQuery; const AScope: TTenantDataScope;
-      const ASqlName: string); static;
+      const ASqlName: string); overload; static;
+    /// The same from SQL already processed (tags kept or removed), so a
+    /// block per optional member needs no if in the caller:
+    ///   Prepare(LQuery, LScope, LScope.Factory.SqlLoader['CITY.INSERT']
+    ///     .ProcessTag('POPULATION', ACity.GetPopulation.HasValue));
+    /// Take ASql from AScope.Factory.SqlLoader: SQL from another factory may
+    /// be another database's dialect.
+    class procedure Prepare(const AQuery: IQuery; const AScope: TTenantDataScope;
+      const ASql: TSQLResult); overload; static;
   end;
 
   TTenantCheck = (tcOk, tcNoTenant, tcUnknown, tcSuspended);
@@ -747,13 +756,29 @@ begin
   Result := Result + LRest;
 end;
 
+/// What both Prepare overloads do once the SQL is text: its ${TENANT} tags
+/// replaced and :TENANT_ID bound. A plain routine on purpose: when the name
+/// overload called the TSQLResult one, FPC 3.2.2 leaked the SQL's string
+/// (one block per run of PascalApi.TenancyTests, Linux, heaptrc).
+procedure PrepareTenantSql(const AQuery: IQuery; const AScope: TTenantDataScope;
+  const ASqlText: string);
+begin
+  AQuery.Sql := ReplaceAliasedTenantTags(ASqlText);
+  if Pos(':TENANT_ID', UpperCase(AQuery.Sql)) > 0 then
+    AQuery.Params.Strings['TENANT_ID'] := AScope.Discriminator;
+end;
+
 class procedure TTenantFilter.Prepare(const AQuery: IQuery; const AScope: TTenantDataScope;
   const ASqlName: string);
 begin
-  AQuery.Sql := ReplaceAliasedTenantTags(
+  PrepareTenantSql(AQuery, AScope,
     AScope.Factory.SqlLoader[ASqlName].ReplaceLiteral('TENANT', Condition).SQL);
-  if Pos(':TENANT_ID', UpperCase(AQuery.Sql)) > 0 then
-    AQuery.Params.Strings['TENANT_ID'] := AScope.Discriminator;
+end;
+
+class procedure TTenantFilter.Prepare(const AQuery: IQuery; const AScope: TTenantDataScope;
+  const ASql: TSQLResult);
+begin
+  PrepareTenantSql(AQuery, AScope, ASql.ReplaceLiteral('TENANT', Condition).SQL);
 end;
 
 end.

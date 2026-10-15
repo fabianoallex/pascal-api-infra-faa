@@ -18,6 +18,7 @@ way it does.
 | [Logging and observability](observability.md) | the request id, the access line, the client's address, files, metrics, health, spans to OpenTelemetry |
 | [OpenAPI](openapi.md) | documenting routes and DTOs, Swagger UI, authentication in the document; the limits a handler must still enforce |
 | [MCP](mcp.md) | an AI client should call the API: the routes as tools, which ones, who may call, what a call returns |
+| [DTOs and JSON](dtos-json.md) | request and response bodies: DTOs, absent/null/value (a PATCH), the query string, the database, the same DTOs on a queue or a pipe, what a bad body gets |
 | [Errors and validation](errors.md) | a request fails: the exceptions and their statuses, validating input, the database's errors, the client messages (English/Portuguese) |
 | [Multi-tenancy](multitenancy.md) | one API serves several customers, each seeing only its own data |
 | [Messaging, Redis, IPC](messaging.md) | the API needs a cache, a queue or another process: the sibling libraries inside an API, threads, spans, a server that is down |

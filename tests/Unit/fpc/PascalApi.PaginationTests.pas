@@ -20,13 +20,17 @@ uses
   SysUtils,
   PascalCommon.Optionals,
   PascalDb.Paging,
+  PascalApi.Http,
   PascalApi.Pagination;
 
 type
   TPaginationTests = class(TTestCase)
   published
     procedure ParseQueryInt_Number;
-    procedure ParseQueryInt_EmptyOrInvalid_IsAbsentNotNil;
+    procedure ParseQueryInt_Empty_IsAbsentNotNil;
+    procedure ParseQueryInt_IntegerLimits;
+    procedure ParseQueryInt_Invalid_Is400NamingTheParameter;
+    procedure ParseQueryInt_Invalid_Portuguese;
     procedure ParseQueryStr_Text;
     procedure ParseQueryStr_Empty_IsAbsentNotNil;
 
@@ -55,21 +59,60 @@ procedure TPaginationTests.ParseQueryInt_Number;
 var
   LValue: IOptInteger;
 begin
-  LValue := ParseQueryInt('42');
+  LValue := ParseQueryInt('page', '42');
   TAssert.AssertTrue(Assigned(LValue) and LValue.HasValue);
   TAssert.AssertEquals(42, LValue.Value);
 end;
 
-procedure TPaginationTests.ParseQueryInt_EmptyOrInvalid_IsAbsentNotNil;
+procedure TPaginationTests.ParseQueryInt_Empty_IsAbsentNotNil;
 var
-  LText: string;
   LValue: IOptInteger;
 begin
-  for LText in TArray<string>.Create('', 'abc', '1.5') do
-  begin
-    LValue := ParseQueryInt(LText);
-    TAssert.AssertTrue('assigned: "' + LText + '"', Assigned(LValue));
-    TAssert.AssertFalse('absent: "' + LText + '"', LValue.HasValue);
+  LValue := ParseQueryInt('page', '');
+  TAssert.AssertTrue(Assigned(LValue));
+  TAssert.AssertFalse(LValue.HasValue);
+end;
+
+procedure TPaginationTests.ParseQueryInt_IntegerLimits;
+begin
+  TAssert.AssertEquals(2147483647, ParseQueryInt('n', '2147483647').Value);
+  TAssert.AssertEquals(Low(Integer), ParseQueryInt('n', '-2147483648').Value);
+  TAssert.AssertEquals(-5, ParseQueryInt('n', '-5').Value);
+  TAssert.AssertEquals(7, ParseQueryInt('n', '007').Value);
+end;
+
+/// The message of the EValidationException ParseQueryInt raised, or '' when
+/// it raised nothing (no closures on FPC, so no WillRaise).
+function ParseError(const AName, AText: string): string;
+begin
+  Result := '';
+  try
+    ParseQueryInt(AName, AText);
+  except
+    on E: EValidationException do
+      Result := IntToStr(E.StatusCode) + ' ' + E.Message;
+  end;
+end;
+
+procedure TPaginationTests.ParseQueryInt_Invalid_Is400NamingTheParameter;
+var
+  LText: string;
+begin
+  // '$3', '0x3', '+3' and ' 3' were read as 3 by TryStrToInt, and on FPC
+  // 3.2.2 '99999999999' wrapped around to 1215752191 (measured).
+  for LText in TArray<string>.Create('abc', '1.5', '$3', '0x3', '+3', ' 3', '3 ', '-',
+    '99999999999', '2147483648', '-2147483649', '1e3') do
+    TAssert.AssertEquals('"' + LText + '"', '400 "limit" must be an integer.',
+      ParseError('limit', LText));
+end;
+
+procedure TPaginationTests.ParseQueryInt_Invalid_Portuguese;
+begin
+  TApiMessages.Current := TApiMessages.Portuguese;
+  try
+    TAssert.AssertEquals('400 "page" deve ser um número inteiro.', ParseError('page', 'abc'));
+  finally
+    TApiMessages.Current := TApiMessages.English;
   end;
 end;
 

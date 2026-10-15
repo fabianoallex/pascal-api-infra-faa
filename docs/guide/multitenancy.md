@@ -2,7 +2,7 @@
 
 One API serving several customers (tenants), each of them seeing only its own data. This guide
 builds such an API step by step. The code comes from `samples/03-tenants`, which compiles on
-Delphi and FPC and is checked over HTTP by `tools/http_scenarios_tenants.sh` (92 checks, most of
+Delphi and FPC and is checked over HTTP by `tools/http_scenarios_tenants.sh` (94 checks, most of
 them one tenant trying to reach another's rows).
 
 Why it works this way, and what was measured on the way: [the design](../multitenancy-design.md).
@@ -112,13 +112,26 @@ LSource
   .Add('SQLITE', 'CITY.BY_CODE',
     'SELECT CODE, NAME, STATE, POPULATION FROM CITIES WHERE CODE = :CODE AND ${TENANT}')
   .Add('SQLITE', 'CITY.INSERT',
-    'INSERT INTO CITIES (TENANT_ID, CODE, NAME, STATE, POPULATION) ' +
-    'VALUES (:TENANT_ID, :CODE, :NAME, :STATE, :POPULATION)')
+    'INSERT INTO CITIES (TENANT_ID, CODE, NAME, STATE[POPULATION {], POPULATION[} POPULATION]) ' +
+    'VALUES (:TENANT_ID, :CODE, :NAME, :STATE[POPULATION {], :POPULATION[} POPULATION])')
   .Add('SQLITE', 'CITY.DELETE', 'DELETE FROM CITIES WHERE CODE = :CODE AND ${TENANT}');
 ```
 
 `TTenantFilter.Prepare` replaces `${TENANT}` with `TENANT_ID = :TENANT_ID` and binds
-`:TENANT_ID` whenever the SQL has it, whether it came from the tag or was written by hand.
+`:TENANT_ID` whenever the SQL has it, whether it came from the tag or was written by hand. When
+the SQL has blocks to keep or drop first (a column per optional member, as `CITY.INSERT`'s
+population), pass the processed SQL instead of its name; the tenant's condition and parameter
+still come in the same call:
+
+```pascal
+TTenantFilter.Prepare(LQuery, FScope, FScope.Factory.SqlLoader['CITY.INSERT']
+  .ProcessTag('POPULATION', ACity.GetPopulation.HasValue));
+...
+LQuery.Params.OptIntegers['POPULATION'] := ACity.GetPopulation;   // absent: column gone, NULL
+```
+
+Take that SQL from the scope's own factory (`FScope.Factory.SqlLoader`): another factory's may be
+another database's dialect. Tested in `PascalApi.TenancyTests` (`Filter_PrepareProcessedSql_*`).
 
 **In a JOIN, give every table that has the column its own tag, with its alias:**
 `${TENANT.c}` becomes `c.TENANT_ID = :TENANT_ID`. The joined table's tag goes in its `ON`:

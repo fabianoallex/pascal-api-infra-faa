@@ -49,6 +49,16 @@ type
     ['{2AD7DFDC-6A1C-4F82-8E47-3E646F5971DD}']
   end;
 
+  /// PATCH /cities/:code: every member may be absent (left as it is). Name
+  /// and state may not be null (the columns are NOT NULL); population may
+  /// (null clears it).
+  ICityPatch = interface(IUpdateDTOBase)
+    ['{D69D9227-473F-495A-95B3-C505E3E4BB25}']
+    function GetName: IOptString;
+    function GetState: IOptString;
+    function GetPopulation: IOptNullInteger;
+  end;
+
 {$M+}
   TCityInsert = class(TInsertDTOBase, ICityInsert)
   private
@@ -74,6 +84,20 @@ type
     procedure SetState(const AValue: IOptString);
   published
     property State: IOptString read FState write FState;
+  end;
+
+  TCityPatch = class(TUpdateDTOBase, ICityPatch)
+  private
+    FName, FState: IOptString;
+    FPopulation: IOptNullInteger;
+  public
+    function GetName: IOptString;
+    function GetState: IOptString;
+    function GetPopulation: IOptNullInteger;
+  published
+    property Name: IOptString read FName write FName;
+    property State: IOptString read FState write FState;
+    property Population: IOptNullInteger read FPopulation write FPopulation;
   end;
 
   TCity = class(TResponseDTOBase, ICity)
@@ -109,6 +133,10 @@ type
     /// EValidationException for invalid data; the database's
     /// EConstraintViolationException for a code that already exists.
     function Insert(const ACity: ICityInsert): ICity;
+    /// Changes only the members that came; an empty patch changes nothing.
+    /// ENotFoundException when there is none, EValidationException for
+    /// invalid data.
+    function Update(const ACode: string; const APatch: ICityPatch): ICity;
     /// ENotFoundException when there is none.
     procedure Delete(const ACode: string);
   end;
@@ -177,8 +205,16 @@ begin
       'SELECT CODE, NAME, STATE, POPULATION FROM CITIES WHERE 1 = 1 ' +
       '[STATE {] AND STATE = :STATE [} STATE] ORDER BY ${ORDER} ${PAGE}')
     .Add(DIR, 'CITY.BY_CODE', 'SELECT CODE, NAME, STATE, POPULATION FROM CITIES WHERE CODE = :CODE')
+    // The POPULATION blocks are kept only when it came; without them the
+    // column takes its default, NULL.
     .Add(DIR, 'CITY.INSERT',
-      'INSERT INTO CITIES (CODE, NAME, STATE, POPULATION) VALUES (:CODE, :NAME, :STATE, :POPULATION)')
+      'INSERT INTO CITIES (CODE, NAME, STATE [POPULATION {], POPULATION [} POPULATION]) ' +
+      'VALUES (:CODE, :NAME, :STATE [POPULATION {], :POPULATION [} POPULATION])')
+    // One block per member a PATCH may carry, kept only when it came.
+    .Add(DIR, 'CITY.UPDATE',
+      'UPDATE CITIES SET CODE = CODE [NAME {], NAME = :NAME [} NAME] ' +
+      '[STATE {], STATE = :STATE [} STATE] [POPULATION {], POPULATION = :POPULATION [} POPULATION] ' +
+      'WHERE CODE = :CODE')
     .Add(DIR, 'CITY.DELETE', 'DELETE FROM CITIES WHERE CODE = :CODE');
 end;
 
@@ -229,6 +265,23 @@ begin
 end;
 
 function TCityInsert.GetPopulation: IOptInteger;
+begin
+  Result := TOptionals.Safe(FPopulation);
+end;
+
+{ TCityPatch }
+
+function TCityPatch.GetName: IOptString;
+begin
+  Result := TOptionals.Safe(FName);
+end;
+
+function TCityPatch.GetState: IOptString;
+begin
+  Result := TOptionals.Safe(FState);
+end;
+
+function TCityPatch.GetPopulation: IOptNullInteger;
 begin
   Result := TOptionals.Safe(FPopulation);
 end;
@@ -352,16 +405,14 @@ begin
   LScope := FFactory.GetPool.AcquireQuery(LQuery);
   LScope.StartTransaction;
   try
-    LQuery.Sql := FFactory.SqlLoader['CITY.INSERT'].SQL;
+    LQuery.Sql := FFactory.SqlLoader['CITY.INSERT']
+      .ProcessTag('POPULATION', ACity.GetPopulation.HasValue).SQL;
     LQuery.Params.Strings['CODE'] := LCode;
     LQuery.Params.Strings['NAME'] := Trim(ACity.GetName);
     LQuery.Params.Strings['STATE'] := UpperCase(Trim(ACity.GetState));
-    // An absent population is NULL. OptIntegers would leave the parameter
-    // unbound when absent; OptNullIntegers binds NULL for an explicit null.
-    if ACity.GetPopulation.HasValue then
-      LQuery.Params.OptNullIntegers['POPULATION'] := TOptNullInteger.From(ACity.GetPopulation.Value)
-    else
-      LQuery.Params.OptNullIntegers['POPULATION'] := TOptNullInteger.Null;
+    // No if: absent, the column and its parameter are gone (the database
+    // writes NULL); present, the value is bound.
+    LQuery.Params.OptIntegers['POPULATION'] := ACity.GetPopulation;
     LQuery.ExecSql; // EConstraintViolationException (cvUnique) -> 409
     LScope.Commit;
   except
@@ -369,6 +420,56 @@ begin
     raise;
   end;
   Result := FindByCode(LCode);
+end;
+
+function TCityRepository.Update(const ACode: string; const APatch: ICityPatch): ICity;
+var
+  LName, LState: IOptString;
+  LPopulation: IOptNullInteger;
+  LQuery: IQuery;
+  LScope: IScopeTransaction;
+  LRows: Int64;
+begin
+  // Normalized inside the optionals (pascal-common-faa 1.9.0): an absent
+  // member stays absent, so there is no if here. HasValue is "the member
+  // came": for population, with a number or null.
+  LName := TOptionals.Trim(APatch.GetName);
+  LState := TOptionals.Upper(TOptionals.Trim(APatch.GetState));
+  LPopulation := APatch.GetPopulation;
+  // The same limits as Insert, for the members that came.
+  if LName.HasValue and (LName.Value = '') then
+    raise EValidationException.Create('"name" can''t be empty.');
+  if LName.HasValue and (PaCharCount(LName.Value) > 100) then
+    raise EValidationException.Create('"name" must have at most 100 characters.');
+  if LState.HasValue and (Length(LState.Value) <> 2) then
+    raise EValidationException.Create('"state" must have 2 letters.');
+  if LPopulation.HasValue and not LPopulation.IsNull and (LPopulation.Value < 0) then
+    raise EValidationException.Create('"population" can''t be negative.');
+  if not (LName.HasValue or LState.HasValue or LPopulation.HasValue) then
+    Exit(FindByCode(ACode)); // nothing to change
+
+  LScope := FFactory.GetPool.AcquireQuery(LQuery);
+  LScope.StartTransaction;
+  try
+    LQuery.Sql := FFactory.SqlLoader['CITY.UPDATE']
+      .ProcessTag('NAME', LName.HasValue)
+      .ProcessTag('STATE', LState.HasValue)
+      .ProcessTag('POPULATION', LPopulation.HasValue).SQL;
+    // No if per member: an absent optional binds nothing (its block is
+    // gone), a Null binds NULL, a value binds it.
+    LQuery.Params.Strings['CODE'] := ACode;
+    LQuery.Params.OptStrings['NAME'] := LName;
+    LQuery.Params.OptStrings['STATE'] := LState;
+    LQuery.Params.OptNullIntegers['POPULATION'] := LPopulation;
+    LRows := LQuery.ExecSql;
+    LScope.Commit;
+  except
+    LScope.Rollback;
+    raise;
+  end;
+  if LRows = 0 then
+    raise ENotFoundException.Create(Format('City %s not found.', [ACode]));
+  Result := FindByCode(ACode);
 end;
 
 procedure TCityRepository.Delete(const ACode: string);
@@ -396,6 +497,7 @@ initialization
   TJsonMapper.Shared.RegisterMapping<ICityInsert, TCityInsert>;
   TJsonMapper.Shared.RegisterMapping<ICity, TCity>;
   TJsonMapper.Shared.RegisterMapping<ICityFind, TCityFind>;
+  TJsonMapper.Shared.RegisterMapping<ICityPatch, TCityPatch>;
   // OpenAPI metadata the types can't tell (FPC has no attributes).
   TApiSchema.Describe(TypeInfo(ICityInsert), 'A new city')
     .Prop('Code').Desc('IBGE code').Example('4205407').Pattern('^[0-9]{7}$')
@@ -408,6 +510,10 @@ initialization
     .Prop('OrderBy').Desc(CityOrderSpec.DocHint)
     .Prop('Search').Desc('Not used by this sample')
     .Prop('State').Desc('Only the cities of this state (two letters)');
+  TApiSchema.Describe(TypeInfo(ICityPatch), 'The members to change; the others stay')
+    .Prop('Name').Desc('City name; never null').Example('Florianópolis').MaxLength(100)
+    .Prop('State').Desc('Two-letter state; never null').Example('SC').MinLength(2).MaxLength(2)
+    .Prop('Population').Desc('Inhabitants; null clears it').Example('537211').Minimum(0);
   TApiSchema.Describe(TypeInfo(ICity), 'A city')
     .Prop('Code').Desc('IBGE code').Example('4205407')
     .Prop('Population').Desc('Inhabitants; null when unknown');

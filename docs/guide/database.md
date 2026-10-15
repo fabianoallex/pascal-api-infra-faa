@@ -151,7 +151,8 @@ LSource := TMemorySqlSource.Create;
 LSource
   .Add(DIR, 'CITY.BY_CODE', 'SELECT CODE, NAME, STATE, POPULATION FROM CITIES WHERE CODE = :CODE')
   .Add(DIR, 'CITY.INSERT',
-    'INSERT INTO CITIES (CODE, NAME, STATE, POPULATION) VALUES (:CODE, :NAME, :STATE, :POPULATION)')
+    'INSERT INTO CITIES (CODE, NAME, STATE [POPULATION {], POPULATION [} POPULATION]) ' +
+    'VALUES (:CODE, :NAME, :STATE [POPULATION {], :POPULATION [} POPULATION])')
   ...
 ```
 
@@ -176,8 +177,8 @@ var
   LPage: TPage<ICity>;
 begin
   LFind := TCityFind.Create;
-  LFind.Page := ParseQueryInt(AReq.Query['page']);
-  LFind.Limit := ParseQueryInt(AReq.Query['limit']);
+  LFind.Page := ParseQueryInt('page', AReq.Query['page']);    // 400 unless digits
+  LFind.Limit := ParseQueryInt('limit', AReq.Query['limit']);
   LFind.OrderBy := ParseQueryStr(AReq.Query['orderBy']);
   LFind.SetState(ParseQueryStr(AReq.Query['state']));
   LPage := GCities.FindPage(LFind.GetState, LFind.OrderBy.Value,
@@ -255,15 +256,13 @@ if Trim(ACity.GetName) = '' then
 LScope := FFactory.GetPool.AcquireQuery(LQuery);
 LScope.StartTransaction;
 try
-  LQuery.Sql := FFactory.SqlLoader['CITY.INSERT'].SQL;
+  LQuery.Sql := FFactory.SqlLoader['CITY.INSERT']
+    .ProcessTag('POPULATION', ACity.GetPopulation.HasValue).SQL;
   LQuery.Params.Strings['CODE'] := LCode;
   ...
-  // An absent population is NULL. OptIntegers would leave the parameter
-  // unbound when absent; OptNullIntegers binds NULL for an explicit null.
-  if ACity.GetPopulation.HasValue then
-    LQuery.Params.OptNullIntegers['POPULATION'] := TOptNullInteger.From(ACity.GetPopulation.Value)
-  else
-    LQuery.Params.OptNullIntegers['POPULATION'] := TOptNullInteger.Null;
+  // No if: absent, the column and its parameter are gone (the database
+  // writes NULL); present, the value is bound.
+  LQuery.Params.OptIntegers['POPULATION'] := ACity.GetPopulation;
   LQuery.ExecSql; // EConstraintViolationException (cvUnique) -> 409
   LScope.Commit;
 except
