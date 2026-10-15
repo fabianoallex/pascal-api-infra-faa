@@ -285,6 +285,14 @@ req GET /mcp "" -H "$AUTH"
 status_is 405 "MCP GET"
 req POST /mcp '{}' -H "$AUTH" -H 'Origin: https://evil.example'
 status_is 403 "MCP from a browser origin"
+# /mcp/unreachable calls an API that isn't there (port 1): the client gets a
+# fixed text, never the transport's message (it named the host and port).
+req POST /mcp/unreachable "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{$META,\"name\":\"list_trace\",\"arguments\":{}}}" \
+  -H "$AUTH" -H 'MCP-Protocol-Version: 2026-07-28' -H 'Mcp-Method: tools/call' -H 'Mcp-Name: list_trace'
+status_is 200 "MCP call, API unreachable"
+body_has '"text":"Could not call the API."}],"isError":true' "MCP call, API unreachable: a fixed text"
+body_lacks '127.0.0.1:1' "MCP call, API unreachable: no address"
+UNREACH_ID="$(header X-Request-Id)"
 
 # --- health (public)
 req GET /health/live ""
@@ -360,6 +368,8 @@ while s.recv(65536):
   grep 'probe=xff' "$SERVER_LOG" | grep -q ' 10\.0\.0\.1 ' && ok \
     || fail "log: client address from the right of X-Forwarded-For ($(grep 'probe=xff' "$SERVER_LOG"))"
   grep 'probe=xff' "$SERVER_LOG" | grep -q '203\.0\.113\.9' && fail "log: the client-written address reached the access line" || ok
+  grep -q "^ERROR MCP tool call GET /trace: .*trace_id=$UNREACH_ID" "$SERVER_LOG" && ok \
+    || fail "log: a failed MCP tool call, with the MCP request's id"
   # A raw ':pascalapi-metered: 1' line (Indy keeps such lines) must not hide
   # a request from the metrics.
   M0=$(curl -s "$BASE/metrics" | grep '^http_server_request_duration_seconds_count{' | grep 'http_route="/health/live"' | awk '{ s += $NF } END { printf "%d", s }')

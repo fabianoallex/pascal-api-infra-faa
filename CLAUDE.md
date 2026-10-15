@@ -121,6 +121,10 @@ endpoint and the HTTP executor. Design and decisions: `docs/mcp-design.md`.
 - Tool calls go back through the API over HTTP (all middlewares apply), so the provider must be
   threaded (Horse's are). The endpoint registers after every `TRouteDoc` route: the catalog is
   built once, in `Register`.
+- A call the executor can't make (API down, wrong base URL, timeout) gives the client the fixed
+  `MCP_CALL_FAILED`; the exception's message, which named the API's host and port (measured,
+  until 0.13.0), goes to the error log (`TErrorHandlerMiddleware.LogError`). Sample 01's
+  `/mcp/unreachable` (port 1) is the check.
 - The scenario scripts run under dash in CI: `shift N` past `$#` is fatal there (not in Git
   Bash).
 
@@ -267,7 +271,7 @@ exception in a helper and assert on what it returned.
 | Delphi | open `PascalApi.groupproj`, build `PascalApi.UnitTests`, `ApiSample`, `DbApiSample` and `TenantApiSample` (Win32 and Win64); run the tests; start `ApiSample.exe` and run `sh tools/http_scenarios.sh 9310`; start `DbApiSample.exe 9330 --reset` and run `sh tools/http_scenarios_db.sh 9330`; start `TenantApiSample.exe 9350 --reset` and run `sh tools/http_scenarios_tenants.sh 9350` |
 
 The middlewares are tested in two layers: their decisions in `PascalApi.HttpTests` (no server),
-and over real HTTP by `tools/http_scenarios.sh` (curl, 164 checks) against `samples/01-api`,
+and over real HTTP by `tools/http_scenarios.sh` (curl, 168 checks) against `samples/01-api`,
 which uses every middleware. In-process servers aren't used: on FPC, Horse's `Listen` blocks in
 `THTTPApplication.Run` and there is no `StopListen`.
 

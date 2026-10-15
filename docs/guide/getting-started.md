@@ -3,7 +3,7 @@
 From an empty folder to a Horse API that answers JSON, turns exceptions into HTTP statuses, logs
 every request and checks a token, on Delphi and on Lazarus/FPC from one source. The code comes
 from `samples/01-api`, which compiles on both compilers and is checked over HTTP by
-`tools/http_scenarios.sh` (164 checks), except the smallest program below, which says where it
+`tools/http_scenarios.sh` (168 checks), except the smallest program below, which says where it
 was checked.
 
 ## What it solves
@@ -536,7 +536,7 @@ on both (FastMM, heaptrc); see the `dual-compiler-delphi-lazarus` skill for mirr
 
 - `samples/01-api`: `ApiSample.dpr` (the program, the middleware order), `ApiSample.Cities.pas`
   (the DTO, ordering, paging).
-- `tools/http_scenarios.sh`: the 164 checks against sample 01.
+- `tools/http_scenarios.sh`: the 168 checks against sample 01.
 - `PascalApi.Horse.Middlewares` (`src/horse`): the comment at the top of the unit and each
   middleware's declaration.
 - `PascalApi.Http`: `MapException` (exception → status and message), `TApiMessages`.

@@ -114,7 +114,7 @@ non-loopback address: six requests with a new `X-Forwarded-For` each got 200, 20
 429, 429. **Until 0.13.0 the key was the header's first address**, and the same six requests
 all got 200: anyone could escape the limit.
 
-A tool call made through [the MCP endpoint](../mcp-design.md) comes back to the API from a
+A tool call made through [the MCP endpoint](mcp.md) comes back to the API from a
 loopback address, with the caller's chain in `X-Forwarded-For` (the executor appends its peer, as
 a proxy does), so it is counted under the caller's key (unit-tested; not checked over HTTP).
 

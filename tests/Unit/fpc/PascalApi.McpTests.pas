@@ -465,7 +465,8 @@ procedure TMcpTests.Call_ExecutorRaises_IsError;
 begin
   BuildCities;
   FFake.Fail := True;
-  TAssert.AssertTrue(Pos('"text":"Could not call the API: connection refused"}],"isError":true',
+  // A fixed text: the exception's message ("connection refused") stays out.
+  TAssert.AssertTrue(Pos('"text":"Could not call the API."}],"isError":true',
     Call('list_citie', '{}')) > 0);
 end;
 

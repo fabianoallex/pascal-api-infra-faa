@@ -48,6 +48,13 @@ may change the API; each such change is listed here.
   1,000,000 distinct keys held 231 MiB after their windows ended, and with the hole above a client
   could grow it at will (measured). `TRateLimitState` now frees the keys whose window is over,
   once per window, and shrinks its table: 0 KiB left in the same run.
+- **A failed MCP tool call sent the transport's message to the client, and logged nothing.**
+  When the executor couldn't reach the API (down, wrong base URL, timeout), the result's text was
+  `Could not call the API: ` + the exception's message, which named the API's host and port
+  (`Connection to 127.0.0.1:1 timed out.`, measured with a probe on FPC). The client now gets the
+  fixed `MCP_CALL_FAILED` (`Could not call the API.`), and the message goes to the error handler's
+  log with the method, the path (without the query string) and the trace id. Sample 01 gains
+  `/mcp/unreachable`; `tools/http_scenarios.sh` (168 checks) checks the text and the log line.
 - **The rate limit counted a request to a route that doesn't exist twice**, and sent its headers
   twice (Horse runs the global middlewares twice there; measured). It marks the request now, as
   the logger does; `tools/http_scenarios_tenants.sh` (88 checks) checks it.
@@ -101,7 +108,10 @@ may change the API; each such change is listed here.
   (`docs/guide/configuration.md`), errors and validation (`docs/guide/errors.md`),
   authentication (`docs/guide/authentication.md`), rate limiting
   (`docs/guide/rate-limiting.md`), database access (`docs/guide/database.md`), logging and
-  observability (`docs/guide/observability.md`) and OpenAPI (`docs/guide/openapi.md`).
+  observability (`docs/guide/observability.md`), OpenAPI (`docs/guide/openapi.md`) and MCP
+  (`docs/guide/mcp.md`).
+- `TErrorHandlerMiddleware.LogError(ALine, ARequestId)`: writes a line through the callback given
+  to `Register`, for an error handled away from `OnError` (the MCP executor's).
 - `PaCharCount` (`PascalApi.Text`): the number of characters in a string, the same on both
   compilers (`Length` counts bytes on FPC and UTF-16 units on Delphi), for a rule like "at most
   100 characters". Test `CharCount_CountsCharactersNotBytes`.

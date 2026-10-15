@@ -328,8 +328,8 @@ library has no option to serve the UI's files from the executable today.
 
 `TMcpEndpoint` turns each documented operation into a tool for an AI client: the name is the
 `OperationId`, or one derived from the method and the path; the input schema is the DTO's.
-`NoMcp` keeps an operation out. Sample 01 marks its `/fail/*` routes `NoMcp`. The MCP guide is
-planned; until then, see [docs/mcp-design.md](../mcp-design.md).
+`NoMcp` keeps an operation out. Sample 01 marks its `/fail/*` routes `NoMcp`. See
+[MCP](mcp.md).
 
 ## Pitfalls
 

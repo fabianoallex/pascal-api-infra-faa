@@ -26,6 +26,7 @@
     GET  /swagger             public; Swagger UI, and /swagger/doc.json the OpenAPI document
     POST /mcp                 MCP (2026-07-28): the documented routes as tools; needs the
                               token, which each tool call passes on to the route
+    POST /mcp/unreachable     MCP whose API can't be reached (port 1): a failed call
 
   Middlewares, in order: request log (console), metrics, CORS for
   https://app.example.com, rate limit (only on /limited, keyed by the
@@ -334,6 +335,11 @@ begin
   THealthEndpoint.Register('/health', GCallbacks.LogError);
   // After every route: the tools are the operations documented so far.
   TMcpEndpoint.Register('/mcp', 'http://127.0.0.1:' + IntToStr(GPort), 'pascal-api-sample-01', '1.0.0');
+  // Sample only, like /fail/*: an endpoint whose API can't be reached (port 1),
+  // to check that a failed call gives the client a fixed text and the log the
+  // reason.
+  TMcpEndpoint.Register('/mcp/unreachable', 'http://127.0.0.1:1', 'pascal-api-sample-01', '1.0.0',
+    ['trace']);
 
   Writeln('ApiSample listening on port ', GPort);
   THorse.Listen(GPort);

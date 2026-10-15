@@ -88,6 +88,11 @@ type
   public
     class procedure Register; overload; static;
     class procedure Register(const AOnError: TLogProc); overload; static;
+    /// Writes ALine, ending with " trace_id=<ARequestId>" when that isn't
+    /// empty, through the callback given to Register; nothing without one.
+    /// For an error the library handles away from OnError (the MCP
+    /// executor's failed call).
+    class procedure LogError(const ALine, ARequestId: string); static;
   end;
 
   /// Preflight (OPTIONS) is answered 204 with the CORS headers and stops
@@ -347,6 +352,12 @@ class procedure TErrorHandlerMiddleware.Register(const AOnError: TLogProc);
 begin
   GOnError := AOnError;
   THorse.OnError(HandleError);
+end;
+
+class procedure TErrorHandlerMiddleware.LogError(const ALine, ARequestId: string);
+begin
+  if Assigned(GOnError) then
+    GOnError(WithTraceId(ALine, ARequestId));
 end;
 
 { CORS }

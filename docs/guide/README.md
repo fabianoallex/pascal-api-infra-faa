@@ -17,6 +17,7 @@ way it does.
 | [Database access](database.md) | handlers over a real database: the factory, migrations, SQL by key, paging and ordering in SQL, transactions, what the database's errors become |
 | [Logging and observability](observability.md) | the request id, the access line, the client's address, files, metrics, health, spans to OpenTelemetry |
 | [OpenAPI](openapi.md) | documenting routes and DTOs, Swagger UI, authentication in the document; the limits a handler must still enforce |
+| [MCP](mcp.md) | an AI client should call the API: the routes as tools, which ones, who may call, what a call returns |
 | [Errors and validation](errors.md) | a request fails: the exceptions and their statuses, validating input, the database's errors, the client messages (English/Portuguese) |
 | [Multi-tenancy](multitenancy.md) | one API serves several customers, each seeing only its own data |
 
@@ -28,7 +29,6 @@ are the reference.
 
 | Guide | Covers | Today, see |
 |---|---|---|
-| MCP | the API's routes as tools for an AI client | `docs/mcp-design.md` |
 | Messaging, Redis, IPC | the sibling libraries | `docs/related-libraries.md` |
 
 ## How a guide is written

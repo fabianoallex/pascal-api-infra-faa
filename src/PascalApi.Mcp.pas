@@ -30,7 +30,11 @@
   an HTTP request to the API itself, so every middleware applies): path
   arguments into the URL, query arguments into the query string, the others
   into a JSON body. An HTTP status of 400 or more gives a result with
-  isError true and the API's body as text, which the model can act on.
+  isError true and the API's body as text, which the model can act on. An
+  executor that raises (the API unreachable, a timeout) gives isError true
+  and the fixed MCP_CALL_FAILED: the exception's message named the API's
+  host and port (measured), so it goes to the executor's log, not to the
+  client.
 
   Design and decisions: docs/mcp-design.md. *)
 
@@ -44,6 +48,8 @@ uses
 
 const
   MCP_PROTOCOL_VERSION = '2026-07-28';
+  /// A tool call's text when the executor raised.
+  MCP_CALL_FAILED = 'Could not call the API.';
 
 type
   EMcpError = class(Exception);
@@ -660,8 +666,9 @@ begin
         Result := FExecutor.Execute(UpperCase(ATool.Method), LPath, '', AForward, LStatus);
       AIsError := LStatus >= 400;
     except
+      // The message stays out: the executor logs it.
       on E: Exception do
-        Result := 'Could not call the API: ' + E.Message;
+        Result := MCP_CALL_FAILED;
     end;
   finally
     LBody.Free;

@@ -23,7 +23,10 @@
   tracestate) are passed on. With TLoggerMiddleware in use, each call is a
   client span (PascalCommon.Tracing) under the MCP request's server span, and
   the call's traceparent names it: MCP request -> tool call -> the route's
-  own server span, one trace. The endpoint is a route like
+  own server span, one trace. A call that fails before the API answers
+  (unreachable, a timeout) is logged through TErrorHandlerMiddleware's
+  callback, with the method, the path and the trace id; the client gets
+  PascalApi.Mcp's fixed MCP_CALL_FAILED. The endpoint is a route like
   any other: behind TJwtMiddleware unless the application excludes it. The
   provider must serve requests concurrently (Horse's are threaded), since
   the call waits for the API while the MCP request is open.
@@ -226,38 +229,66 @@ end;
 
 {$ENDIF}
 
+function PathOnly(const APathAndQuery: string): string;
+var
+  P: Integer;
+begin
+  // The arguments in the query string stay out of the log, as the access
+  // line leaves the query out.
+  P := Pos('?', APathAndQuery);
+  if P > 0 then
+    Result := Copy(APathAndQuery, 1, P - 1)
+  else
+    Result := APathAndQuery;
+end;
+
 function TMcpHttpExecutor.Execute(const AMethod, APathAndQuery, ABody: string;
   const AForward: TMcpForward; out AStatus: Integer): string;
 var
   LSpan: IPcSpan;
   LForward: TMcpForward;
+  LTraceId: string;
 begin
-  // No current span (no TLoggerMiddleware): pass the caller's context on.
-  if TPcTracing.Current = nil then
-    Exit(Send(AMethod, APathAndQuery, ABody, AForward, AStatus));
-  LSpan := TPcTracing.StartSpan(AMethod, skClient);
-  try
+  // No current span (no TLoggerMiddleware): pass the caller's context on,
+  // and log without an id (the client's own traceparent stays out of the log).
+  LSpan := nil;
+  LTraceId := '';
+  LForward := AForward;
+  if TPcTracing.Current <> nil then
+  begin
+    LTraceId := TPcTracing.Current.TraceId;
+    LSpan := TPcTracing.StartSpan(AMethod, skClient);
     LSpan.SetAttribute('http.request.method', MetricMethod(AMethod));
     LSpan.SetAttribute('url.full', FBaseUrl + APathAndQuery);
-    LForward := AForward;
     LForward.TraceParent := LSpan.TraceParent;
     LForward.TraceState := LSpan.TraceState;
+  end;
+  try
     try
       Result := Send(AMethod, APathAndQuery, ABody, LForward, AStatus);
     except
       on E: Exception do
       begin
-        LSpan.SetAttribute('error.type', E.ClassName);
-        LSpan.SetStatus(ssError, E.Message);
+        if LSpan <> nil then
+        begin
+          LSpan.SetAttribute('error.type', E.ClassName);
+          LSpan.SetStatus(ssError, E.Message);
+        end;
+        TErrorHandlerMiddleware.LogError(Format('MCP tool call %s %s: %s: %s',
+          [AMethod, PathOnly(APathAndQuery), E.ClassName, E.Message]), LTraceId);
         raise;
       end;
     end;
-    LSpan.SetIntAttribute('http.response.status_code', AStatus);
-    // A client span is an error from 400 on (the semantic conventions).
-    if AStatus >= 400 then
-      LSpan.SetStatus(ssError);
+    if LSpan <> nil then
+    begin
+      LSpan.SetIntAttribute('http.response.status_code', AStatus);
+      // A client span is an error from 400 on (the semantic conventions).
+      if AStatus >= 400 then
+        LSpan.SetStatus(ssError);
+    end;
   finally
-    LSpan.Finish;
+    if LSpan <> nil then
+      LSpan.Finish;
   end;
 end;
 

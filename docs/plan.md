@@ -203,8 +203,8 @@ testing, reference), with code taken from the samples. Done: multi-tenancy
 (`docs/guide/configuration.md`), errors and validation (`docs/guide/errors.md`), authentication
 (`docs/guide/authentication.md`), rate limiting (`docs/guide/rate-limiting.md`), database access
 (`docs/guide/database.md`), logging and observability (`docs/guide/observability.md`), OpenAPI
-(`docs/guide/openapi.md`). Planned: the other topics listed in `docs/guide/README.md` (MCP,
-sibling libraries).
+(`docs/guide/openapi.md`), MCP (`docs/guide/mcp.md`). Planned: the other topic listed in
+`docs/guide/README.md` (the sibling libraries).
 
 A candidate for pascal-db-faa, found while measuring for the OpenAPI guide and left for later
 (the user's decision, 2026-10-14): FireDAC raises `[FireDAC][DatS]-32 Variable length column
