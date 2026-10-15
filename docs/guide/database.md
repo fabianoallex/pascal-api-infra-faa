@@ -370,9 +370,16 @@ Fine for a sample, a small internal API or tests. It has one writer at a time: t
 a busy timeout (5 s), so a second writer waits instead of failing at once. Use a file, never
 `:memory:` (each pooled connection would get its own empty database). SQLite doesn't enforce a
 column's length: a 150-character name went into `VARCHAR(100)` through SQLdb and FireDAC alike.
-FireDAC then refuses to *read* the row (`[FireDAC][DatS]-32 ... overflow`), a 500 for every
-request that touches it (measured, sample 02, Delphi 12 Win32), so check lengths before writing
-([OpenAPI](openapi.md), step 5). On FPC for Windows, the
+Before pascal-db-faa 0.14.1, FireDAC then refused to *read* the row (`[FireDAC][DatS]-32 ...
+overflow`), a 500 for every request that touched it (measured, sample 02, Delphi 12 Win32); 0.14.1
+reads it whole, as SQLdb does. Check lengths before writing ([OpenAPI](openapi.md), step 5), and
+to have the database refuse such a value, declare `CHECK (length(NAME) <= 100)` in the
+migration: the insert then raises `EConstraintViolationException` with `cvCheck` (measured by
+pascal-db-faa on its three adapters, gotcha 50), which this library answers 422 and logs
+([Errors and validation](errors.md)). SQLite's `STRICT` tables don't help: they refuse
+`VARCHAR(n)` itself (pascal-db-faa's measurement). Before pascal-db-faa 0.14.2, FireDAC on SQLite
+also dropped trailing spaces, on write and on read: a stored `'Spaces  '` came back as `"Spaces"`
+on Delphi and whole on FPC (measured, sample 02); 0.14.2 keeps them on both. On FPC for Windows, the
 `sqlite3.dll` must be sqlite.org's build (pascal-db-faa's gotcha 23): `tools/test_http.sh` takes
 it from `SQLITE_DLL` or `.deps/`.
 

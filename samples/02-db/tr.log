@@ -1,0 +1,6 @@
+migration 1 MIG.0001
+migration 2 MIG.0002
+migration 3 MIG.0003
+database C:\Users\fabiano.arndt\Documents\projetos\delphi\pascal-api-infra-faa\samples\02-db\dbapi_sample.sqlite at version 3
+DbApiSample listening on port 9331
+{"time":"2026-10-15T14:20:41.383","trace_id":"800b92e35b79516e9329cbb1a1cc249b","span_id":"3d7f2e2092959b28","method":"GET","path":"/cities/9999998","status":200,"duration_ms":0,"client_ip":"127.0.0.1","bytes":64,"user_agent":"curl/8.12.1"}

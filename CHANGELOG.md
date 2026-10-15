@@ -72,6 +72,12 @@ may change the API; each such change is listed here.
 
 ### Changed
 
+- `external/pascal-db-faa` on v0.14.2, two FireDAC + SQLite fixes measured through sample 02 on
+  Delphi 12 (FPC's SQLdb already behaved): a row whose text is longer than its `VARCHAR(n)`
+  (SQLite stores it) is read whole, where 0.14.0 raised `[FireDAC][DatS]-32` on every read and
+  answered 500 (0.14.1); and trailing spaces are kept, where a stored `'Spaces  '` came back as
+  `"Spaces"` (0.14.2). The guides (`database.md`, `openapi.md`) recommend
+  `CHECK (length(...) <= n)` to refuse values longer than the column (422).
 - **Samples 02 and 03 enforce the limits their OpenAPI documents declare.** The documents said
   `pattern ^[0-9]{7}$` for the code, `maxLength 100` for a name and `minimum 0` for the
   population, but nothing checked them: `+123456` and `-5` were stored, and a 150-character name

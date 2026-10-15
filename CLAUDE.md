@@ -78,7 +78,7 @@ all (measured, skill `references/rtti-gotchas.md`).
 ## Dependencies
 
 `external/` holds the dependencies as git submodules, pinned: pascal-common-faa `v1.8.1`,
-pascal-jsonmapper-faa `v0.3.0`, pascal-db-faa `v0.14.0`, Horse `3.3.12` (`fda6fed`; until 0.4.0
+pascal-jsonmapper-faa `v0.3.0`, pascal-db-faa `v0.14.2`, Horse `3.3.12` (`fda6fed`; until 0.4.0
 this repository used 3.3.2, `72cc45f`; pascal-dfe-broker moved to 3.3.12 on 2026-10-09, delphi-api-starter is still on 3.3.2). They are **only for this
 repository's tests**: a consumer provides its own single copy of each (submodule + search path),
 never `pascal-api-infra-faa/external/...`. Clone with `git submodule update --init` (no

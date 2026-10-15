@@ -217,9 +217,15 @@ the `EAMQPConnection` its README lists (pascal-amqp-faa 0.2.0, FPC 3.2.2/Windows
 `OnReconnectError`/`LastReconnectError`; with it the same restart recovered with the queue
 declared on one channel only.
 
-A candidate for pascal-db-faa, found while measuring for the OpenAPI guide and left for later
-(the user's decision, 2026-10-14): FireDAC raises `[FireDAC][DatS]-32 Variable length column
+Fixed in pascal-db-faa 0.14.1 (2026-10-15; the submodule is on 0.14.2), found while measuring
+for the OpenAPI guide: FireDAC raised `[FireDAC][DatS]-32 Variable length column
 overflow` when it reads a value longer than its column, which SQLite stores anyway. pascal-db-faa
 doesn't classify it, so here it is a 500: the insert of a 150-character name into
 `VARCHAR(100)` answered 500 with the row saved, and every later read of that row answered 500
-(sample 02, Delphi 12 Win32). Samples 02 and 03 now check the length first.
+(sample 02, Delphi 12 Win32). Samples 02 and 03 now check the length first. 0.14.1 maps SQLite
+strings to memo fields in the FireDAC adapter, so the whole value is read, as SQLdb and Zeos did:
+a 150-character name written straight into sample 02's file now reads back with 200 on Delphi
+(was 500 on the 0.14.0 build). To refuse such values in the database, declare
+`CHECK (length(NAME) <= 100)`: the insert then raises `EConstraintViolationException` (`cvCheck`,
+measured on pascal-db-faa's three adapters), a 422 here. Whether the API's insert answered 500
+because the handler reads the row back was never verified, and no longer matters.

@@ -239,12 +239,15 @@ each limit: 400 for each one broken, and 201 for a name of 100 two-byte characte
 (`tools/http_scenarios_db.sh`, `tools/http_scenarios_tenants.sh`). Run against the Delphi build
 from before the change, sample 02's scenario failed 7 checks and sample 03's failed 5.
 
-**The Delphi 500.** SQLite doesn't enforce `VARCHAR(100)` and stores the longer value. FireDAC
-refuses to *read* it back (`[FireDAC][DatS]-32. Variable length column [NAME] overflow`). The
-insert answered 500 with the row already saved, and then `GET /cities/1000001` and every list
-containing that row answered 500 until the row was deleted (measured on sample 02, Delphi 12
-Win32). pascal-db-faa doesn't classify this error today, so it stays a 500. Checking the length
-before the insert is what keeps the row out.
+**The database won't check it either.** SQLite doesn't enforce `VARCHAR(100)` and stores the
+longer value, through SQLdb and FireDAC alike. Until pascal-db-faa 0.14.1, FireDAC then refused to
+*read* it back (`[FireDAC][DatS]-32. Variable length column [NAME] overflow`): the insert answered
+500 with the row already saved, and `GET /cities/1000001` and every list containing that row
+answered 500 until the row was deleted (measured on sample 02, Delphi 12 Win32). 0.14.1 reads the
+whole value, as SQLdb always did (a 150-character name written straight into the file: 200 on
+both compilers). Checking the length before the insert is still what keeps the row out; to have
+the database refuse it too, declare `CHECK (length(NAME) <= 100)` in the migration
+([Database access](database.md), "SQLite").
 
 ### 6. Serve the document and Swagger UI
 
