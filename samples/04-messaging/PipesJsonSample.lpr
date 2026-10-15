@@ -11,12 +11,13 @@ program PipesJsonSample;
   - Request/reply: the server reads the request into an IOrder and answers
     an IOrderReply. A request it can't read raises in OnRequest, and the
     client's RequestText raises EPipeError with the server's message.
-  - Fire and forget: an exception in OnMessage reaches nobody (OnError isn't
-    called, measured with pascal-pipes-faa 0.1.1), so the handler catches
-    it and logs.
+  - Fire and forget: an exception in OnMessage goes to the server's OnError
+    (pascal-pipes-faa 0.2.0 or later; with 0.1.1 it reached nobody,
+    measured), so OnMessage has no try and OnError logs.
 
   FPC only here, built by build_fpc.sh with PIPES_FAA (pascal-pipes-faa's
-  clone); measured on FPC 3.2.2/Windows on 2026-10-15. Delphi wasn't tried. *)
+  clone, 0.2.0 or later); measured on FPC 3.2.2/Windows on 2026-10-15.
+  Delphi wasn't tried. *)
 
 {$MODE DELPHI}{$H+}
 
@@ -67,6 +68,7 @@ type
     procedure OnRequest(Sender: TObject; AConnId: TPipeConnectionId;
       const ARequest: TBytes; out AReply: TBytes);
     procedure OnMessage(Sender: TObject; AConnId: TPipeConnectionId; const AData: TBytes);
+    procedure OnError(Sender: TObject; AConnId: TPipeConnectionId; const AError: string);
   end;
 
 var
@@ -109,18 +111,20 @@ procedure TServerSide.OnMessage(Sender: TObject; AConnId: TPipeConnectionId; con
 var
   LOrder: IOrder;
 begin
-  // Nobody hears an exception from here: catch it.
+  // No try: an exception goes to OnError (pascal-pipes-faa 0.2.0).
   try
-    try
-      LOrder := TJsonMapper.Shared.FromJson<IOrder>(FrameText(AData));
-      Writeln('message: ', LOrder.GetQuantity, ' x ', LOrder.GetItem);
-    except
-      on E: Exception do
-        Writeln('message rejected: ', E.ClassName, ': ', E.Message);
-    end;
+    LOrder := TJsonMapper.Shared.FromJson<IOrder>(FrameText(AData));
+    Writeln('message: ', LOrder.GetQuantity, ' x ', LOrder.GetItem);
   finally
-    GHandled.SetEvent;
+    GHandled.SetEvent; // only for this demo's ordering
   end;
+end;
+
+procedure TServerSide.OnError(Sender: TObject; AConnId: TPipeConnectionId; const AError: string);
+begin
+  // Runs on the same thread, right after the handler that failed; the
+  // connection stays open (Server.DisconnectClient(AConnId) would close it).
+  Writeln('error on connection ', AConnId, ': ', AError);
 end;
 
 procedure Request(AClient: TPipeClient; const ABody: string);
@@ -161,6 +165,7 @@ begin
   try
     GServer.OnRequest := GSide.OnRequest;
     GServer.OnMessage := GSide.OnMessage;
+    GServer.OnError := GSide.OnError;
     GServer.Listen;
     GClient.Connect(5000);
     Request(GClient, '{"item":"rice","quantity":2}');

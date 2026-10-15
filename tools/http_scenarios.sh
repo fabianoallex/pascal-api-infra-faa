@@ -163,10 +163,14 @@ body_has '$.population' "wrong type"
 req POST /cities '{"name":"X","state":"SP","popultion":5}' -H "$AUTH"
 status_is 400 "unknown member"
 body_has '$.popultion' "unknown member: its path"
-# A member sent twice: pascal-jsonmapper-faa 0.3.0 keeps the FIRST value
-# (many parsers keep the last). Checked so a change in the mapper shows up.
+# A member sent twice is refused (pascal-jsonmapper-faa 0.4.0; 0.3.0 kept
+# one of them, and parsers disagree on which), also when the names differ
+# only in case.
 req POST /cities '{"name":"First","name":"Second","state":"SP"}' -H "$AUTH"
-body_has '"name":"First"' "duplicate member: the first value wins (0.3.0)"
+status_is 400 "duplicate member"
+body_has '$.name: duplicate member' "duplicate member: its path"
+req POST /cities '{"NAME":"First","name":"Second","state":"SP"}' -H "$AUTH"
+status_is 400 "duplicate member, names differing only in case"
 printf '{"name":"S\343o","state":"SP"}' > "$T/latin1"
 curl -s -o "$T/body" -w '%{http_code}' -H 'Content-Type: application/json' -H "$AUTH" \
   --data-binary "@$T/latin1" "$BASE/cities" > "$T/status"

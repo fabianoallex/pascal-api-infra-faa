@@ -102,7 +102,8 @@ handler. Measured against sample 01 on FPC:
 | `"name":123` | 400 `$.name: expected string, found JSON number` |
 | `"popultion":10` (a typo) | 400 `$.popultion: unknown member ...` with `umError` (checked); **201 and population `null`** without it |
 | `{"NAME":"Natal","STATE":"RN"}` | 201: names are read case-insensitively (`Names_AreCaseInsensitive_UnknownIgnored`) |
-| `{"name":"First","name":"Second",...}` | 201 with `"First"`: **the first value wins** (checked; see Pitfalls) |
+| `{"name":"First","name":"Second",...}` | 400 `$.name: duplicate member ("name" and "name" both match property TCityInsert.Name)` (checked; pascal-jsonmapper-faa 0.4.0) |
+| `{"NAME":"First","name":"Second",...}` | 400: names that differ only in (ASCII) case are the same member (checked) |
 | `{"name":"Natal",` / `` (empty) | 400 `Member name expected (at position 17)` / `Value expected (at position 1)` (checked) |
 | `[1,2]` / `"x"` / `null` | 400 `$: expected object, found JSON array` / `string` / `null` |
 | `{...} xyz` | 400 `Unexpected content after the JSON value` |
@@ -284,8 +285,10 @@ A DTO doesn't care where its JSON goes. Two rules carry over from HTTP:
 
 - **Check before you send.** Read the body into the DTO in the handler, so a bad request is a
   400 to its client and never a message nobody can read.
-- **Every receiver catches.** On a queue or a pipe there is no error handler to turn an exception
-  into an answer; what isn't caught is lost (steps 9 and 10, measured).
+- **Every receiver handles its errors.** On a queue or a pipe there is no error handler to turn
+  an exception into an answer. pascal-amqp-faa 0.4.0 sends a consumer's exception to
+  `OnConsumerError` (step 9) and pascal-pipes-faa 0.2.0 a handler's to `OnError` (step 10): assign
+  them. Before those versions, both lost the message silently (measured).
 
 ### 9. On a queue (pascal-amqp-faa)
 
@@ -317,42 +320,50 @@ begin
 end;
 ```
 
-The consumer reads it back, and **catches**:
+The consumer reads it back; what it can't read goes to the channel's `OnConsumerError`
+(**pascal-amqp-faa 0.4.0 or later**):
 
 ```pascal
 procedure TApp.OnOrder(AChannel: TAMQPChannel; const ADelivery: TAMQPDelivery);
 var
   LOrder: IOrder;
 begin
-  try
-    LOrder := TJsonMapper.Shared.FromJson<IOrder>(ADelivery.BodyAsText);
-  except
-    on E: Exception do
-    begin
-      TErrorHandlerMiddleware.LogError(Format('order rejected: %s: %s', [E.ClassName, E.Message]),
-        TraceIdOf(TPcTracing.Current));
-      AChannel.Nack(ADelivery.DeliveryTag, False);   // no requeue: to the dead-letter exchange, if any
-      Exit;
-    end;
-  end;
+  // No try: a message that can't be read raises, and OnOrderError logs it.
+  LOrder := TJsonMapper.Shared.FromJson<IOrder>(ADelivery.BodyAsText);
   ... // the work
   AChannel.Ack(ADelivery.DeliveryTag);
 end;
+
+procedure TApp.OnOrderError(AChannel: TAMQPChannel; const ADelivery: TAMQPDelivery;
+  AError: Exception; var AAction: TAMQPConsumerErrorAction);
+begin
+  // AError belongs to the library (never free or re-raise it). AAction comes
+  // as ceaReject (Nack without requeue) for a pending message: kept.
+  TErrorHandlerMiddleware.LogError(Format('order rejected: %s: %s',
+    [AError.ClassName, AError.Message]), '');
+end;
+
+// At startup, on its own channel (the queue was declared on GPublisher):
+GConsumer := GAmqp.CreateChannel;
+GConsumer.OnConsumerError := GApp.OnOrderError;
+GConsumer.Consume(GQueue, GApp.OnOrder);
 ```
 
-Measured on FPC with RabbitMQ 3 and pascal-amqp-faa 0.3.0:
+Measured on FPC with RabbitMQ 3 (pascal-amqp-faa 0.3.0 for the first point and the last, 0.4.0
+for the second):
 
 - `POST /orders` with `"quantity":"x"`, an unknown member or a quantity of 0: 400, nothing
   published. A good order with `"café"`: 202, and the consumer read `café` as UTF-8 (`/consumed`
   answered `"lastItem":"caf\xc3\xa9"`).
 - A bad message published on purpose (`/orders/raw`, `"quantity":"x"` and `not json`): each logged
-  (`order rejected: EJsonMapperError: $.quantity: expected integer, found JSON string trace_id=...`)
-  and rejected; the queue ended with nothing ready and nothing unacknowledged.
-- **Without the `try`**, the same bad message stayed unacknowledged, with nothing in the log: the
-  consumer callback runs on pascal-common-faa's thread pool, which swallows the exception. After
-  the process restarted, the broker delivered it again, and it got stuck again, on every restart.
-  The other six messages of that run were consumed normally. With `Qos(1)` (one unacknowledged
-  message at a time), one such message would hold up the consumer; that wasn't measured.
+  by `OnOrderError` (`order rejected: EJsonMapperError: $.quantity: expected integer, found JSON
+  string`; no trace id, since no span is current there) and rejected without requeue; the queue
+  ended with nothing ready and nothing unacknowledged, and nothing came back after a restart.
+  The queue has no dead-letter exchange, so they were dropped: give it one where a message must
+  not be lost.
+- **With 0.3.0 and no `try` in the callback**, the same bad message stayed unacknowledged, with
+  nothing in the log (the pool swallowed the exception), and came back on every restart. On 0.3.0,
+  catch in the callback and `Nack` yourself.
 
 The rest of messaging inside an API (one connection per process, confirms, spans, a broker that
 is down): [Messaging, Redis, IPC](messaging.md).
@@ -385,26 +396,33 @@ procedure TServerSide.OnMessage(Sender: TObject; AConnId: TPipeConnectionId; con
 var
   LOrder: IOrder;
 begin
-  // Nobody hears an exception from here: catch it.
-  try
-    LOrder := TJsonMapper.Shared.FromJson<IOrder>(FrameText(AData));
-    ...
-  except
-    on E: Exception do
-      Writeln('message rejected: ', E.ClassName, ': ', E.Message);
-  end;
+  // No try: an exception goes to OnError (pascal-pipes-faa 0.2.0).
+  LOrder := TJsonMapper.Shared.FromJson<IOrder>(FrameText(AData));
+  ...
 end;
+
+procedure TServerSide.OnError(Sender: TObject; AConnId: TPipeConnectionId; const AError: string);
+begin
+  // Runs on the same thread, right after the handler that failed; the
+  // connection stays open (Server.DisconnectClient(AConnId) would close it).
+  Writeln('error on connection ', AConnId, ': ', AError);
+end;
+
+GServer.OnMessage := GSide.OnMessage;
+GServer.OnError := GSide.OnError;
 ```
 
-(`FrameText` decodes the frame's UTF-8 and raises when it isn't.) Measured on FPC 3.2.2/Windows
-with pascal-pipes-faa 0.1.1:
+(`FrameText` decodes the frame's UTF-8 and raises when it isn't.) Use **pascal-pipes-faa 0.2.0 or
+later**. Measured on FPC 3.2.2/Windows:
 
 - A request: `{"accepted":true,"item":"rice"}`. A bad one: the client's `RequestText` raised
   `EPipeError: servidor respondeu erro: $.quantity: expected integer, found JSON string`. The
   server's exception text reaches the client (with the library's Portuguese prefix), so keep
   messages that the other process may see free of secrets.
-- **A fire-and-forget message whose handler raises is lost without a trace**: `OnError` wasn't
-  called, on either side; the connection kept working. Hence the `try` above.
+- A fire-and-forget message whose handler raised: the server's `OnError` got
+  `OnMessage levantou EJsonMapperError: $.quantity: expected integer, found JSON string` (0.2.0),
+  and the connection kept working. **With 0.1.1 the same message was lost without a trace**:
+  `OnError` wasn't called, on either side. On 0.1.1, catch inside `OnMessage`.
 
 ### 11. How big a body may be
 
@@ -442,17 +460,22 @@ header). Where both ends must agree, one library on both: the mapper.
 ## Pitfalls
 
 - **A typo in a member name, accepted** (step 2): turn on `umError`.
-- **A member sent twice**: pascal-jsonmapper-faa 0.3.0 keeps the first value; many parsers keep
-  the last. If something in front of the API (a gateway, a WAF) reads the body too, the two can
-  disagree about the same request. Checked in `tools/http_scenarios.sh` so a change in the mapper
-  shows up; recorded as a candidate for pascal-jsonmapper-faa (`docs/plan.md`, section 8).
+- **A member sent twice, on pascal-jsonmapper-faa 0.3.0**: it kept one of the values (the first,
+  or the second when the names differed in case), while many parsers keep the last, so something
+  in front of the API (a gateway, a WAF) could read the same body differently. 0.4.0 refuses it
+  (400), whatever `UnknownMembers` says; `tools/http_scenarios.sh` checks it. Use 0.4.0 or later.
+- **Error messages name Pascal classes**: the mapper's 400s say `TCityInsert.Name` or
+  `no published property of TOrder`, which a client sees. Harmless in most APIs; if it matters,
+  catch `EJsonMapperError` in the handler and raise your own `EValidationException`.
 - **`null` into a plain type keeps the old value** (step 2).
 - **Public properties**: invisible to the mapper on both compilers.
 - **`Length` for a "max N characters" rule**: it counts bytes on FPC and UTF-16 units on Delphi;
   use `PaCharCount` ([OpenAPI](openapi.md), step 5).
 - **Times without a zone** (step 6).
-- **A consumer callback or a pipe handler that raises**: the message is lost or stuck, silently
-  (steps 9 and 10).
+- **A consumer callback that raises with no `OnConsumerError`**: rejected and, without a
+  dead-letter exchange, dropped, with nothing logged (on pascal-amqp-faa 0.3.0: stuck; step 9).
+  **A pipe handler that raises** with no `OnError` assigned, or on pascal-pipes-faa 0.1.1: lost
+  (step 10).
 - **`PublishText` for JSON**: it labels the message `text/plain`; publish bytes with
   `application/json` (step 9).
 - **No body size limit** (step 11).

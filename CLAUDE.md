@@ -24,8 +24,9 @@ per application). How to add them, the minimum versions, sketches and why there 
 client per process, spans, a server that is down, measured): `docs/guide/messaging.md`, from
 `samples/04-messaging` (FPC only, `build_fpc.sh` with `REDIS_FAA`/`AMQP_FAA`/`PIPES_FAA`; not
 in CI, so rebuild it by hand after changing what it uses). JSON DTOs on a queue or a pipe:
-`docs/guide/dtos-json.md`; every receiver catches (an exception in an AMQP consumer or a Pipes
-`OnMessage` is lost silently, measured). The index of every
+`docs/guide/dtos-json.md`; every receiver handles its errors (pascal-amqp-faa 0.4.0 sends a
+consumer's exception to `OnConsumerError`, pascal-pipes-faa 0.2.0 a handler's to `OnError`;
+older versions lost it silently, measured). The index of every
 `*-faa` library is the `dual-compiler-delphi-lazarus` skill's `references/faa-libraries.md`.
 
 For the general dual-compiler rules (project anatomy, `.inc`, mirrored tests, CI), use the
@@ -81,7 +82,7 @@ all (measured, skill `references/rtti-gotchas.md`).
 
 `external/` holds the dependencies as git submodules, pinned: pascal-common-faa `v1.9.0` (the library itself needs 1.8.1; sample 02 uses 1.9.0's
 string normalizers, `TOptionals.Trim`/`Upper`),
-pascal-jsonmapper-faa `v0.3.0`, pascal-db-faa `v0.14.2`, Horse `3.3.12` (`fda6fed`; until 0.4.0
+pascal-jsonmapper-faa `v0.4.0` (refuses duplicate members), pascal-db-faa `v0.14.2`, Horse `3.3.12` (`fda6fed`; until 0.4.0
 this repository used 3.3.2, `72cc45f`; pascal-dfe-broker moved to 3.3.12 on 2026-10-09, delphi-api-starter is still on 3.3.2). They are **only for this
 repository's tests**: a consumer provides its own single copy of each (submodule + search path),
 never `pascal-api-infra-faa/external/...`. Clone with `git submodule update --init` (no
@@ -279,7 +280,7 @@ exception in a helper and assert on what it returned.
 | Delphi | open `PascalApi.groupproj`, build `PascalApi.UnitTests`, `ApiSample`, `DbApiSample` and `TenantApiSample` (Win32 and Win64); run the tests; start `ApiSample.exe` and run `sh tools/http_scenarios.sh 9310`; start `DbApiSample.exe 9330 --reset` and run `sh tools/http_scenarios_db.sh 9330`; start `TenantApiSample.exe 9350 --reset` and run `sh tools/http_scenarios_tenants.sh 9350` |
 
 The middlewares are tested in two layers: their decisions in `PascalApi.HttpTests` (no server),
-and over real HTTP by `tools/http_scenarios.sh` (curl, 173 checks) against `samples/01-api`,
+and over real HTTP by `tools/http_scenarios.sh` (curl, 175 checks) against `samples/01-api`,
 which uses every middleware. In-process servers aren't used: on FPC, Horse's `Listen` blocks in
 `THTTPApplication.Run` and there is no `StopListen`.
 

@@ -33,8 +33,10 @@ program MessagingSample;
     GET  /consumed            how many orders the consumer took, and the last item
 
   The queue is ORDERS_QUEUE (environment or .env), by default a new name per
-  run. The consumer reads each message into an IOrder; one it can't read is
-  logged and rejected without requeue (Nack), never left unacknowledged. *)
+  run. The consumer reads each message into an IOrder; one it can't read
+  raises, and pascal-amqp-faa (0.4.0 or later) calls OnConsumerError, which
+  logs, then rejects it without requeue (to the queue's dead-letter exchange
+  if it has one, else dropped). Until 0.3.0 it stayed unacknowledged. *)
 
 {$MODE DELPHI}{$H+}
 
@@ -75,6 +77,8 @@ type
   public
     procedure Line(const AText: string);
     procedure OnOrder(AChannel: TAMQPChannel; const ADelivery: TAMQPDelivery);
+    procedure OnOrderError(AChannel: TAMQPChannel; const ADelivery: TAMQPDelivery;
+      AError: Exception; var AAction: TAMQPConsumerErrorAction);
     procedure OnReconnectError(AConnection: TAMQPConnection; AAttempt: Integer;
       const AError: string);
   end;
@@ -134,22 +138,9 @@ procedure TApp.OnOrder(AChannel: TAMQPChannel; const ADelivery: TAMQPDelivery);
 var
   LOrder: IOrder;
 begin
-  // On the library's thread pool. An exception raised here is swallowed by
-  // the pool: the message would stay unacknowledged, with nothing logged,
-  // and come back on every restart (measured). So a message that can't be
-  // read is logged and rejected without requeue (with a dead-letter
-  // exchange on the queue, it goes there).
-  try
-    LOrder := TJsonMapper.Shared.FromJson<IOrder>(ADelivery.BodyAsText);
-  except
-    on E: Exception do
-    begin
-      TErrorHandlerMiddleware.LogError(Format('order rejected: %s: %s', [E.ClassName, E.Message]),
-        TraceIdOf(TPcTracing.Current));
-      AChannel.Nack(ADelivery.DeliveryTag, False);
-      Exit;
-    end;
-  end;
+  // On the library's thread pool. No try: a message that can't be read
+  // raises, and OnOrderError logs it (pascal-amqp-faa 0.4.0).
+  LOrder := TJsonMapper.Shared.FromJson<IOrder>(ADelivery.BodyAsText);
   InterlockedIncrement(GConsumed);
   GOut.Enter;
   try
@@ -160,6 +151,19 @@ begin
   Line(Format('consumed %d x %s trace=%s', [LOrder.GetQuantity, LOrder.GetItem,
     TraceIdOf(TPcTracing.Current)]));
   AChannel.Ack(ADelivery.DeliveryTag);
+end;
+
+procedure TApp.OnOrderError(AChannel: TAMQPChannel; const ADelivery: TAMQPDelivery;
+  AError: Exception; var AAction: TAMQPConsumerErrorAction);
+begin
+  // Same pool thread, after OnOrder raised. AError belongs to the library
+  // (never free or re-raise it). AAction comes as ceaReject (Nack without
+  // requeue) for a message still pending: kept. ceaRequeue would loop on a
+  // message that always fails.
+  // No span is current here (the 'process' span has finished: measured),
+  // so the line carries no trace id.
+  TErrorHandlerMiddleware.LogError(Format('order rejected: %s: %s',
+    [AError.ClassName, AError.Message]), '');
 end;
 
 procedure TApp.OnReconnectError(AConnection: TAMQPConnection; AAttempt: Integer;
@@ -320,6 +324,7 @@ begin
   GConfirmed := GAmqp.CreateChannel;
   GConfirmed.ConfirmSelect;
   GConsumer := GAmqp.CreateChannel;
+  GConsumer.OnConsumerError := GApp.OnOrderError;
   if ParamStr(5) = 'declare-both' then
     GConsumer.DeclareQueue(TAMQPQueueDeclare.Create(GQueue, False));
   GConsumer.Consume(GQueue, GApp.OnOrder);

@@ -72,6 +72,13 @@ may change the API; each such change is listed here.
 
 ### Changed
 
+- `external/pascal-jsonmapper-faa` on v0.4.0: a JSON member sent twice is refused (400,
+  `$.name: duplicate member (...)`), also when the names differ only in case; 0.3.0 kept one of
+  the values. `tools/http_scenarios.sh` checks both (175 checks). `samples/04-messaging`'s
+  `PipesJsonSample` needs pascal-pipes-faa 0.2.0: its `OnMessage` has no `try`, and the server's
+  `OnError` logs what a handler raises (0.1.1 lost it). `MessagingSample` needs pascal-amqp-faa
+  0.4.0: its consumer has no `try`, and the channel's `OnConsumerError` logs what it raises before
+  the message is rejected (0.3.0 left it unacknowledged).
 - `external/pascal-common-faa` on v1.9.0, for its string normalizers (`TOptionals.Trim`,
   `Upper`...: the value changes inside the optional, the state stays), which sample 02's PATCH
   uses so it binds each member with no `if` (asked for by the user; the normalizers were added

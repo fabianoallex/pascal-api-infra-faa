@@ -20,8 +20,7 @@ it can go out of date; each library's own samples and tests are the reference. D
 tried. Since 2026-10-15 the orders are a JSON DTO, read and written by pascal-jsonmapper-faa
 ([DTOs and JSON](dtos-json.md), step 9). The Pipes part is
 [PipesJsonSample](../../samples/04-messaging/PipesJsonSample.lpr), run on FPC 3.2.2/Windows with
-pascal-pipes-faa 0.1.1 (its README's headline lists FPC on Linux, but its own suites run on FPC for
-Windows too); what this guide says of Pipes beyond that comes from its README.
+pascal-pipes-faa 0.2.0 (it runs on FPC for Windows too); what this guide says of Pipes beyond that comes from its README.
 
 ## What it solves
 
@@ -160,23 +159,24 @@ procedure TApp.OnOrder(AChannel: TAMQPChannel; const ADelivery: TAMQPDelivery);
 var
   LOrder: IOrder;
 begin
-  try
-    LOrder := TJsonMapper.Shared.FromJson<IOrder>(ADelivery.BodyAsText);
-  except
-    on E: Exception do
-    begin
-      TErrorHandlerMiddleware.LogError(Format('order rejected: %s: %s', [E.ClassName, E.Message]),
-        TraceIdOf(TPcTracing.Current));
-      AChannel.Nack(ADelivery.DeliveryTag, False);
-      Exit;
-    end;
-  end;
+  // No try: a message that can't be read raises, and OnOrderError logs it.
+  LOrder := TJsonMapper.Shared.FromJson<IOrder>(ADelivery.BodyAsText);
   ... // the work
   AChannel.Ack(ADelivery.DeliveryTag);
 end;
 
+procedure TApp.OnOrderError(AChannel: TAMQPChannel; const ADelivery: TAMQPDelivery;
+  AError: Exception; var AAction: TAMQPConsumerErrorAction);
+begin
+  // AError belongs to the library (never free or re-raise it). AAction comes
+  // as ceaReject (Nack without requeue) for a pending message: kept.
+  TErrorHandlerMiddleware.LogError(Format('order rejected: %s: %s',
+    [AError.ClassName, AError.Message]), '');
+end;
+
 // At startup, on its own channel (the queue was declared on GPublisher):
 GConsumer := GAmqp.CreateChannel;
+GConsumer.OnConsumerError := GApp.OnOrderError;
 GConsumer.Consume(GQueue, GApp.OnOrder);
 ```
 
@@ -184,14 +184,16 @@ The callback runs on pascal-common-faa's thread pool (`PcPool`), several at a ti
 threads and not in order (pascal-amqp-faa's README, "Concurrency and message ordering", which also
 shows how to get ordering). It is a method (`of object`) on both compilers.
 
-**An exception in the callback is lost**, and so is the message's fate: the pool swallows it, so
-the message is neither acknowledged nor rejected and nothing is logged. Measured with a consumer
-that read the JSON without the `try` above: of 7 messages, the one with `"quantity":"x"` stayed
-unacknowledged, and after the process restarted the broker delivered it again, to be stuck again,
-on every restart. Hence the `try`: log it and `Nack` without requeue (to the dead-letter exchange,
-when the queue has one). Measured with the code above: the bad message logged
-(`order rejected: EJsonMapperError: $.quantity: expected integer, ... trace_id=...`), the queue
-left with nothing ready or unacknowledged.
+**An exception in the callback goes to the channel's `OnConsumerError`** (pascal-amqp-faa 0.4.0),
+on the same pool thread, and the message is rejected without requeue unless the handler sets
+`AAction` (`ceaRequeue`, which loops on a message that always fails, or `ceaNone`, to confirm it
+later); with no handler, the same rejection. Rejected without requeue, a message goes to the
+queue's dead-letter exchange, or is **dropped** when the queue has none. Measured with the code
+above: two bad messages logged (`order rejected: EJsonMapperError: $.quantity: expected integer,
+...`, with no trace id: no span is current in the handler), the queue left with nothing ready or
+unacknowledged, nothing back after a restart. **Until 0.3.0 the exception was swallowed**: the
+message stayed unacknowledged with nothing logged, and came back on every restart (measured);
+there, catch in the callback and `Nack` yourself.
 
 **With pascal-amqp-faa 0.2.0, declare the queue on the consuming channel too.** Measured there
 with automatic reconnection on (`AutoReconnect := True`) and this non-durable queue declared only
@@ -335,8 +337,10 @@ measured.
   recovers, silently (step 4). Fixed in 0.3.0.
 - **Reconnection attempts nobody logs**: with unlimited attempts, a reconnection that never
   succeeds shows only as 500s; log `OnReconnectError` (step 6).
-- **A consumer callback that raises**: the message stays unacknowledged, silently, and comes
-  back on every restart (step 4). Catch, log, `Nack`.
+- **A consumer callback that raises, with no `OnConsumerError`**: the message is rejected, and
+  dropped when the queue has no dead-letter exchange, with nothing logged (pascal-amqp-faa 0.4.0;
+  until 0.3.0 it stayed stuck, step 4). Assign the handler, and a dead-letter exchange where a
+  message must not be lost.
 - **A consumer callback that blocks forever** stalls the channel's shutdown (pascal-amqp-faa's
   README, "The consumer callback must always finish on its own").
 - **A fallback that catches `ERedisException`**: it also hides bugs (step 6).
