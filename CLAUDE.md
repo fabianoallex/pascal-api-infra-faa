@@ -20,7 +20,10 @@ abstraction without saying why none of them fits:
 
 Same author and dual-compiler rules, and they share pascal-common-faa with this library (one copy
 per application). How to add them, the minimum versions, sketches and why there is no layer here
-(`PascalApi.Messaging` was removed in 0.6.0): **`docs/related-libraries.md`**. The index of every
+(`PascalApi.Messaging` was removed in 0.6.0): **`docs/related-libraries.md`**; inside an API (one
+client per process, spans, a server that is down, measured): `docs/guide/messaging.md`, from
+`samples/04-messaging` (FPC only, `build_fpc.sh` with `REDIS_FAA`/`AMQP_FAA`; not in CI, so
+rebuild it by hand after changing what it uses). The index of every
 `*-faa` library is the `dual-compiler-delphi-lazarus` skill's `references/faa-libraries.md`.
 
 For the general dual-compiler rules (project anatomy, `.inc`, mirrored tests, CI), use the

@@ -46,3 +46,4 @@ samples/02-db/DbApiSample
 samples/02-db/sqlite3.dll
 samples/03-tenants/TenantApiSample
 samples/03-tenants/sqlite3.dll
+samples/04-messaging/MessagingSample

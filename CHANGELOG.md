@@ -108,10 +108,16 @@ may change the API; each such change is listed here.
   (`docs/guide/configuration.md`), errors and validation (`docs/guide/errors.md`),
   authentication (`docs/guide/authentication.md`), rate limiting
   (`docs/guide/rate-limiting.md`), database access (`docs/guide/database.md`), logging and
-  observability (`docs/guide/observability.md`), OpenAPI (`docs/guide/openapi.md`) and MCP
-  (`docs/guide/mcp.md`).
-- `TErrorHandlerMiddleware.LogError(ALine, ARequestId)`: writes a line through the callback given
-  to `Register`, for an error handled away from `OnError` (the MCP executor's).
+  observability (`docs/guide/observability.md`), OpenAPI (`docs/guide/openapi.md`), MCP
+  (`docs/guide/mcp.md`) and messaging, Redis and IPC (`docs/guide/messaging.md`, measured
+  against Redis and RabbitMQ with `samples/04-messaging`).
+- `samples/04-messaging`: the API behind the messaging guide (pascal-redis-faa and
+  pascal-amqp-faa inside a Horse API). FPC only and built by hand (`build_fpc.sh`), not by CI:
+  those two libraries aren't this repository's dependencies.
+- `TErrorHandlerMiddleware.LogError`: writes a line through the callback given to `Register`, for
+  an error handled away from `OnError`. `LogError(ALine, ARequestId)` is the MCP executor's;
+  `LogError(AReq, ALine)` is a handler's (a cache that falls back when Redis is down), with the id
+  `TLoggerMiddleware` set, never a client's own `X-Request-Id`.
 - `PaCharCount` (`PascalApi.Text`): the number of characters in a string, the same on both
   compilers (`Length` counts bytes on FPC and UTF-16 units on Delphi), for a rule like "at most
   100 characters". Test `CharCount_CountsCharactersNotBytes`.

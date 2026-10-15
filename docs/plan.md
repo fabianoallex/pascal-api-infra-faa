@@ -193,7 +193,7 @@ the access log on Delphi (Indy kept a raw `:pascalapi-logged` line); fixed. And 
 stdout in a file or a pipe, the end of the last access line stayed in the RTL's buffer: fixed
 in pascal-common-faa 1.8.1 (`SafeWriteln` flushes on both compilers), now the minimum.
 
-### 8. Guides for the library's users — started (2026-10-14)
+### 8. Guides for the library's users — done (2026-10-14)
 
 The design documents record decisions for the maintainers; nothing explained to a user how to
 build an application. `docs/guide/` holds guides, one per topic, all written to the template in
@@ -203,8 +203,16 @@ testing, reference), with code taken from the samples. Done: multi-tenancy
 (`docs/guide/configuration.md`), errors and validation (`docs/guide/errors.md`), authentication
 (`docs/guide/authentication.md`), rate limiting (`docs/guide/rate-limiting.md`), database access
 (`docs/guide/database.md`), logging and observability (`docs/guide/observability.md`), OpenAPI
-(`docs/guide/openapi.md`), MCP (`docs/guide/mcp.md`). Planned: the other topic listed in
-`docs/guide/README.md` (the sibling libraries).
+(`docs/guide/openapi.md`), MCP (`docs/guide/mcp.md`), messaging, Redis and IPC (`docs/guide/messaging.md`): every topic
+the index planned.
+
+A candidate for pascal-amqp-faa, found while measuring for the messaging guide and left for later,
+like the FireDAC one below: with `AutoReconnect` on, a non-durable queue declared on one channel
+and consumed on another never recovered after a broker restart (90 s of `EAMQPConnection`, no
+callback, nothing logged), because each channel replays only its own topology and a failed attempt
+is swallowed; declaring the queue on the consuming channel too recovered in 16 s. Also, without
+`AutoReconnect`, a publish on a dead connection raised `EWriteError` ("Stream write error"), not
+the `EAMQPConnection` its README lists (pascal-amqp-faa 0.2.0, FPC 3.2.2/Windows, RabbitMQ 3).
 
 A candidate for pascal-db-faa, found while measuring for the OpenAPI guide and left for later
 (the user's decision, 2026-10-14): FireDAC raises `[FireDAC][DatS]-32 Variable length column

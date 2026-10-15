@@ -12,7 +12,9 @@ already has. Write something new only for a need none of them covers, and say wh
 | Talk to another process: same machine (Named Pipe on Windows, Unix socket on Linux), TCP or TLS, with request/reply | **pascal-pipes-faa** (was pascal-named-pipes-faa) | https://github.com/fabianoallex/pascal-pipes-faa | `Pipes.*` | `pipes_faa` |
 
 Versions when this page was written (2026-10-09): pascal-amqp-faa 0.1.2, pascal-redis-faa
-0.1.2, pascal-pipes-faa 0.1.1. Each library's README is the source for its features and the
+0.1.2, pascal-pipes-faa 0.1.1; checked again on 2026-10-14 against 0.2.0, 0.2.0 and 0.1.1 for
+[docs/guide/messaging.md](guide/messaging.md), which shows them **inside an API** (one client per
+process, spans, what the API answers when the server is down), measured with `samples/04-messaging`. Each library's README is the source for its features and the
 platforms it was validated on; check it before relying on a platform (pascal-pipes-faa, for
 example, lists Delphi on Win64 and Android and FPC on Linux).
 
@@ -70,15 +72,16 @@ end;
   LChan.Consume('orders', LOrders.OnMessage);
 ```
 
-Redis:
+Redis, through `TRedisClient` (a pool inside, safe to share across Horse's threads; a
+`TRedisConnection` is one socket, for one thread):
 
 ```pascal
-uses Redis.Types, Redis.Connection;
+uses Redis.Types, Redis.Client, Redis.Commands.Strings;
 
-  LConn := TRedisConnection.Create(RedisDefaultParams);   // localhost:6379
-  LConn.Open;
-  LConn.Execute('SET', ['session:42', LToken, 'EX', 3600]);
-  if LConn.Execute('GET', ['session:42']).IsNull then ...
+  GRedis := TRedisClient.Create(RedisDefaultParams);   // localhost:6379; at startup
+  ...
+  GRedis.Strings.SetEx('session:42', 3600, LToken);
+  if not GRedis.Strings.TryGet('session:42', LValue) then ...
 ```
 
 Pipes (another process on the same machine):

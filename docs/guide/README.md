@@ -20,16 +20,7 @@ way it does.
 | [MCP](mcp.md) | an AI client should call the API: the routes as tools, which ones, who may call, what a call returns |
 | [Errors and validation](errors.md) | a request fails: the exceptions and their statuses, validating input, the database's errors, the client messages (English/Portuguese) |
 | [Multi-tenancy](multitenancy.md) | one API serves several customers, each seeing only its own data |
-
-## Planned
-
-Each one gets a page of its own, written the same way. Until then, the
-[README](../../README.md) ("A quick look"), the samples and the comment at the top of each unit
-are the reference.
-
-| Guide | Covers | Today, see |
-|---|---|---|
-| Messaging, Redis, IPC | the sibling libraries | `docs/related-libraries.md` |
+| [Messaging, Redis, IPC](messaging.md) | the API needs a cache, a queue or another process: the sibling libraries inside an API, threads, spans, a server that is down |
 
 ## How a guide is written
 

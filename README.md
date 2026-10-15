@@ -22,6 +22,7 @@ Observability plan: [docs/observability-design.md](docs/observability-design.md)
 [authentication](docs/guide/authentication.md), [rate limiting](docs/guide/rate-limiting.md),
 [database access](docs/guide/database.md),
 [logging and observability](docs/guide/observability.md), [OpenAPI](docs/guide/openapi.md), [MCP](docs/guide/mcp.md),
+[messaging, Redis, IPC](docs/guide/messaging.md),
 [multi-tenancy](docs/guide/multitenancy.md)).
 
 ## Contents
@@ -98,7 +99,8 @@ pascal-api-infra-faa.
 | Inter-process: Named Pipe / Unix socket, TCP, TLS | [pascal-pipes-faa](https://github.com/fabianoallex/pascal-pipes-faa) | `Pipes.*` |
 
 How to add them to an application, minimum versions and short examples:
-[docs/related-libraries.md](docs/related-libraries.md).
+[docs/related-libraries.md](docs/related-libraries.md); using them inside an API (one client per
+process, spans, a server that is down): [docs/guide/messaging.md](docs/guide/messaging.md).
 
 ## Samples
 
@@ -107,8 +109,9 @@ How to add them to an application, minimum versions and short examples:
 | [01-api](samples/01-api/ApiSample.dpr) | every middleware (errors, CORS, log, metrics, JWT, rate limit), health, paging and validation, in memory | `tools/http_scenarios.sh` (168 checks) |
 | [02-db](samples/02-db/DbApiSample.dpr) | SQLite through pascal-db-faa (SQLdb on FPC, FireDAC on Delphi): migrations, paging and ordering in SQL, filters, 409 from a unique key, NULL as `null` | `tools/http_scenarios_db.sh` (71 checks; also the pool metrics pascal-db-faa records) |
 | [03-tenants](samples/03-tenants/TenantApiSample.dpr) | multi-tenant with `PascalApi.Tenancy`: the tenant from a JWT claim, a database per tenant and a shared one with `TENANT_ID`, 401/403 for a removed or suspended tenant | `tools/http_scenarios_tenants.sh` (92 checks, most of them one tenant trying another's rows, also through a JOIN; also rate limit by plan and `tenant.id` in the log) |
+| [04-messaging](samples/04-messaging/MessagingSample.lpr) | Redis (a shared `TRedisClient`, cache-aside, a fallback when Redis is down) and RabbitMQ (publishing with and without confirms, a consumer) inside an API, with spans; FPC only, built by hand (`build_fpc.sh`) against your clones of pascal-redis-faa and pascal-amqp-faa | not by CI: measured by hand for [docs/guide/messaging.md](docs/guide/messaging.md) |
 
-All run with one source on Delphi and Lazarus/FPC. On FPC for Windows, samples 02 and 03 need
+Samples 01-03 run with one source on Delphi and Lazarus/FPC. On FPC for Windows, samples 02 and 03 need
 sqlite.org's `sqlite3.dll` next to the executable (see `tools/test_http.sh`).
 
 ## Using it
