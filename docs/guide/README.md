@@ -22,6 +22,7 @@ way it does.
 | [Errors and validation](errors.md) | a request fails: the exceptions and their statuses, validating input, the database's errors, the client messages (English/Portuguese) |
 | [Multi-tenancy](multitenancy.md) | one API serves several customers, each seeing only its own data |
 | [Messaging, Redis, IPC](messaging.md) | the API needs a cache, a queue or another process: the sibling libraries inside an API, threads, spans, a server that is down |
+| [Your project on both compilers](dual-compiler.md) | your own code must build and pass its tests on Delphi and Lazarus/FPC: the layout, the project files, the rules, mirrored tests, CI, the Claude Code skills |
 
 ## How a guide is written
 

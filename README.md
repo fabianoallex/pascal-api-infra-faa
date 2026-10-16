@@ -21,7 +21,8 @@ Observability plan: [docs/observability-design.md](docs/observability-design.md)
 How to build an API with the library, one topic at a time (configuration, errors, DTOs,
 authentication, database, observability, OpenAPI, MCP, multi-tenancy...): **[docs/guide](docs/guide/README.md)**,
 which lists every guide and when to read it. Start with
-[getting started](docs/guide/getting-started.md).
+[getting started](docs/guide/getting-started.md); to keep your own code on both Delphi and
+Lazarus/FPC, read [your project on both compilers](docs/guide/dual-compiler.md).
 
 The guides say how; the design documents (`docs/*-design.md`) say why each decision was taken
 and what was measured.

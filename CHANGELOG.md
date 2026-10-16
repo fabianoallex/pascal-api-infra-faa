@@ -6,6 +6,12 @@ may change the API; each such change is listed here.
 
 ## [Unreleased]
 
+### Added
+
+- Guide [Your project on both compilers](docs/guide/dual-compiler.md): the layout, project
+  files, code rules, mirrored tests and CI for an application of your own on Delphi and
+  Lazarus/FPC, and the Claude Code skills that carry the rules (pascal-skills-faa).
+
 ## [0.14.0] - 2026-10-16
 
 The user guides (`docs/guide/`, twelve topics), the fixes found while writing them, and the
