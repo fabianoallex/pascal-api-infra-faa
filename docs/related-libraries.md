@@ -12,9 +12,10 @@ already has. Write something new only for a need none of them covers, and say wh
 | Talk to another process: same machine (Named Pipe on Windows, Unix socket on Linux), TCP or TLS, with request/reply | **pascal-pipes-faa** (was pascal-named-pipes-faa) | https://github.com/fabianoallex/pascal-pipes-faa | `Pipes.*` | `pipes_faa` |
 
 Versions when this page was written (2026-10-09): pascal-amqp-faa 0.1.2, pascal-redis-faa
-0.1.2, pascal-pipes-faa 0.1.1; checked again on 2026-10-14 against 0.2.0, 0.2.0 and 0.1.1, and pascal-amqp-faa 0.4.0 and pascal-pipes-faa 0.2.0 on
+0.1.2, pascal-pipes-faa 0.1.1; checked again on 2026-10-14 against 0.2.0, 0.2.0 and 0.1.1, and pascal-amqp-faa 0.4.1 and pascal-pipes-faa 0.3.0 on
 2026-10-15 (use those or later: amqp 0.2.0 could fail to reconnect, silently, amqp 0.3.0 left a
-message stuck when its consumer raised, and pipes 0.1.1 lost an exception raised in `OnMessage`), for
+message stuck when its consumer raised, 0.4.0 logged it without its trace id, and pipes 0.1.1
+lost an exception raised in `OnMessage`, 0.2.0 reported it in Portuguese), for
 [docs/guide/messaging.md](guide/messaging.md), which shows them **inside an API** (one client per
 process, spans, what the API answers when the server is down), measured with `samples/04-messaging`. Each library's README is the source for its features and the
 platforms it was validated on; check it before relying on a platform (pascal-pipes-faa, for

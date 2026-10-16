@@ -20,7 +20,7 @@ it can go out of date; each library's own samples and tests are the reference. D
 tried. Since 2026-10-15 the orders are a JSON DTO, read and written by pascal-jsonmapper-faa
 ([DTOs and JSON](dtos-json.md), step 9). The Pipes part is
 [PipesJsonSample](../../samples/04-messaging/PipesJsonSample.lpr), run on FPC 3.2.2/Windows with
-pascal-pipes-faa 0.2.0 (it runs on FPC for Windows too); what this guide says of Pipes beyond that comes from its README.
+pascal-pipes-faa 0.3.0 (it runs on FPC for Windows too); what this guide says of Pipes beyond that comes from its README.
 
 ## What it solves
 
@@ -171,7 +171,7 @@ begin
   // AError belongs to the library (never free or re-raise it). AAction comes
   // as ceaReject (Nack without requeue) for a pending message: kept.
   TErrorHandlerMiddleware.LogError(Format('order rejected: %s: %s',
-    [AError.ClassName, AError.Message]), '');
+    [AError.ClassName, AError.Message]), TraceIdOf(TPcTracing.Current));
 end;
 
 // At startup, on its own channel (the queue was declared on GPublisher):
@@ -184,13 +184,13 @@ The callback runs on pascal-common-faa's thread pool (`PcPool`), several at a ti
 threads and not in order (pascal-amqp-faa's README, "Concurrency and message ordering", which also
 shows how to get ordering). It is a method (`of object`) on both compilers.
 
-**An exception in the callback goes to the channel's `OnConsumerError`** (pascal-amqp-faa 0.4.0),
+**An exception in the callback goes to the channel's `OnConsumerError`** (pascal-amqp-faa 0.4.1),
 on the same pool thread, and the message is rejected without requeue unless the handler sets
 `AAction` (`ceaRequeue`, which loops on a message that always fails, or `ceaNone`, to confirm it
 later); with no handler, the same rejection. Rejected without requeue, a message goes to the
 queue's dead-letter exchange, or is **dropped** when the queue has none. Measured with the code
-above: two bad messages logged (`order rejected: EJsonMapperError: $.quantity: expected integer,
-...`, with no trace id: no span is current in the handler), the queue left with nothing ready or
+above: two bad messages logged (`order rejected: EJsonInputError: $.quantity: expected integer,
+... trace_id=...`: the handler runs inside the message's `process` span), the queue left with nothing ready or
 unacknowledged, nothing back after a restart. **Until 0.3.0 the exception was swallowed**: the
 message stayed unacknowledged with nothing logged, and came back on every restart (measured);
 there, catch in the callback and `Nack` yourself.
@@ -338,7 +338,7 @@ measured.
 - **Reconnection attempts nobody logs**: with unlimited attempts, a reconnection that never
   succeeds shows only as 500s; log `OnReconnectError` (step 6).
 - **A consumer callback that raises, with no `OnConsumerError`**: the message is rejected, and
-  dropped when the queue has no dead-letter exchange, with nothing logged (pascal-amqp-faa 0.4.0;
+  dropped when the queue has no dead-letter exchange, with nothing logged (pascal-amqp-faa 0.4.1;
   until 0.3.0 it stayed stuck, step 4). Assign the handler, and a dead-letter exchange where a
   message must not be lost.
 - **A consumer callback that blocks forever** stalls the channel's shutdown (pascal-amqp-faa's

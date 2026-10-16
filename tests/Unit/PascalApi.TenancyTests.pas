@@ -116,6 +116,7 @@ type
     [Test] procedure Filter_Prepare_AliasTagNotAnIdentifier_LeftAsIs;
     [Test] procedure Filter_PrepareProcessedSql_BlockRemoved_ReplacesAndBinds;
     [Test] procedure Filter_PrepareProcessedSql_BlockKept_ReplacesAndBinds;
+    [Test] procedure Filter_PrepareProcessedSql_TenantTag_ReplacesAndBinds;
   end;
 
 implementation
@@ -800,6 +801,35 @@ begin
   LQuery.Params.Strings['CODE'] := '4314902';
   LQuery.Params.Integers['POPULATION'] := 1332845;
   TAssert.AssertEquals(EXPECTED, LQuery.Sql);
+  LQuery.ExecSql;
+  TAssert.AssertEquals('bound in the same call', 'initech',
+    LMock.LastExecution(EXPECTED).AsString('TENANT_ID'));
+end;
+
+procedure TTenancyTests.Filter_PrepareProcessedSql_TenantTag_ReplacesAndBinds;
+const
+  // ${TENANT} in the processed SQL: replacing it changes the record's string.
+  // Calling the replacing method on the const parameter leaked that string
+  // on FPC 3.2.2/Linux (one block, heaptrc), and changed the caller's
+  // variable on Win64: the skill's rtl-gotchas.md, "Memory / interfaces".
+  SQL = 'DELETE FROM CITIES WHERE CODE = :CODE AND ${TENANT}';
+  EXPECTED = 'DELETE FROM CITIES WHERE CODE = :CODE AND TENANT_ID = :TENANT_ID';
+var
+  LMock: TMockDBFactory;
+  LScope: TTenantDataScope;
+  LQuery: IQuery;
+  LTransaction: IScopeTransaction;
+  LSql: TSQLResult;
+begin
+  LMock := TMockDBFactory.Create;
+  LScope.Factory := LMock;
+  LScope.Discriminator := 'initech';
+  LTransaction := LScope.Factory.GetPool.AcquireQuery(LQuery);
+  LSql := LScope.Factory.SqlLoader[SQL];
+  TTenantFilter.Prepare(LQuery, LScope, LSql);
+  LQuery.Params.Strings['CODE'] := '4314902';
+  TAssert.AssertEquals(EXPECTED, LQuery.Sql);
+  TAssert.AssertEquals('the caller''s SQL is untouched', SQL, LSql.SQL);
   LQuery.ExecSql;
   TAssert.AssertEquals('bound in the same call', 'initech',
     LMock.LastExecution(EXPECTED).AsString('TENANT_ID'));

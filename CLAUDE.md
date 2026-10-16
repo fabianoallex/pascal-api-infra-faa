@@ -24,8 +24,8 @@ per application). How to add them, the minimum versions, sketches and why there 
 client per process, spans, a server that is down, measured): `docs/guide/messaging.md`, from
 `samples/04-messaging` (FPC only, `build_fpc.sh` with `REDIS_FAA`/`AMQP_FAA`/`PIPES_FAA`; not
 in CI, so rebuild it by hand after changing what it uses). JSON DTOs on a queue or a pipe:
-`docs/guide/dtos-json.md`; every receiver handles its errors (pascal-amqp-faa 0.4.0 sends a
-consumer's exception to `OnConsumerError`, pascal-pipes-faa 0.2.0 a handler's to `OnError`;
+`docs/guide/dtos-json.md`; every receiver handles its errors (pascal-amqp-faa 0.4.1 sends a
+consumer's exception to `OnConsumerError`, pascal-pipes-faa 0.3.0 a handler's to `OnError`;
 older versions lost it silently, measured). The index of every
 `*-faa` library is the `dual-compiler-delphi-lazarus` skill's `references/faa-libraries.md`.
 
@@ -82,7 +82,7 @@ all (measured, skill `references/rtti-gotchas.md`).
 
 `external/` holds the dependencies as git submodules, pinned: pascal-common-faa `v1.9.0` (the library itself needs 1.8.1; sample 02 uses 1.9.0's
 string normalizers, `TOptionals.Trim`/`Upper`),
-pascal-jsonmapper-faa `v0.4.0` (refuses duplicate members), pascal-db-faa `v0.14.2`, Horse `3.3.12` (`fda6fed`; until 0.4.0
+pascal-jsonmapper-faa `v0.5.0` (refuses duplicate members; `EJsonInputError` = 400), pascal-db-faa `v0.14.2`, Horse `3.3.12` (`fda6fed`; until 0.4.0
 this repository used 3.3.2, `72cc45f`; pascal-dfe-broker moved to 3.3.12 on 2026-10-09, delphi-api-starter is still on 3.3.2). They are **only for this
 repository's tests**: a consumer provides its own single copy of each (submodule + search path),
 never `pascal-api-infra-faa/external/...`. Clone with `git submodule update --init` (no

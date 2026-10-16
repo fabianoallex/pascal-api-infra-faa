@@ -207,6 +207,13 @@ testing, reference), with code taken from the samples. Done: multi-tenancy
 the index planned. Added on 2026-10-15, at the user's request: DTOs and JSON
 (`docs/guide/dtos-json.md`), which also brought `ParseQueryInt`'s 400 and `umError` in the samples.
 
+A candidate for pascal-db-faa (not measured there, not implemented here): `TSQLResult`'s methods
+(`ProcessTag`, `ReplaceLiteral`, `ApplyOperator`, `ApplyFilter`) change `Self` and return it.
+Called on a `const TSQLResult` parameter, that leaked the new string on FPC 3.2.2/Linux and changed
+the caller's variable on Win64 (measured in `TTenantFilter.Prepare`, fixed here with a local
+copy; the dual-compiler skill's `rtl-gotchas.md`, "Memory / interfaces"). Returning a changed
+copy instead would remove the trap for every caller.
+
 Candidates for the sibling libraries, found while measuring for the DTOs and JSON guide and left
 for their own sessions (the user's decision, 2026-10-15):
 
@@ -216,21 +223,29 @@ for their own sessions (the user's decision, 2026-10-15):
   differently. **Fixed in 0.4.0** (2026-10-15; the submodule is on it): a duplicate is refused,
   whatever `UnknownMembers` says, also when the names differ only in ASCII case or are the
   declared name and the `Naming` one; the API answers 400 `$.name: duplicate member (...)`
-  (`tools/http_scenarios.sh`).
+  (`tools/http_scenarios.sh`). Its messages named Pascal classes (`TCityInsert.Name`,
+  `no published property of TOrder`), which reached the client: **fixed in 0.5.0** (2026-10-15),
+  which raises `EJsonInputError` for input at fault, in JSON terms only (the Pascal side in
+  `Detail`). The error handler here now maps by class: `EJsonInputError` 400, any other
+  `EJsonMapperError` 500, logged (a programming error with a path was a 400 that named classes).
+  Still open there: on FPC 3.2.2 a `Currency` above about 900 billion loses its last digits when
+  written (theirs to fix, in a release of its own).
 - **pascal-amqp-faa 0.3.0: an exception in a consumer callback was swallowed** by
   pascal-common-faa's pool (`TAMQPDeliveryWork.Execute` re-raises into it): the message was
   neither acknowledged nor rejected, nothing was logged, and it came back on every restart
   (measured with a JSON consumer and RabbitMQ 3). **Fixed in 0.4.0** (2026-10-15): the channel's
   `OnConsumerError` gets it, and the message is rejected without requeue unless the handler says
   otherwise (no dead-letter exchange: dropped). Sample 04 logs there and lost its `try`
-  (measured). Its log line has no trace id: the `process` span has finished when the handler
-  runs; a possible follow-up there.
+  (measured). In 0.4.0 its log line had no trace id (the `process` span had finished when the
+  handler ran); **0.4.1** runs the handler inside that span, and the line carries the message's
+  trace id again (measured: the same trace as the span, which ends with the error status).
 - **pascal-pipes-faa 0.1.1: an exception in `OnMessage` reached nobody**: `OnError` wasn't called
   on either side (measured on FPC/Windows). **Fixed in 0.2.0** (2026-10-15): an exception that
   escapes any handler goes to the same component's `OnError`, on the handler's thread, in every
   dispatch mode; `PipesJsonSample` assigns one and lost its `try` (measured: `OnMessage levantou
-  EJsonMapperError: $.quantity: ...`). Its README now lists FPC on Windows too. Its runtime
-  messages are still in Portuguese (`servidor respondeu erro`), left for a release of their own.
+  EJsonMapperError: $.quantity: ...`). Its README now lists FPC on Windows too. **0.3.0** turned
+  its runtime messages into English (`server replied with error: ...`, `OnMessage raised ...`;
+  measured with `PipesJsonSample`).
 
 Fixed in pascal-amqp-faa 0.3.0 (2026-10-15; the messaging guide re-measured with it), found while
 measuring for the messaging guide: with `AutoReconnect` on, a non-durable queue declared on one channel

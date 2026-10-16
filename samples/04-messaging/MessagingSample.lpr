@@ -34,7 +34,7 @@ program MessagingSample;
 
   The queue is ORDERS_QUEUE (environment or .env), by default a new name per
   run. The consumer reads each message into an IOrder; one it can't read
-  raises, and pascal-amqp-faa (0.4.0 or later) calls OnConsumerError, which
+  raises, and pascal-amqp-faa (0.4.1 or later) calls OnConsumerError, which
   logs, then rejects it without requeue (to the queue's dead-letter exchange
   if it has one, else dropped). Until 0.3.0 it stayed unacknowledged. *)
 
@@ -160,10 +160,10 @@ begin
   // (never free or re-raise it). AAction comes as ceaReject (Nack without
   // requeue) for a message still pending: kept. ceaRequeue would loop on a
   // message that always fails.
-  // No span is current here (the 'process' span has finished: measured),
-  // so the line carries no trace id.
+  // Inside the message's 'process' span (pascal-amqp-faa 0.4.1; 0.4.0 had
+  // already finished it), so the line carries the trace id.
   TErrorHandlerMiddleware.LogError(Format('order rejected: %s: %s',
-    [AError.ClassName, AError.Message]), '');
+    [AError.ClassName, AError.Message]), TraceIdOf(TPcTracing.Current));
 end;
 
 procedure TApp.OnReconnectError(AConnection: TAMQPConnection; AAttempt: Integer;

@@ -35,8 +35,9 @@ type
     [Test] procedure OrderBy_Is400;
     [Test] procedure Encoding_Is400_NotLogged;
     [Test] procedure JsonParseError_Is400;
-    [Test] procedure JsonMapperErrorWithPath_Is400;
+    [Test] procedure JsonInputError_Is400_NotLogged;
     [Test] procedure JsonMapperErrorWithoutPath_Is500;
+    [Test] procedure JsonMapperErrorWithPath_Is500_Logged;
     [Test] procedure ConstraintUniqueAndForeignKey_Are409_NotLogged;
     [Test] procedure ConstraintNotNullAndCheck_Are422_Logged;
     [Test] procedure LockConflict_Is409_Logged;
@@ -160,13 +161,28 @@ begin
   TAssert.AssertEquals('', R.LogLine);
 end;
 
-procedure TErrorMappingTests.JsonMapperErrorWithPath_Is400;
+procedure TErrorMappingTests.JsonInputError_Is400_NotLogged;
 var
   R: TErrorResponse;
 begin
-  R := Map(EJsonMapperError.Create('$.age: expected a number, found JSON string'));
+  R := Map(EJsonInputError.CreateInput('$.age', 'expected integer, found JSON string',
+    'TPerson.Age: Integer'));
   TAssert.AssertEquals(400, R.Status);
-  TAssert.AssertEquals('Invalid request body: $.age: expected a number, found JSON string', R.Message);
+  TAssert.AssertEquals('Invalid request body: $.age: expected integer, found JSON string', R.Message);
+  TAssert.AssertEquals('the Pascal detail stays out of the answer', 0, Pos('TPerson', R.Message));
+  TAssert.AssertEquals('', R.LogLine);
+end;
+
+procedure TErrorMappingTests.JsonMapperErrorWithPath_Is500_Logged;
+var
+  R: TErrorResponse;
+begin
+  // A programming error with a path (pascal-jsonmapper-faa: a nil class
+  // property): until 0.13.0 the '$' made it a 400 naming Pascal classes.
+  R := Map(EJsonMapperError.Create('$.sub: class property TOrder.Sub is nil'));
+  TAssert.AssertEquals(500, R.Status);
+  TAssert.AssertEquals(0, Pos('TOrder', R.Message));
+  TAssert.AssertTrue(Pos('TOrder.Sub', R.LogLine) > 0);
 end;
 
 procedure TErrorMappingTests.JsonMapperErrorWithoutPath_Is500;

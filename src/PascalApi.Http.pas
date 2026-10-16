@@ -26,9 +26,12 @@
     the whole wait) is 503 with TApiMessages.ServerBusy, logged; until
     0.13.0 it was a 500 here, as any unmapped exception.
   - Bodies the JSON mapper rejects become 400: EJsonParseError, and
-    EJsonMapperError whose message carries a JSON path ('$...'). An
-    EJsonMapperError without a path is a programming error (a DTO not
-    registered) and stays 500.
+    EJsonInputError (pascal-jsonmapper-faa 0.5.0: the JSON is at fault; its
+    message has JSON terms only, its Detail the Pascal side, not sent). Any
+    other EJsonMapperError is a programming error (a DTO not registered, a
+    nil class property) and is a 500, logged, even when its message starts
+    with a path: until 0.13.0 such a message ('$...') was a 400 that named
+    Pascal classes to the client.
   - ETextEncodingException (PascalApi.Text) is 400, like EEncodingError.
   - The request id is the W3C trace id (32 hex digits, 0.8.0), resolved by
     ResolveRequestTrace from traceparent or a 32-digit X-Request-Id; the
@@ -426,7 +429,7 @@ begin
     Result.Status := 400;
     Result.Message := Format(LMessages.InvalidJson, [E.Message]);
   end
-  else if (E is EJsonMapperError) and (Copy(E.Message, 1, 1) = '$') then
+  else if E is EJsonInputError then
   begin
     Result.Status := 400;
     Result.Message := Format(LMessages.InvalidJson, [E.Message]);

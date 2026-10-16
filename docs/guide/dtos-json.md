@@ -98,11 +98,11 @@ handler. Measured against sample 01 on FPC:
 |---|---|
 | `{"name":"Natal","state":"RN","population":"abc"}` | 400 `$.population: expected integer, found JSON string` (checked) |
 | `"population":1.5` / `true` | 400 `expected integer, found JSON number` / `boolean` |
-| `"population":99999999999` | 400 `99999999999 is out of range for LongInt` (mapper test `Error_NumberOutOfRange_HasPath`) |
+| `"population":99999999999` | 400 `$.population: 99999999999 is out of range (-2147483648..2147483647)` (mapper test `Error_NumberOutOfRange_HasPath`) |
 | `"name":123` | 400 `$.name: expected string, found JSON number` |
-| `"popultion":10` (a typo) | 400 `$.popultion: unknown member ...` with `umError` (checked); **201 and population `null`** without it |
+| `"popultion":10` (a typo) | 400 `$.popultion: unknown member` with `umError` (checked); **201 and population `null`** without it |
 | `{"NAME":"Natal","STATE":"RN"}` | 201: names are read case-insensitively (`Names_AreCaseInsensitive_UnknownIgnored`) |
-| `{"name":"First","name":"Second",...}` | 400 `$.name: duplicate member ("name" and "name" both match property TCityInsert.Name)` (checked; pascal-jsonmapper-faa 0.4.0) |
+| `{"name":"First","name":"Second",...}` | 400 `$.name: duplicate member ("name" and "name")` (checked; pascal-jsonmapper-faa 0.4.0) |
 | `{"NAME":"First","name":"Second",...}` | 400: names that differ only in (ASCII) case are the same member (checked) |
 | `{"name":"Natal",` / `` (empty) | 400 `Member name expected (at position 17)` / `Value expected (at position 1)` (checked) |
 | `[1,2]` / `"x"` / `null` | 400 `$: expected object, found JSON array` / `string` / `null` |
@@ -286,8 +286,8 @@ A DTO doesn't care where its JSON goes. Two rules carry over from HTTP:
 - **Check before you send.** Read the body into the DTO in the handler, so a bad request is a
   400 to its client and never a message nobody can read.
 - **Every receiver handles its errors.** On a queue or a pipe there is no error handler to turn
-  an exception into an answer. pascal-amqp-faa 0.4.0 sends a consumer's exception to
-  `OnConsumerError` (step 9) and pascal-pipes-faa 0.2.0 a handler's to `OnError` (step 10): assign
+  an exception into an answer. pascal-amqp-faa 0.4.1 sends a consumer's exception to
+  `OnConsumerError` (step 9) and pascal-pipes-faa 0.3.0 a handler's to `OnError` (step 10): assign
   them. Before those versions, both lost the message silently (measured).
 
 ### 9. On a queue (pascal-amqp-faa)
@@ -321,7 +321,7 @@ end;
 ```
 
 The consumer reads it back; what it can't read goes to the channel's `OnConsumerError`
-(**pascal-amqp-faa 0.4.0 or later**):
+(**pascal-amqp-faa 0.4.1 or later**):
 
 ```pascal
 procedure TApp.OnOrder(AChannel: TAMQPChannel; const ADelivery: TAMQPDelivery);
@@ -340,7 +340,7 @@ begin
   // AError belongs to the library (never free or re-raise it). AAction comes
   // as ceaReject (Nack without requeue) for a pending message: kept.
   TErrorHandlerMiddleware.LogError(Format('order rejected: %s: %s',
-    [AError.ClassName, AError.Message]), '');
+    [AError.ClassName, AError.Message]), TraceIdOf(TPcTracing.Current));
 end;
 
 // At startup, on its own channel (the queue was declared on GPublisher):
@@ -349,15 +349,15 @@ GConsumer.OnConsumerError := GApp.OnOrderError;
 GConsumer.Consume(GQueue, GApp.OnOrder);
 ```
 
-Measured on FPC with RabbitMQ 3 (pascal-amqp-faa 0.3.0 for the first point and the last, 0.4.0
+Measured on FPC with RabbitMQ 3 (pascal-amqp-faa 0.3.0 for the first point and the last, 0.4.1
 for the second):
 
 - `POST /orders` with `"quantity":"x"`, an unknown member or a quantity of 0: 400, nothing
   published. A good order with `"café"`: 202, and the consumer read `café` as UTF-8 (`/consumed`
   answered `"lastItem":"caf\xc3\xa9"`).
 - A bad message published on purpose (`/orders/raw`, `"quantity":"x"` and `not json`): each logged
-  by `OnOrderError` (`order rejected: EJsonMapperError: $.quantity: expected integer, found JSON
-  string`; no trace id, since no span is current there) and rejected without requeue; the queue
+  by `OnOrderError` (`order rejected: EJsonInputError: $.quantity: expected integer, found JSON
+  string trace_id=...`, the message's trace: the handler runs inside its `process` span) and rejected without requeue; the queue
   ended with nothing ready and nothing unacknowledged, and nothing came back after a restart.
   The queue has no dead-letter exchange, so they were dropped: give it one where a message must
   not be lost.
@@ -396,7 +396,7 @@ procedure TServerSide.OnMessage(Sender: TObject; AConnId: TPipeConnectionId; con
 var
   LOrder: IOrder;
 begin
-  // No try: an exception goes to OnError (pascal-pipes-faa 0.2.0).
+  // No try: an exception goes to OnError (pascal-pipes-faa 0.2.0 or later).
   LOrder := TJsonMapper.Shared.FromJson<IOrder>(FrameText(AData));
   ...
 end;
@@ -412,15 +412,15 @@ GServer.OnMessage := GSide.OnMessage;
 GServer.OnError := GSide.OnError;
 ```
 
-(`FrameText` decodes the frame's UTF-8 and raises when it isn't.) Use **pascal-pipes-faa 0.2.0 or
-later**. Measured on FPC 3.2.2/Windows:
+(`FrameText` decodes the frame's UTF-8 and raises when it isn't.) Use **pascal-pipes-faa 0.3.0 or
+later** (0.2.0 behaves the same, with its messages in Portuguese). Measured on FPC 3.2.2/Windows:
 
 - A request: `{"accepted":true,"item":"rice"}`. A bad one: the client's `RequestText` raised
-  `EPipeError: servidor respondeu erro: $.quantity: expected integer, found JSON string`. The
-  server's exception text reaches the client (with the library's Portuguese prefix), so keep
+  `EPipeError: server replied with error: $.quantity: expected integer, found JSON string`. The
+  server's exception text reaches the client, so keep
   messages that the other process may see free of secrets.
 - A fire-and-forget message whose handler raised: the server's `OnError` got
-  `OnMessage levantou EJsonMapperError: $.quantity: expected integer, found JSON string` (0.2.0),
+  `OnMessage raised EJsonInputError: $.quantity: expected integer, found JSON string`,
   and the connection kept working. **With 0.1.1 the same message was lost without a trace**:
   `OnError` wasn't called, on either side. On 0.1.1, catch inside `OnMessage`.
 
@@ -464,9 +464,10 @@ header). Where both ends must agree, one library on both: the mapper.
   or the second when the names differed in case), while many parsers keep the last, so something
   in front of the API (a gateway, a WAF) could read the same body differently. 0.4.0 refuses it
   (400), whatever `UnknownMembers` says; `tools/http_scenarios.sh` checks it. Use 0.4.0 or later.
-- **Error messages name Pascal classes**: the mapper's 400s say `TCityInsert.Name` or
-  `no published property of TOrder`, which a client sees. Harmless in most APIs; if it matters,
-  catch `EJsonMapperError` in the handler and raise your own `EValidationException`.
+- **Error messages that named Pascal classes**: until pascal-jsonmapper-faa 0.5.0 the 400s said
+  `TCityInsert.Name` or `no published property of TOrder`. 0.5.0 raises `EJsonInputError` for
+  input at fault, with JSON terms only (the Pascal side in `Detail`); the error handler answers
+  it 400 and any other `EJsonMapperError` (a programming error) 500, logged.
 - **`null` into a plain type keeps the old value** (step 2).
 - **Public properties**: invisible to the mapper on both compilers.
 - **`Length` for a "max N characters" rule**: it counts bytes on FPC and UTF-16 units on Delphi;

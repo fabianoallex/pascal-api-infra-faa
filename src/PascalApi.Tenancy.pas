@@ -757,9 +757,7 @@ begin
 end;
 
 /// What both Prepare overloads do once the SQL is text: its ${TENANT} tags
-/// replaced and :TENANT_ID bound. A plain routine on purpose: when the name
-/// overload called the TSQLResult one, FPC 3.2.2 leaked the SQL's string
-/// (one block per run of PascalApi.TenancyTests, Linux, heaptrc).
+/// replaced and :TENANT_ID bound.
 procedure PrepareTenantSql(const AQuery: IQuery; const AScope: TTenantDataScope;
   const ASqlText: string);
 begin
@@ -777,8 +775,16 @@ end;
 
 class procedure TTenantFilter.Prepare(const AQuery: IQuery; const AScope: TTenantDataScope;
   const ASql: TSQLResult);
+var
+  LSql: TSQLResult;
 begin
-  PrepareTenantSql(AQuery, AScope, ASql.ReplaceLiteral('TENANT', Condition).SQL);
+  // A copy first: ReplaceLiteral changes Self (FSQL := ...; Result := Self),
+  // and called on the const parameter it leaked the new string on FPC 3.2.2
+  // Linux (one block per call, heaptrc) and changed the caller's variable on
+  // Win64 (measured; the dual-compiler skill's rtl-gotchas.md, "Memory /
+  // interfaces"). Test Filter_PrepareProcessedSql_TenantTag_ReplacesAndBinds.
+  LSql := ASql;
+  PrepareTenantSql(AQuery, AScope, LSql.ReplaceLiteral('TENANT', Condition).SQL);
 end;
 
 end.

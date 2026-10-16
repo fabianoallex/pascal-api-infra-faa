@@ -72,6 +72,14 @@ may change the API; each such change is listed here.
 
 ### Changed
 
+- `external/pascal-jsonmapper-faa` on v0.5.0, and the error handler maps by class: an
+  `EJsonInputError` (the JSON is at fault; its message has JSON terms only) is a 400, any other
+  `EJsonMapperError` a 500, logged. Until now any mapper message starting with `$` was a 400, so a
+  programming error with a path (`$.sub: class property ... is nil`) reached the client with
+  Pascal names. Tests `JsonInputError_Is400_NotLogged`, `JsonMapperErrorWithPath_Is500_Logged`
+  (281 in all). Sample 04 runs with pascal-pipes-faa 0.3.0 (messages in English) and
+  pascal-amqp-faa 0.4.1 (`OnConsumerError` inside the message's span: its log line has the trace
+  id again).
 - `external/pascal-jsonmapper-faa` on v0.4.0: a JSON member sent twice is refused (400,
   `$.name: duplicate member (...)`), also when the names differ only in case; 0.3.0 kept one of
   the values. `tools/http_scenarios.sh` checks both (175 checks). `samples/04-messaging`'s
@@ -138,7 +146,14 @@ may change the API; each such change is listed here.
   the one that takes the SQL's name, from SQL already processed (`ProcessTag`), so a block per
   optional member needs no `if`; the tenant's condition and `:TENANT_ID` still come in the same
   call. Sample 03's INSERT uses it (its population is a tagged block, like sample 02's). Tests
-  `Filter_PrepareProcessedSql_BlockRemoved_ReplacesAndBinds` and `..._BlockKept_...` (279 in all).
+  `Filter_PrepareProcessedSql_BlockRemoved_ReplacesAndBinds` and `..._BlockKept_...`.
+  It works on a copy of `ASql`: `TSQLResult.ReplaceLiteral` changes `Self`, and called on the
+  `const` parameter it leaked the new string on FPC 3.2.2/Linux (one block per call, heaptrc) and
+  changed the caller's variable on Win64 (measured; the dual-compiler skill's `rtl-gotchas.md`,
+  "Memory / interfaces"). The first version's tests missed it (their SQL had no `${TENANT}`, so
+  nothing was replaced); `Filter_PrepareProcessedSql_TenantTag_ReplacesAndBinds` (280 in all)
+  failed on both before the copy. An earlier note blamed the call between the two overloads; that
+  was wrong.
 - `docs/guide/dtos-json.md`: DTOs and JSON, from request bodies (what each kind of bad body gets,
   measured) and the three optional types to the query string, the database, and the same DTOs on
   a queue and between processes. Sample 02 gains `PATCH /cities/:code` (`ICityPatch`: absent
