@@ -368,7 +368,10 @@ while s.recv(65536):
   sleep 1
   grep -q 'probe=hidden' "$SERVER_LOG" && ok || fail "log: a raw :pascalapi-logged line hid the request"
   # The 500's detail, findable by the id the client got.
-  grep -q "something broke trace_id=$FAIL_ID" "$SERVER_LOG" && ok \
+  # The message has non-ASCII on purpose: the sample turns on SafeWriteln's
+  # UTF-8 (pascal-common-faa 1.10.0), so the line is UTF-8 in the file on both
+  # compilers (without it: code page 850 on FPC, 1252 on Delphi, measured).
+  grep -q "something broke (ação) trace_id=$FAIL_ID" "$SERVER_LOG" && ok \
     || fail "log: the 500's message with trace_id=$FAIL_ID"
   grep -q "middleware broke at db.internal:3050 trace_id=$MW_ID" "$SERVER_LOG" && ok \
     || fail "log: the middleware's 500 with trace_id=$MW_ID"

@@ -72,6 +72,13 @@ may change the API; each such change is listed here.
 
 ### Changed
 
+- `external/pascal-common-faa` on v1.10.0: `PcSetSafeLogUtf8` makes `SafeWriteln` (the access
+  log, `FileLog`'s fallback) write UTF-8 to a file or a pipe, which neither compiler did (code page
+  850 on FPC, 1252 on Delphi; found by sample 04's log). The samples turn it on and write all their
+  log lines through `SafeWriteln`; the library leaves it to the application (process-wide, off by
+  default), and its minimum stays 1.8.1. Sample 01's `/fail/server` message has non-ASCII on
+  purpose, and `tools/http_scenarios.sh` checks its UTF-8 bytes in the log (it failed with the
+  switch off: `a\x87\xc6o`). Guide: `docs/guide/observability.md`, step 2.
 - `external/pascal-jsonmapper-faa` on v0.5.0, and the error handler maps by class: an
   `EJsonInputError` (the JSON is at fault; its message has JSON terms only) is a 400, any other
   `EJsonMapperError` a 500, logged. Until now any mapper message starting with `$` was a 400, so a

@@ -90,6 +90,7 @@ uses
   PascalApi.Horse.OpenApi,
   PascalApi.Horse.Observability,
   PascalCommon.Tracing,
+  PascalCommon.SafeLog,
   PascalApi.Otlp,
   PascalApi.Tenancy,
   PascalApi.Horse.Tenancy,
@@ -362,13 +363,13 @@ type
 
 procedure TSampleLog.Error(const ALine: string);
 begin
-  Writeln('ERROR ', ALine);
+  SafeWriteln('ERROR ' + ALine);
 end;
 
 procedure TSampleLog.Migration(const AEvent: TMigrationEvent);
 begin
   if AEvent.Kind = mekApplied then
-    Writeln('migration ', AEvent.Version, ' ', AEvent.ScriptName);
+    SafeWriteln('migration %d %s', [AEvent.Version, AEvent.ScriptName]);
 end;
 
 // Every tenant's database, once each (the shared one serves several), at
@@ -391,7 +392,7 @@ begin
     LEngine := TDBMigrationEngine.Create(GResolver.ScopeFor(LTenants[I]).Factory, ALog.Migration);
     try
       LEngine.Execute(CityMigrations);
-      Writeln('database ', LKey, ' at version ', LEngine.CurrentVersion);
+      SafeWriteln('database %s at version %d', [LKey, LEngine.CurrentVersion]);
     finally
       LEngine.Free;
     end;
@@ -434,7 +435,7 @@ begin
   LEngine := TDBMigrationEngine.Create(LControl, ALog.Migration);
   try
     LEngine.Execute(ControlMigrations);
-    Writeln('database control at version ', LEngine.CurrentVersion);
+    SafeWriteln('database control at version %d', [LEngine.CurrentVersion]);
   finally
     LEngine.Free;
   end;
@@ -455,6 +456,10 @@ begin
   {$IFDEF FPC}
   SetMultiByteConversionCodePage(CP_UTF8);
   {$ENDIF}
+  // Log lines in UTF-8 on both compilers, to a file or a pipe too
+  // (pascal-common-faa 1.10.0; off by default). Only SafeWriteln follows it:
+  // every log line of this program goes through SafeWriteln.
+  PcSetSafeLogUtf8(True);
   // A member the DTO doesn't have is a 400 with its path ("$.popultion"),
   // not silently dropped (the mapper's default ignores it).
   TJsonMapper.Shared.UnknownMembers := umError;
@@ -551,7 +556,7 @@ begin
     THealthEndpoint.Register('/health', GLog.Error);
     TRouteDoc.Serve('/swagger', 'Cities API, multi-tenant (pascal-api-infra-faa sample 03)', '1.0.0');
 
-    Writeln('TenantApiSample listening on port ', GPort);
+    SafeWriteln('TenantApiSample listening on port %d', [GPort]);
     THorse.Listen(GPort);
   finally
     GResolver := nil;

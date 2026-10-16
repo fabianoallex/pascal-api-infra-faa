@@ -25,6 +25,7 @@ uses
   {$IFDEF UNIX}cthreads, cwstring,{$ENDIF}
   SysUtils, Classes, SyncObjs,
   PascalCommon.Utf8,
+  PascalCommon.SafeLog,
   PascalJsonMapper.Json, PascalJsonMapper.Mapper,
   PascalApi.Text,
   Pipes.Types, Pipes.Server, Pipes.Client;
@@ -114,7 +115,7 @@ begin
   // No try: an exception goes to OnError (pascal-pipes-faa 0.2.0).
   try
     LOrder := TJsonMapper.Shared.FromJson<IOrder>(FrameText(AData));
-    Writeln('message: ', LOrder.GetQuantity, ' x ', LOrder.GetItem);
+    SafeWriteln('message: %d x %s', [LOrder.GetQuantity, LOrder.GetItem]);
   finally
     GHandled.SetEvent; // only for this demo's ordering
   end;
@@ -124,7 +125,7 @@ procedure TServerSide.OnError(Sender: TObject; AConnId: TPipeConnectionId; const
 begin
   // Runs on the same thread, right after the handler that failed; the
   // connection stays open (Server.DisconnectClient(AConnId) would close it).
-  Writeln('error on connection ', AConnId, ': ', AError);
+  SafeWriteln('error on connection ' + IntToStr(AConnId) + ': ' + AError);
 end;
 
 procedure Request(AClient: TPipeClient; const ABody: string);
@@ -133,10 +134,10 @@ var
 begin
   try
     LReply := AClient.RequestText(ABody, 3000);
-    Writeln('request ', ABody, ' -> ', LReply);
+    SafeWriteln('request ' + ABody + ' -> ' + LReply);
   except
     on E: Exception do
-      Writeln('request ', ABody, ' -> ', E.ClassName, ': ', E.Message);
+      SafeWriteln('request ' + ABody + ' -> ' + E.ClassName + ': ' + E.Message);
   end;
 end;
 
@@ -145,7 +146,7 @@ begin
   GHandled.ResetEvent;
   AClient.SendText(ABody);
   if GHandled.WaitFor(3000) <> wrSignaled then
-    Writeln('message ', ABody, ': not handled in 3 s');
+    SafeWriteln('message ' + ABody + ': not handled in 3 s');
 end;
 
 var
@@ -155,6 +156,8 @@ var
 
 begin
   SetMultiByteConversionCodePage(CP_UTF8);
+  // Log lines in UTF-8, to a file or a pipe too (pascal-common-faa 1.10.0).
+  PcSetSafeLogUtf8(True);
   TJsonMapper.Shared.RegisterMapping<IOrder, TOrder>;
   TJsonMapper.Shared.RegisterMapping<IOrderReply, TOrderReply>;
   TJsonMapper.Shared.UnknownMembers := umError;

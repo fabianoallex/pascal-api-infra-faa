@@ -71,6 +71,7 @@ uses
   PascalApi.Horse.Mcp,
   PascalApi.Horse.Observability,
   PascalCommon.Tracing,
+  PascalCommon.SafeLog,
   PascalApi.Otlp,
   ApiSample.Cities in 'ApiSample.Cities.pas';
 
@@ -151,7 +152,7 @@ end;
 
 procedure FailServer(AReq: THorseRequest; ARes: THorseResponse; ANext: TNextProc);
 begin
-  raise EInvalidOpException.Create('something broke');
+  raise EInvalidOpException.Create('something broke (ação)');
 end;
 
 procedure FailDatabase(AReq: THorseRequest; ARes: THorseResponse; ANext: TNextProc);
@@ -257,7 +258,7 @@ end;
 
 procedure TSampleCallbacks.LogError(const ALine: string);
 begin
-  Writeln('ERROR ', ALine);
+  SafeWriteln('ERROR ' + ALine);
 end;
 
 // Raises rather than returning False, so the endpoint's exception path is
@@ -277,6 +278,10 @@ begin
   {$IFDEF FPC}
   SetMultiByteConversionCodePage(CP_UTF8);
   {$ENDIF}
+  // Log lines in UTF-8 on both compilers, to a file or a pipe too
+  // (pascal-common-faa 1.10.0; off by default). Only SafeWriteln follows it:
+  // every log line of this program goes through SafeWriteln.
+  PcSetSafeLogUtf8(True);
   // A member the DTO doesn't have is a 400 with its path ("$.popultion"),
   // not silently dropped (the mapper's default ignores it).
   TJsonMapper.Shared.UnknownMembers := umError;
@@ -345,7 +350,7 @@ begin
   TMcpEndpoint.Register('/mcp/unreachable', 'http://127.0.0.1:1', 'pascal-api-sample-01', '1.0.0',
     ['trace']);
 
-  Writeln('ApiSample listening on port ', GPort);
+  SafeWriteln('ApiSample listening on port %d', [GPort]);
   THorse.Listen(GPort);
   GCallbacks.Free;
 end.

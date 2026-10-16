@@ -69,6 +69,7 @@ uses
   PascalApi.Horse.Mcp,
   PascalApi.Horse.Observability,
   PascalCommon.Tracing,
+  PascalCommon.SafeLog,
   PascalApi.Otlp,
   DbApiSample.Cities in 'DbApiSample.Cities.pas';
 
@@ -130,13 +131,13 @@ type
 
 procedure TSampleLog.Error(const ALine: string);
 begin
-  Writeln('ERROR ', ALine);
+  SafeWriteln('ERROR ' + ALine);
 end;
 
 procedure TSampleLog.Migration(const AEvent: TMigrationEvent);
 begin
   if AEvent.Kind = mekApplied then
-    Writeln('migration ', AEvent.Version, ' ', AEvent.ScriptName);
+    SafeWriteln('migration %d %s', [AEvent.Version, AEvent.ScriptName]);
 end;
 
 // A connection from the pool answers a query. Raises when the database
@@ -193,6 +194,10 @@ begin
   {$IFDEF FPC}
   SetMultiByteConversionCodePage(CP_UTF8);
   {$ENDIF}
+  // Log lines in UTF-8 on both compilers, to a file or a pipe too
+  // (pascal-common-faa 1.10.0; off by default). Only SafeWriteln follows it:
+  // every log line of this program goes through SafeWriteln.
+  PcSetSafeLogUtf8(True);
   // A member the DTO doesn't have is a 400 with its path ("$.popultion"),
   // not silently dropped (the mapper's default ignores it).
   TJsonMapper.Shared.UnknownMembers := umError;
@@ -213,7 +218,7 @@ begin
     GEngine := TDBMigrationEngine.Create(GFactory, GLog.Migration);
     try
       GEngine.Execute(CityMigrations);
-      Writeln('database ', GFile, ' at version ', GEngine.CurrentVersion);
+      SafeWriteln('database %s at version %d', [GFile, GEngine.CurrentVersion]);
     finally
       GEngine.Free;
     end;
@@ -266,7 +271,7 @@ begin
     TMcpEndpoint.Register('/mcp', 'http://127.0.0.1:' + IntToStr(GPort), 'cities-api', '1.0.0',
       [], ['http://localhost:6274']);
 
-    Writeln('DbApiSample listening on port ', GPort);
+    SafeWriteln('DbApiSample listening on port %d', [GPort]);
     THorse.Listen(GPort);
   finally
     GCities.Free;

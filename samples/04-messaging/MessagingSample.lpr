@@ -45,6 +45,7 @@ uses
   SysUtils, Classes, SyncObjs,
   Horse,
   PascalCommon.Tracing,
+  PascalCommon.SafeLog,
   Redis.Types, Redis.Client, Redis.Commands.Strings,
   AMQP.Connection, AMQP.Queue.Methods, AMQP.Basic.Methods,
   PascalJsonMapper.Json, PascalJsonMapper.Mapper,
@@ -106,13 +107,9 @@ var
 
 procedure TApp.Line(const AText: string);
 begin
-  GOut.Enter;
-  try
-    Writeln(AText);
-    Flush(Output);
-  finally
-    GOut.Leave;
-  end;
+  // SafeWriteln locks and flushes; with PcSetSafeLogUtf8 the line is UTF-8
+  // (Writeln wrote "café" with the byte 0x82, code page 850: measured).
+  SafeWriteln(AText);
 end;
 
 /// The span's trace id, or '' without tracing.
@@ -303,6 +300,8 @@ end;
 
 begin
   SetMultiByteConversionCodePage(CP_UTF8);
+  // Log lines in UTF-8, to a file or a pipe too (pascal-common-faa 1.10.0).
+  PcSetSafeLogUtf8(True);
   GPort := StrToIntDef(ParamStr(1), 9420);
   GOut := TCriticalSection.Create;
   GApp := TApp.Create;

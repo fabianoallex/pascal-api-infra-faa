@@ -82,6 +82,24 @@ its time covers everything after it.
 
 The time is the server's local time, without a zone (`TClock.Now`); the spans carry UTC.
 
+**Turn on UTF-8 for the console log.** The logger writes through pascal-common-faa's
+`SafeWriteln` (one line at a time, flushed). With standard output in a file or a pipe (Docker, a
+service wrapper), neither compiler writes UTF-8 by itself: FPC writes in the console's code page
+(850) and Delphi in the ANSI one (1252), and a character outside it becomes `?` (pascal-common-faa's
+gotcha 11). Measured on sample 01: the 500's message `something broke (ação)` reached the file as
+`a\x87\xc6o`. pascal-common-faa 1.10.0 adds a switch, off by default because it changes the bytes
+an existing log gets:
+
+```pascal
+PcSetSafeLogUtf8(True);   // PascalCommon.SafeLog, at startup: UTF-8 to a file or a pipe,
+                          // WriteConsoleW to a Windows console; every thread
+```
+
+The samples turn it on, and `tools/http_scenarios.sh` checks that line's UTF-8 bytes in the log
+file, on both compilers. Only `SafeWriteln` follows the switch: write your own log lines (errors,
+startup) through it too, or one log file mixes two encodings. The library doesn't turn it on: it
+holds for the whole process, so it is the application's call.
+
 ### 3. The client's address
 
 `client_ip` is what can be trusted, not what the client says: `TClientAddress.Resolve`, the same
@@ -252,6 +270,8 @@ middleware and the logger are separate, so you can have either.
 - **Spans still queued when the program is killed** are lost: the samples never call
   `TPcTracing.Shutdown` (`Listen` doesn't return). Not measured; keep the batch interval short if
   the last seconds matter.
+- **Log lines through plain `Writeln`**: not UTF-8 with output in a file or a pipe, even with
+  `PcSetSafeLogUtf8(True)` (only `SafeWriteln` follows it); step 2.
 - **An https collector on FPC** needs the `opensslsockets` unit in your program (comment in
   `PascalApi.Otlp`; not measured here, the samples send to http).
 
