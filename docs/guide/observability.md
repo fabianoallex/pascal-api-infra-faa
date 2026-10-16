@@ -117,6 +117,17 @@ machine would have appended. **Until 0.13.0 the log took the header's first addr
 client writes: the same request was logged as `203.0.113.9` (measured with the Delphi build of
 that version).
 
+Your own code that needs the client's address (a handler, a rate-limit key function, an audit
+field) calls `TClientAddress.Resolve(AReq)` too, so it agrees with the log and the limit. Two
+lookalikes give something else:
+
+- **`AReq.RemoteAddr`** is `''` with Horse's console provider (fpWeb on FPC, Indy on Delphi): only
+  Horse's raw providers (Epoll, IOCP, HttpSys, Daemon, LCL) fill it. Seen on FPC 3.2.2/Windows,
+  where the access log showed `-` for every request, and on Delphi 12 Win32 (a probe,
+  2026-10-08). `Resolve` falls back to the web request's address.
+- **`ClientIp`** (`PascalApi.Http`) takes `X-Forwarded-For`'s first address, which the client
+  writes. It is kept for compatibility; nothing in the library uses it since 0.13.0.
+
 ### 4. Your own fields
 
 `AddField` adds a value read after the handler ran, to the access line and to the span. Sample 03
@@ -262,6 +273,8 @@ middleware and the logger are separate, so you can have either.
 - **`TClientAddress.ProxyHops` wrong**: too low behind a proxy, every client is logged (and
   limited) as the proxy; too high, the client's own `X-Forwarded-For` entry is logged as its
   address.
+- **`AReq.RemoteAddr` or `ClientIp` in your own code**: empty with the console provider, or the
+  address the client chose (step 3). Use `TClientAddress.Resolve(AReq)`.
 - **The raw path in a metric label** of your own: one series per id, until the server runs out of
   memory. Use the route template.
 - **A metric without a description**: `promtool` fails on it.
