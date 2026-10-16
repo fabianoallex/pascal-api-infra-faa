@@ -13,6 +13,8 @@
     GET  /cities              paged: ?page=&limit=&orderBy=name|-name|state
     GET  /cities/:id          404 when it doesn't exist
     POST /cities              {"name":"...","state":"..","population":123}; 201
+    POST /prices              {"item":"...","amount":1.2345}; the price back, read and
+                              written by the mapper (a Currency, exact up to its limits)
     GET  /fail/server         an unexpected exception: 500
     GET  /fail/database       the database is down: 503
     GET  /fail/busy           no free database connection in time: 503
@@ -74,6 +76,40 @@ uses
   PascalCommon.SafeLog,
   PascalApi.Otlp,
   ApiSample.Cities in 'ApiSample.Cities.pas';
+
+type
+  // A Currency read and written by the mapper: tools/http_scenarios.sh sends
+  // the largest values, which pascal-jsonmapper-faa before 0.6.0 changed on
+  // FPC 3.2.2 (lost digits on Win64, a 500 at the top of the range).
+  IPrice = interface
+    ['{105EF129-E440-4988-9419-D8730144006C}']
+    function GetItem: string;
+    function GetAmount: Currency;
+  end;
+
+{$M+}
+  TPrice = class(TInterfacedObject, IPrice)
+  private
+    FItem: string;
+    FAmount: Currency;
+  public
+    function GetItem: string;
+    function GetAmount: Currency;
+  published
+    property Item: string read FItem write FItem;
+    property Amount: Currency read FAmount write FAmount;
+  end;
+{$M-}
+
+function TPrice.GetItem: string;
+begin
+  Result := FItem;
+end;
+
+function TPrice.GetAmount: Currency;
+begin
+  Result := FAmount;
+end;
 
 var
   GPort: Integer;
@@ -148,6 +184,12 @@ end;
 procedure PostCity(AReq: THorseRequest; ARes: THorseResponse; ANext: TNextProc);
 begin
   TJsonSend.Send(ARes, AddCity(TJsonMapper.Shared.FromJson<ICityInsert>(AReq.Body)), 201);
+end;
+
+procedure PostPrice(AReq: THorseRequest; ARes: THorseResponse; ANext: TNextProc);
+begin
+  TJsonSend.Send(ARes, TJsonMapper.Shared.ToJson<IPrice>(
+    TJsonMapper.Shared.FromJson<IPrice>(AReq.Body)));
 end;
 
 procedure FailServer(AReq: THorseRequest; ARes: THorseResponse; ANext: TNextProc);
@@ -285,6 +327,7 @@ begin
   // A member the DTO doesn't have is a 400 with its path ("$.popultion"),
   // not silently dropped (the mapper's default ignores it).
   TJsonMapper.Shared.UnknownMembers := umError;
+  TJsonMapper.Shared.RegisterMapping<IPrice, TPrice>;
   GPort := StrToIntDef(ParamStr(1), 9310);
   GSecret := TAppConfig.Get('JWT_SECRET', 'development-secret-change-me');
   GCallbacks := TSampleCallbacks.Create;
@@ -321,6 +364,8 @@ begin
     .NoContent(200, 'The city').Error(404).Error(401).Register(GetCity);
   TRouteDoc.Post('/cities').Summary('Create a city').Tag('cities')
     .Body<ICityInsert>.NoContent(201, 'The new city').Error(400).Error(401).Register(PostCity);
+  TRouteDoc.Post('/prices').Summary('A price back, as the mapper reads it').Tag('json').NoMcp
+    .Body<IPrice>.NoContent(200, 'The price').Error(400).Error(401).Register(PostPrice);
   TRouteDoc.Get('/fail/server').Summary('Always 500').Tag('errors').NoMcp
     .Error(500).Register(FailServer);
   TRouteDoc.Get('/fail/database').Summary('Always 503').Tag('errors').NoMcp

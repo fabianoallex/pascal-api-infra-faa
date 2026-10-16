@@ -3,7 +3,7 @@
 From an empty folder to a Horse API that answers JSON, turns exceptions into HTTP statuses, logs
 every request and checks a token, on Delphi and on Lazarus/FPC from one source. The code comes
 from `samples/01-api`, which compiles on both compilers and is checked over HTTP by
-`tools/http_scenarios.sh` (175 checks), except the smallest program below, which says where it
+`tools/http_scenarios.sh` (186 checks), except the smallest program below, which says where it
 was checked.
 
 ## What it solves
@@ -106,8 +106,8 @@ Then check out a tag in each one. The minimum versions are checked when you comp
 | Library | Minimum | Checked by |
 |---|---|---|
 | pascal-common-faa | 1.8.1 | `PascalApi.Dto` stops the build (`PASCALCOMMON_VERSION`) |
-| pascal-db-faa | 0.12.0 | `PascalApi.Http` stops the build (`PASCALDB_VERSION`) |
-| pascal-jsonmapper-faa | 0.3.0 | only the Lazarus package (`MinVersion` in the `.lpk`) |
+| pascal-db-faa | 0.15.0 | `PascalApi.Http` stops the build (`PASCALDB_VERSION`) |
+| pascal-jsonmapper-faa | 0.6.0 | the Lazarus package (`MinVersion` in the `.lpk`); on Delphi, a version before 0.5.0 fails to compile `PascalApi.Http` (`EJsonInputError`), and 0.5.0 compiles but writes a large `Currency` inexactly on FPC |
 | Horse | 3.3.3 on FPC for Windows | 3.3.2 doesn't compile there (see [Pitfalls](#pitfalls)) |
 
 The versions this repository tests with are the ones pinned in its `external/` folder
@@ -537,7 +537,7 @@ on both (FastMM, heaptrc); see the `dual-compiler-delphi-lazarus` skill for mirr
 
 - `samples/01-api`: `ApiSample.dpr` (the program, the middleware order), `ApiSample.Cities.pas`
   (the DTO, ordering, paging).
-- `tools/http_scenarios.sh`: the 175 checks against sample 01.
+- `tools/http_scenarios.sh`: the 186 checks against sample 01.
 - `PascalApi.Horse.Middlewares` (`src/horse`): the comment at the top of the unit and each
   middleware's declaration.
 - `PascalApi.Http`: `MapException` (exception → status and message), `TApiMessages`.

@@ -207,12 +207,13 @@ testing, reference), with code taken from the samples. Done: multi-tenancy
 the index planned. Added on 2026-10-15, at the user's request: DTOs and JSON
 (`docs/guide/dtos-json.md`), which also brought `ParseQueryInt`'s 400 and `umError` in the samples.
 
-A candidate for pascal-db-faa (not measured there, not implemented here): `TSQLResult`'s methods
-(`ProcessTag`, `ReplaceLiteral`, `ApplyOperator`, `ApplyFilter`) change `Self` and return it.
-Called on a `const TSQLResult` parameter, that leaked the new string on FPC 3.2.2/Linux and changed
-the caller's variable on Win64 (measured in `TTenantFilter.Prepare`, fixed here with a local
-copy; the dual-compiler skill's `rtl-gotchas.md`, "Memory / interfaces"). Returning a changed
-copy instead would remove the trap for every caller.
+`TSQLResult`'s methods (`ProcessTag`, `ReplaceLiteral`, `ApplyOperator`, `ApplyFilter`) changed
+`Self` and returned it. Called on a `const TSQLResult` parameter, that leaked the new string on
+FPC 3.2.2/Linux and changed the caller's variable on Win64 (measured in `TTenantFilter.Prepare`,
+fixed here with a local copy; the dual-compiler skill's `rtl-gotchas.md`, "Memory /
+interfaces"). **pascal-db-faa 0.15.0** (2026-10-16; the submodule is on it) returns a
+changed copy instead, measured on five platforms (its gotcha 53; Delphi Win32 gave "Invalid
+pointer operation" before). This library now requires 0.15.0, and `Prepare` dropped its copy.
 
 Candidates for the sibling libraries, found while measuring for the DTOs and JSON guide and left
 for their own sessions (the user's decision, 2026-10-15):
@@ -228,8 +229,10 @@ for their own sessions (the user's decision, 2026-10-15):
   which raises `EJsonInputError` for input at fault, in JSON terms only (the Pascal side in
   `Detail`). The error handler here now maps by class: `EJsonInputError` 400, any other
   `EJsonMapperError` 500, logged (a programming error with a path was a 400 that named classes).
-  Still open there: on FPC 3.2.2 a `Currency` above about 900 billion loses its last digits when
-  written (theirs to fix, in a release of its own).
+  On FPC 3.2.2 a large `Currency` lost its last digits (`123456789012345.6789` came back as
+  `...6768` on Win64, `High(Currency)` with its sign flipped): **fixed in 0.6.0** (2026-10-16),
+  which never goes through floating point; sample 01's `POST /prices` checks it over HTTP (3 of
+  its checks failed on 0.5.0).
 - **pascal-amqp-faa 0.3.0: an exception in a consumer callback was swallowed** by
   pascal-common-faa's pool (`TAMQPDeliveryWork.Execute` re-raises into it): the message was
   neither acknowledged nor rejected, nothing was logged, and it came back on every restart

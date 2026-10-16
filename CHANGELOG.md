@@ -6,6 +6,11 @@ may change the API; each such change is listed here.
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-10-16
+
+The user guides (`docs/guide/`, twelve topics), the fixes found while writing them, and the
+sibling libraries' fixes. Requires pascal-db-faa 0.15.0 and pascal-jsonmapper-faa 0.6.0.
+
 ### Security
 
 - **A 500 no longer sends the exception's message to the client.** `MapException` answered an
@@ -72,6 +77,20 @@ may change the API; each such change is listed here.
 
 ### Changed
 
+- `external/pascal-jsonmapper-faa` on v0.6.0: a `Currency` is exact over its whole range on FPC
+  3.2.2. Before, on Win64, `123456789012345.6789` came back as `...6768`, `High(Currency)` with
+  its sign flipped, and `0.00025` as `0.0003` (half to even now gives `0.0002`); measured here
+  with sample 01's new `POST /prices`, which `tools/http_scenarios.sh` checks (186 checks; 3
+  failed on 0.5.0).
+- **pascal-jsonmapper-faa 0.6.0 or later is required** (the `.lpk` asked for 0.3.0, though
+  `PascalApi.Http` uses 0.5.0's `EJsonInputError` since the change below; 0.6.0 for the exact
+  `Currency` on FPC). It has no version constant, so on Delphi only an older one before 0.5.0
+  stops the build (`EJsonInputError` undeclared).
+- **pascal-db-faa 0.15.0 or later is required** (was 0.12.0; `PascalApi.Http` stops the build,
+  and the `.lpk` asks for it). Its `TSQLResult` operations return a changed copy and never change
+  the record they are called on, so `TTenantFilter.Prepare` drops its local copy. 0.15.0 is a
+  breaking change there: a call whose result is ignored no longer changes the variable (assign it,
+  `LSql := LSql.ProcessTag(...)`). The samples already assign every result.
 - `external/pascal-common-faa` on v1.10.0: `PcSetSafeLogUtf8` makes `SafeWriteln` (the access
   log, `FileLog`'s fallback) write UTF-8 to a file or a pipe, which neither compiler did (code page
   850 on FPC, 1252 on Delphi; found by sample 04's log). The samples turn it on and write all their

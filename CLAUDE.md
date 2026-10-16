@@ -83,7 +83,9 @@ all (measured, skill `references/rtti-gotchas.md`).
 `external/` holds the dependencies as git submodules, pinned: pascal-common-faa `v1.10.0` (the library itself needs 1.8.1; sample 02 uses 1.9.0's
 string normalizers, `TOptionals.Trim`/`Upper`; the samples turn on 1.10.0's
 `PcSetSafeLogUtf8` and log only through `SafeWriteln`, never plain `Writeln`),
-pascal-jsonmapper-faa `v0.5.0` (refuses duplicate members; `EJsonInputError` = 400), pascal-db-faa `v0.14.2`, Horse `3.3.12` (`fda6fed`; until 0.4.0
+pascal-jsonmapper-faa `v0.6.0` (refuses duplicate members; `EJsonInputError` = 400; exact
+`Currency` on FPC), pascal-db-faa `v0.15.0` (`TSQLResult`'s operations
+return a copy), Horse `3.3.12` (`fda6fed`; until 0.4.0
 this repository used 3.3.2, `72cc45f`; pascal-dfe-broker moved to 3.3.12 on 2026-10-09, delphi-api-starter is still on 3.3.2). They are **only for this
 repository's tests**: a consumer provides its own single copy of each (submodule + search path),
 never `pascal-api-infra-faa/external/...`. Clone with `git submodule update --init` (no
@@ -93,8 +95,10 @@ never `pascal-api-infra-faa/external/...`. Clone with `git submodule update --in
 - Delphi search path of a test project: `src`, `external/pascal-common-faa/src`,
   `external/pascal-common-faa/bridges/jsonmapper`, `external/pascal-jsonmapper-faa/src`,
   `external/pascal-db-faa/src`.
-- Minimum pascal-db-faa version checked in `PascalApi.Http` (`PASCALDB_VERSION`). pascal-jsonmapper-faa
-  has no version constant: its minimum (0.3.0, for `Members`) is only in the `.lpk`.
+- Minimum pascal-db-faa version checked in `PascalApi.Http` (`PASCALDB_VERSION`, 0.15.0).
+  pascal-jsonmapper-faa has no version constant: its minimum (0.6.0: `EJsonInputError` from 0.5.0,
+  exact `Currency` on FPC) is only in the `.lpk`; on Delphi an older one fails on
+  `EJsonInputError` (before 0.5.0) or compiles silently (0.5.0).
 - Lazarus: `packages/pascal_api_infra_faa.lpk` requires `pascal_common_faa`, `pascaljsonmapper_pkg`
   and `pascal_db_faa` with `DefaultFilename ... Prefer="True"` pointing at `external/`. The test
   project also requires `pascal_common_faa_jsonmapper` (the bridge).
@@ -281,7 +285,7 @@ exception in a helper and assert on what it returned.
 | Delphi | open `PascalApi.groupproj`, build `PascalApi.UnitTests`, `ApiSample`, `DbApiSample` and `TenantApiSample` (Win32 and Win64); run the tests; start `ApiSample.exe` and run `sh tools/http_scenarios.sh 9310`; start `DbApiSample.exe 9330 --reset` and run `sh tools/http_scenarios_db.sh 9330`; start `TenantApiSample.exe 9350 --reset` and run `sh tools/http_scenarios_tenants.sh 9350` |
 
 The middlewares are tested in two layers: their decisions in `PascalApi.HttpTests` (no server),
-and over real HTTP by `tools/http_scenarios.sh` (curl, 175 checks) against `samples/01-api`,
+and over real HTTP by `tools/http_scenarios.sh` (curl, 186 checks) against `samples/01-api`,
 which uses every middleware. In-process servers aren't used: on FPC, Horse's `Listen` blocks in
 `THTTPApplication.Run` and there is no `StopListen`.
 

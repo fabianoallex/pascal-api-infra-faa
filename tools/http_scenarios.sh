@@ -176,6 +176,20 @@ curl -s -o "$T/body" -w '%{http_code}' -H 'Content-Type: application/json' -H "$
   --data-binary "@$T/latin1" "$BASE/cities" > "$T/status"
 [ "$(cat "$T/status")" != "500" ] && ok || fail "body not in UTF-8 must not be a 500 (body: $(cat "$T/body"))"
 
+# --- a Currency through the mapper, both ways
+# pascal-jsonmapper-faa before 0.6.0, on FPC 3.2.2: 123456789012345.6789 came
+# back as ...6768 on Win64 and High(Currency) was a 500 (their measurement).
+for V in 123456789012345.6789 922337203685477.5807 -922337203685477.5808 0.0001; do
+  req POST /prices "{\"item\":\"x\",\"amount\":$V}" -H "$AUTH"
+  status_is 200 "price $V"
+  body_is "{\"item\":\"x\",\"amount\":$V}" "price $V: exact"
+done
+req POST /prices '{"item":"x","amount":0.00025}' -H "$AUTH"
+body_is '{"item":"x","amount":0.0002}' "price beyond 4 decimals: half to even"
+req POST /prices '{"item":"x","amount":922337203685477.5808}' -H "$AUTH"
+status_is 400 "price above Currency's range"
+body_has '$.amount' "price above Currency's range: its path"
+
 # --- server and database errors
 # A logged error carries the request id in the body too (the one its log
 # line ends with); an unexpected exception's own message reaches the log only.

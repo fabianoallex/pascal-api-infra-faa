@@ -244,7 +244,11 @@ From the mapper's contract and suite, not measured again here:
 
 - **Numbers** keep their source text: an `Int64` above 2^53 survives a round trip
   (`Parse_BigInteger_KeepsExactText`); `Double`/`Single` are written as the shortest text that
-  reads back exactly, the same on both compilers (`RoundTrip_Double_RandomBits`); `Currency` too.
+  reads back exactly, the same on both compilers (`RoundTrip_Double_RandomBits`). `Currency` is
+  exact up to `High`/`Low(Currency)`, with more than 4 decimals rounded half to even
+  (`0.00025` → `0.0002`), on pascal-jsonmapper-faa 0.6.0 or later; measured here over HTTP
+  (sample 01's `POST /prices`, `tools/http_scenarios.sh`). A value outside the range is a 400
+  with its path.
   A JavaScript client still loses an integer above 2^53: send such ids as strings.
 - **Dates** (`TDateTime`, `IOptDateTime`...) are ISO 8601. **No zone is written**, and an offset
   on input is converted to UTC (`Parse_WithOffset_ConvertsToUtc`): keep `TDateTime` values in UTC
@@ -468,6 +472,9 @@ header). Where both ends must agree, one library on both: the mapper.
   `TCityInsert.Name` or `no published property of TOrder`. 0.5.0 raises `EJsonInputError` for
   input at fault, with JSON terms only (the Pascal side in `Detail`); the error handler answers
   it 400 and any other `EJsonMapperError` (a programming error) 500, logged.
+- **A large `Currency` on pascal-jsonmapper-faa before 0.6.0 (FPC)**: on Win64
+  `123456789012345.6789` came back as `...6768`, `High(Currency)` with its sign flipped, and
+  `0.00025` as `0.0003` (measured with `POST /prices`). Use 0.6.0 or later.
 - **`null` into a plain type keeps the old value** (step 2).
 - **Public properties**: invisible to the mapper on both compilers.
 - **`Length` for a "max N characters" rule**: it counts bytes on FPC and UTF-16 units on Delphi;

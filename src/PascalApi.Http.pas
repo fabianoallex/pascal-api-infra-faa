@@ -308,8 +308,11 @@ uses
   PascalApi.Text;
 
 // 0.12.0: EConstraintViolationException (0.11.0) and PascalCommon.SafeLog.
-{$IF PASCALDB_VERSION < 1200}
-  {$MESSAGE FATAL 'pascal-api-infra-faa needs pascal-db-faa 0.12.0 or later'}
+// 0.15.0: TSQLResult's operations return a copy and never change Self;
+// before, TTenantFilter.Prepare's ReplaceLiteral on its const parameter
+// leaked on FPC 3.2.2 Linux and changed the caller's variable on Win64.
+{$IF PASCALDB_VERSION < 1500}
+  {$MESSAGE FATAL 'pascal-api-infra-faa needs pascal-db-faa 0.15.0 or later'}
 {$IFEND}
 
 { EHttpException }

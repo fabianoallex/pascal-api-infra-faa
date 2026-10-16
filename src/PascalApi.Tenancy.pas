@@ -775,16 +775,13 @@ end;
 
 class procedure TTenantFilter.Prepare(const AQuery: IQuery; const AScope: TTenantDataScope;
   const ASql: TSQLResult);
-var
-  LSql: TSQLResult;
 begin
-  // A copy first: ReplaceLiteral changes Self (FSQL := ...; Result := Self),
-  // and called on the const parameter it leaked the new string on FPC 3.2.2
-  // Linux (one block per call, heaptrc) and changed the caller's variable on
-  // Win64 (measured; the dual-compiler skill's rtl-gotchas.md, "Memory /
+  // Safe on the const parameter since pascal-db-faa 0.15.0 (the minimum):
+  // ReplaceLiteral returns a copy. Before, it changed Self, which leaked the
+  // new string on FPC 3.2.2 Linux and changed the caller's variable on Win64
+  // (measured; the dual-compiler skill's rtl-gotchas.md, "Memory /
   // interfaces"). Test Filter_PrepareProcessedSql_TenantTag_ReplacesAndBinds.
-  LSql := ASql;
-  PrepareTenantSql(AQuery, AScope, LSql.ReplaceLiteral('TENANT', Condition).SQL);
+  PrepareTenantSql(AQuery, AScope, ASql.ReplaceLiteral('TENANT', Condition).SQL);
 end;
 
 end.
