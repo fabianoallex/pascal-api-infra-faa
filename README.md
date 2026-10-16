@@ -16,14 +16,15 @@ spans exported to an OpenTelemetry collector (OTLP), and opt-in multi-tenancy
 ([docs/multitenancy-design.md](docs/multitenancy-design.md)).
 Observability plan: [docs/observability-design.md](docs/observability-design.md). See [docs/plan.md](docs/plan.md).
 
-**Guides** for building an API with the library: [docs/guide](docs/guide/README.md) (so far:
-[getting started](docs/guide/getting-started.md), [configuration](docs/guide/configuration.md),
-[errors and validation](docs/guide/errors.md),
-[authentication](docs/guide/authentication.md), [rate limiting](docs/guide/rate-limiting.md),
-[database access](docs/guide/database.md),
-[logging and observability](docs/guide/observability.md), [DTOs and JSON](docs/guide/dtos-json.md), [OpenAPI](docs/guide/openapi.md), [MCP](docs/guide/mcp.md),
-[messaging, Redis, IPC](docs/guide/messaging.md),
-[multi-tenancy](docs/guide/multitenancy.md)).
+## Guides
+
+How to build an API with the library, one topic at a time (configuration, errors, DTOs,
+authentication, database, observability, OpenAPI, MCP, multi-tenancy...): **[docs/guide](docs/guide/README.md)**,
+which lists every guide and when to read it. Start with
+[getting started](docs/guide/getting-started.md).
+
+The guides say how; the design documents (`docs/*-design.md`) say why each decision was taken
+and what was measured.
 
 ## Contents
 
