@@ -33,6 +33,14 @@ For the general dual-compiler rules (project anatomy, `.inc`, mirrored tests, CI
 `dual-compiler-delphi-lazarus` skill. This file records only what is specific to this repo. The
 plan, the phases and what is still open are in `docs/plan.md`.
 
+**The skill is not in this repository.** It lives in
+[pascal-skills-faa](https://github.com/fabianoallex/pascal-skills-faa), a Claude Code plugin and
+marketplace. If the skill isn't loaded in this session, ask the user to install it (user scope,
+so it also reaches an application that uses this library as a submodule):
+`/plugin marketplace add fabianoallex/pascal-skills-faa`, then
+`/plugin install pascal-skills-faa@pascal-skills-faa`. Until then, read the index straight from
+GitHub: `dual-compiler-delphi-lazarus/references/faa-libraries.md` in that repository.
+
 **Guides for users** live in `docs/guide/` (index and template: `docs/guide/README.md`); the
 `docs/*-design.md` files are decision records. A change to a feature with a guide updates the
 guide too, and a guide's code comes from a sample that compiles and is tested.
