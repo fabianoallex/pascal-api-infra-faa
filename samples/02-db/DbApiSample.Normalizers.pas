@@ -1,6 +1,6 @@
 ﻿unit DbApiSample.Normalizers;
 
-{ The sample's normalizers, gathered in one factory (pascal-common-faa 1.13.0).
+{ The sample's normalizers, gathered in one factory (pascal-common-faa 1.14.0).
 
   TNorm inherits TPcStringNormalizers, so TNorm.Trim, Upper, Lower, FromFunc
   and Chain come from the library, and the editor lists the sample's own
@@ -12,15 +12,17 @@
   A normalizer changes a present value and keeps the state (absent stays
   absent, null stays null). The limits ("name" not empty, at most 100
   characters) stay in the repository's checks: a normalizer that cut the
-  name at 100 would hide a client's mistake instead of answering 400. }
+  name at 100 would hide a client's mistake instead of answering 400.
+
+  PascalCommon.Normalizers doesn't depend on the optionals: the same TNorm
+  rules also apply to a plain string (TNorm.CityName.Apply(S)). }
 
 {$IFDEF FPC}{$MODE DELPHI}{$H+}{$ENDIF}
 
 interface
 
 uses
-  PascalCommon.Optionals,
-  PascalCommon.Optionals.Normalizers;
+  PascalCommon.Normalizers;
 
 type
   TNorm = class(TPcStringNormalizers)

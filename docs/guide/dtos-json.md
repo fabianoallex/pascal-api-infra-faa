@@ -211,8 +211,9 @@ job. Sample 02's scenario sends `"  Natal   RN  "` and `" rn"` and gets `"Natal 
 back.
 
 The rules have a name and live in one unit, `DbApiSample.Normalizers`: a factory that inherits
-pascal-common-faa's `TPcStringNormalizers` (1.13.0), so typing `TNorm.` lists the sample's
-rules next to the library's `Trim`, `Upper`, `Lower`, `FromFunc` and `Chain`:
+pascal-common-faa's `TPcStringNormalizers` (unit `PascalCommon.Normalizers`, 1.14.0), so typing
+`TNorm.` lists the sample's rules next to the library's `Trim`, `Upper`, `Lower`, `FromFunc` and
+`Chain`:
 
 ```pascal
 type
@@ -253,6 +254,8 @@ end;
   reference count frees it, so no `try/finally`. `Map` and `Normalize` exist for every optional
   type, with its own function type and factory (`TPcCurrencyNormalizers`,
   `TPcDateTimeNormalizers`...).
+- `PascalCommon.Normalizers` doesn't depend on the optionals, so the same rules also clean a
+  plain value: `TNorm.CityName.Apply(S)`.
 - Keep the limits in the checks: sample 02 doesn't cut the name at 100 characters, because a
   normalizer that did would hide a client's mistake instead of answering 400.
 - Inherit the factory; don't write a class helper for it (Delphi and FPC 3.2 see one helper per
@@ -558,7 +561,7 @@ header). Where both ends must agree, one library on both: the mapper.
 - [pascal-jsonmapper-faa](https://github.com/fabianoallex/pascal-jsonmapper-faa): the contract
   (README), converters and the optionals bridge's rules (`docs/converters.md`).
 - pascal-common-faa: `PascalCommon.Optionals` (the 27 interfaces, `TOptionals.Safe`, the
-  normalizers that keep the state), `PascalCommon.Optionals.Normalizers` (the factories, 1.13.0)
+  normalizers that keep the state), `PascalCommon.Normalizers` (the factories, 1.14.0)
   and `bridges/jsonmapper/PascalCommon.JsonMapper.Optionals`.
 - `PascalApi.Dto` (the bases), `PascalApi.Pagination` (`ParseQueryInt`, `ParseQueryStr`,
   `PageRequestFrom`), `PascalApi.Http` (`TJsonSend`, `EValidationException`, `TApiMessages`).
