@@ -88,7 +88,7 @@ all (measured, skill `references/rtti-gotchas.md`).
 
 ## Dependencies
 
-`external/` holds the dependencies as git submodules, pinned: pascal-common-faa `v1.10.0` (the library itself needs 1.8.1; sample 02 uses 1.9.0's
+`external/` holds the dependencies as git submodules, pinned: pascal-common-faa `v1.13.0` (the library itself needs 1.8.1; sample 02 uses 1.9.0's
 string normalizers, `TOptionals.Trim`/`Upper`; the samples turn on 1.10.0's
 `PcSetSafeLogUtf8` and log only through `SafeWriteln`, never plain `Writeln`),
 pascal-jsonmapper-faa `v0.6.0` (refuses duplicate members; `EJsonInputError` = 400; exact
