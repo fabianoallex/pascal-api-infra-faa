@@ -159,7 +159,8 @@ uses
   PascalJsonMapper.Mapper,
   PascalApi.OpenApi,
   PascalApi.Http,
-  PascalApi.Text;
+  PascalApi.Text,
+  DbApiSample.Normalizers;
 
 const
   DIR = 'SQLITE';
@@ -430,11 +431,12 @@ var
   LScope: IScopeTransaction;
   LRows: Int64;
 begin
-  // Normalized inside the optionals (pascal-common-faa 1.9.0): an absent
-  // member stays absent, so there is no if here. HasValue is "the member
-  // came": for population, with a number or null.
-  LName := TOptionals.Trim(APatch.GetName);
-  LState := TOptionals.Upper(TOptionals.Trim(APatch.GetState));
+  // Normalized inside the optionals, by the rules of DbApiSample.Normalizers
+  // (pascal-common-faa 1.13.0): an absent member stays absent, so there is
+  // no if here. HasValue is "the member came": for population, with a
+  // number or null.
+  LName := TOptionals.Normalize(APatch.GetName, TNorm.CityName);
+  LState := TOptionals.Normalize(APatch.GetState, TNorm.StateCode);
   LPopulation := APatch.GetPopulation;
   // The same limits as Insert, for the members that came.
   if LName.HasValue and (LName.Value = '') then

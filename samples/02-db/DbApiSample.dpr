@@ -71,6 +71,7 @@ uses
   PascalCommon.Tracing,
   PascalCommon.SafeLog,
   PascalApi.Otlp,
+  DbApiSample.Normalizers in 'DbApiSample.Normalizers.pas',
   DbApiSample.Cities in 'DbApiSample.Cities.pas';
 
 var

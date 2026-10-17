@@ -136,8 +136,8 @@ status_is 200 "empty patch"
 body_is '{"code":"2408102","name":"Natal","state":"RN","population":890480}' "empty patch changes nothing"
 req PATCH /cities/2408102 '{"population":null}'
 body_is '{"code":"2408102","name":"Natal","state":"RN","population":null}' "patch null clears population"
-req PATCH /cities/2408102 '{"name":"  Natal RN  ","state":" rn"}'
-body_is '{"code":"2408102","name":"Natal RN","state":"RN","population":null}' "patch two members, normalized (TOptionals.Trim, Upper)"
+req PATCH /cities/2408102 '{"name":"  Natal   RN  ","state":" rn"}'
+body_is '{"code":"2408102","name":"Natal RN","state":"RN","population":null}' "patch two members, normalized (TNorm.CityName, StateCode)"
 req GET /cities/2408102 ""
 body_is '{"code":"2408102","name":"Natal RN","state":"RN","population":null}' "patch read back"
 req PATCH /cities/2408102 '{"name":null}'

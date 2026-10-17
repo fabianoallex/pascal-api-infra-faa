@@ -181,10 +181,10 @@ member that came into a block of SQL, so an absent member never reaches the `UPD
 (pascal-db-faa's `ProcessTag`, the same as its sample 06):
 
 ```pascal
-// Normalized inside the optionals (pascal-common-faa 1.9.0): an absent
-// member stays absent, so there is no if here.
-LName := TOptionals.Trim(APatch.GetName);
-LState := TOptionals.Upper(TOptionals.Trim(APatch.GetState));
+// Normalized inside the optionals, by the rules of DbApiSample.Normalizers:
+// an absent member stays absent, so there is no if here.
+LName := TOptionals.Normalize(APatch.GetName, TNorm.CityName);
+LState := TOptionals.Normalize(APatch.GetState, TNorm.StateCode);
 LPopulation := APatch.GetPopulation;
 ... // the checks: "name" not empty, at most 100 characters, "state" 2 letters...
 
@@ -204,14 +204,60 @@ LQuery.Params.OptNullIntegers['POPULATION'] := LPopulation;
 ```
 
 This is what the optional types are for: the DTO's member goes to its parameter as it is, and
-the three states need no `if`. pascal-common-faa 1.9.0's normalizers keep the state (Undefined
-stays Undefined, Null stays Null, only a value changes): `TOptionals.Trim`, `Upper`, `Lower`,
-`NullIfEmpty` (`''` becomes Null), `UndefinedIfEmpty`, and `Map(AValue, AFunc)` with a plain
-function (`function(const AValue: string): string`, not a method: the same on both compilers),
-for `IOptString`, `INullString` and `IOptNullString` (tested there). They work wherever the
-value goes: a parameter, a message, a response. The checks before the `UPDATE` still test
-`HasValue`: deciding is their job. Sample 02's scenario sends `"  Natal RN  "` and `" rn"` and
-gets `"Natal RN"` and `"RN"` back.
+the three states need no `if`. The normalizers keep the state (Undefined stays Undefined, Null
+stays Null, only a value changes), and they work wherever the value goes: a parameter, a
+message, a response. The checks before the `UPDATE` still test `HasValue`: deciding is their
+job. Sample 02's scenario sends `"  Natal   RN  "` and `" rn"` and gets `"Natal RN"` and `"RN"`
+back.
+
+The rules have a name and live in one unit, `DbApiSample.Normalizers`: a factory that inherits
+pascal-common-faa's `TPcStringNormalizers` (1.13.0), so typing `TNorm.` lists the sample's
+rules next to the library's `Trim`, `Upper`, `Lower`, `FromFunc` and `Chain`:
+
+```pascal
+type
+  TNorm = class(TPcStringNormalizers)
+  public
+    class function CollapseSpaces: IPcStringNormalizer; static;
+    class function CityName: IPcStringNormalizer; static;
+    class function StateCode: IPcStringNormalizer; static;
+  end;
+
+implementation
+
+function CollapseSpacesOf(const AValue: string): string; // a plain function
+...
+
+class function TNorm.CollapseSpaces: IPcStringNormalizer;
+begin
+  Result := FromFunc(CollapseSpacesOf);
+end;
+
+class function TNorm.CityName: IPcStringNormalizer;
+begin
+  Result := Chain([Trim, CollapseSpaces]); // applied in order, as one
+end;
+
+class function TNorm.StateCode: IPcStringNormalizer;
+begin
+  Result := Chain([Trim, Upper]);
+end;
+```
+
+- A normalizer changes the value, never the state. To turn `''` into Null or Undefined, call
+  `NullIfEmpty` or `UndefinedIfEmpty` after it: `TOptionals.Safe(LDto.Nickname).Trim.NullIfEmpty`.
+- The same operations are chainable methods (`X.Trim.Upper`, `X.Normalize(N)`, `X.Map(F)`). A
+  method can't be called on `nil`: start with `TOptionals.Safe(X)`, or use the `TOptionals`
+  form, which reads `nil` as Undefined (the sample's form).
+- A rule with a parameter (a maximum length) is a class implementing `IPcStringNormalizer`; the
+  reference count frees it, so no `try/finally`. `Map` and `Normalize` exist for every optional
+  type, with its own function type and factory (`TPcCurrencyNormalizers`,
+  `TPcDateTimeNormalizers`...).
+- Keep the limits in the checks: sample 02 doesn't cut the name at 100 characters, because a
+  normalizer that did would hide a client's mistake instead of answering 400.
+- Inherit the factory; don't write a class helper for it (Delphi and FPC 3.2 see one helper per
+  type, so two would hide each other). The details: pascal-common-faa's README, "One place for
+  your normalizers".
 
 The create works the same way: its population is a tagged block in the `INSERT`, gone when the
 member is absent (the column takes its default, `NULL`), and bound with
@@ -511,8 +557,9 @@ header). Where both ends must agree, one library on both: the mapper.
 
 - [pascal-jsonmapper-faa](https://github.com/fabianoallex/pascal-jsonmapper-faa): the contract
   (README), converters and the optionals bridge's rules (`docs/converters.md`).
-- pascal-common-faa: `PascalCommon.Optionals` (the 27 interfaces, `TOptionals.Safe`) and
-  `bridges/jsonmapper/PascalCommon.JsonMapper.Optionals`.
+- pascal-common-faa: `PascalCommon.Optionals` (the 27 interfaces, `TOptionals.Safe`, the
+  normalizers that keep the state), `PascalCommon.Optionals.Normalizers` (the factories, 1.13.0)
+  and `bridges/jsonmapper/PascalCommon.JsonMapper.Optionals`.
 - `PascalApi.Dto` (the bases), `PascalApi.Pagination` (`ParseQueryInt`, `ParseQueryStr`,
   `PageRequestFrom`), `PascalApi.Http` (`TJsonSend`, `EValidationException`, `TApiMessages`).
 - Samples: `samples/01-api` (POST), `samples/02-db` (PATCH, the query string, `NULL`),

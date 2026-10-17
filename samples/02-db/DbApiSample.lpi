@@ -59,6 +59,10 @@
         <IsPartOfProject Value="True"/>
       </Unit>
       <Unit>
+        <Filename Value="DbApiSample.Normalizers.pas"/>
+        <IsPartOfProject Value="True"/>
+      </Unit>
+      <Unit>
         <Filename Value="DbApiSample.Cities.pas"/>
         <IsPartOfProject Value="True"/>
       </Unit>
