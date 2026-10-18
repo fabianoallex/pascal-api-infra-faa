@@ -335,7 +335,7 @@ keys). Non-ASCII test data used in an expression goes in a typed `string` consta
 | Delphi | open `PascalApi.groupproj`, build `PascalApi.UnitTests`, `ApiSample`, `DbApiSample` and `TenantApiSample` (Win32 and Win64); run the tests; start `ApiSample.exe` and run `sh tools/http_scenarios.sh 9310`; start `DbApiSample.exe 9330 --reset` and run `sh tools/http_scenarios_db.sh 9330`; start `TenantApiSample.exe 9350 --reset` and run `sh tools/http_scenarios_tenants.sh 9350` |
 
 The middlewares are tested in two layers: their decisions in `PascalApi.HttpTests` (no server),
-and over real HTTP by `tools/http_scenarios.sh` (curl, 190 checks) against `samples/01-api`,
+and over real HTTP by `tools/http_scenarios.sh` (curl, 195 checks) against `samples/01-api`,
 which uses every middleware. In-process servers aren't used: on FPC, Horse's `Listen` blocks in
 `THTTPApplication.Run` and there is no `StopListen`.
 

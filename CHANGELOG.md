@@ -6,6 +6,26 @@ may change the API; each such change is listed here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`EValidationException.CreateFmt` answered `HTTP/1.1 0`.** The constructors the HTTP
+  exceptions inherit from `Exception` (`CreateFmt`, `CreateRes`...) never set `StatusCode`, so
+  it stayed 0 and the error handler sent status 0, which clients refuse (curl: "Unsupported
+  HTTP/1 subversion"; measured on FPC Windows by pascal-agenda-faa, the library's first
+  application). `EHttpException.AfterConstruction` now gives such an exception its class's
+  `DefaultStatusCode` (400, 404, 409, 401; 500 for `EHttpException`), and `MapException` answers
+  a status outside 100-599 with a 500, logged. Tested; `/fail/createfmt` in sample 01.
+
+### Added
+
+- `EUnauthorizedException` (401) for handlers, and an optional code on `EHttpException`,
+  `EValidationException` and `EConflictException` (`Create(..., ACode)`, property `Code`), sent
+  as `"code"` next to `"error"` (`ErrorJson(AMessage, ARequestId, ACode)`,
+  `TErrorResponse.Code`). Every 401 an `EHttpException` becomes carries `WWW-Authenticate:
+  Bearer` (`TErrorResponse.Challenge`), as the authentication middlewares' 401s do; until now a
+  handler's 401 had none, which HTTP requires. `/fail/unauthorized` in sample 01.
+- `EHttpException.DefaultStatusCode` (virtual class function), for subclasses.
+
 ## [0.16.0] - 2026-10-18
 
 The middlewares' marks on a request live in Horse's request scope instead of request headers,

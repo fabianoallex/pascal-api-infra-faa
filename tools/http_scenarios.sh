@@ -227,6 +227,15 @@ body_is "{\"error\":\"An unexpected error occurred.\",\"requestId\":\"$MW_ID\"}"
 req GET '/fail/middleware?kind=validation' "" -H "$AUTH"
 status_is 400 "middleware validation error"
 body_is '{"error":"\"kind\" was rejected by a middleware."}' "middleware validation error"
+# CreateFmt is Exception's: until 0.17.0 it left the status 0, and the
+# answer was "HTTP/1.1 0" (curl: status 000).
+req GET /fail/createfmt "" -H "$AUTH"
+status_is 400 "CreateFmt keeps its class's status"
+body_is '{"error":"\"name\" is required."}' "CreateFmt keeps its class's status"
+req GET /fail/unauthorized "" -H "$AUTH"
+status_is 401 "a handler's 401"
+body_is '{"error":"Invalid email or password.","code":"invalid_credentials"}' "a handler's 401: its code"
+header_is WWW-Authenticate 'Bearer' "a handler's 401: its scheme"
 
 # --- rate limit: 3 per minute per X-Client
 for N in 2 1 0; do

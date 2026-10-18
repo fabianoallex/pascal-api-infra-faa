@@ -36,6 +36,10 @@ type
     procedure TearDown; override;
   published
     procedure HttpExceptions_KeepStatusAndMessage;
+    procedure HttpExceptions_CreateFmt_GetsTheClassStatus;
+    procedure HttpException_StatusOutsideHttp_Is500_Logged;
+    procedure HttpException_Code_IsMapped;
+    procedure Http401_NamesItsScheme;
     procedure NotFound_DefaultMessage;
     procedure OrderBy_Is400;
     procedure Encoding_Is400_NotLogged;
@@ -52,6 +56,7 @@ type
     procedure Messages_CanBeReplaced;
     procedure ErrorJson_EscapesAndKeepsNonAscii;
     procedure ErrorJson_RequestIdOnlyWhenGiven;
+    procedure ErrorJson_CodeOnlyWhenGiven;
   end;
 
   THttpHelpersTests = class(TTestCase)
@@ -123,6 +128,64 @@ begin
   TAssert.AssertEquals('', R.LogLine);
   TAssert.AssertEquals(409, Map(EConflictException.Create('x')).Status);
   TAssert.AssertEquals(418, Map(EHttpException.Create(418, 'teapot')).Status);
+end;
+
+// CreateFmt is Exception's: until 0.17.0 it left StatusCode 0, answered as
+// "HTTP/1.1 0" (found by pascal-agenda-faa).
+procedure TErrorMappingTests.HttpExceptions_CreateFmt_GetsTheClassStatus;
+var
+  R: TErrorResponse;
+begin
+  R := Map(EValidationException.CreateFmt('"%s" is required.', ['name']));
+  TAssert.AssertEquals(400, R.Status);
+  TAssert.AssertEquals('"name" is required.', R.Message);
+  TAssert.AssertEquals('', R.LogLine);
+  TAssert.AssertEquals(404, Map(ENotFoundException.CreateFmt('City %s not found.', ['1'])).Status);
+  TAssert.AssertEquals(409, Map(EConflictException.CreateFmt('%d exists', [1])).Status);
+  TAssert.AssertEquals(401, Map(EUnauthorizedException.CreateFmt('%s', ['no'])).Status);
+  TAssert.AssertEquals(500, Map(EHttpException.CreateFmt('%s', ['base'])).Status);
+  // The explicit constructors keep theirs.
+  TAssert.AssertEquals(418, Map(EHttpException.Create(418, 'teapot', 'tea')).Status);
+end;
+
+procedure TErrorMappingTests.HttpException_StatusOutsideHttp_Is500_Logged;
+var
+  R: TErrorResponse;
+begin
+  R := Map(EHttpException.Create(42, 'not a status'));
+  TAssert.AssertEquals(500, R.Status);
+  TAssert.AssertEquals(TApiMessages.English.InternalError, R.Message);
+  TAssert.AssertTrue(R.LogLine, Pos('with status 42, not an HTTP status: not a status', R.LogLine) > 0);
+  TAssert.AssertEquals(500, Map(EHttpException.Create(600, 'x')).Status);
+  TAssert.AssertEquals(500, Map(EHttpException.Create(-1, 'x')).Status);
+  TAssert.AssertEquals(599, Map(EHttpException.Create(599, 'x')).Status);
+  TAssert.AssertEquals(100, Map(EHttpException.Create(100, 'x')).Status);
+end;
+
+procedure TErrorMappingTests.HttpException_Code_IsMapped;
+begin
+  TAssert.AssertEquals('tenant_frozen', Map(EHttpException.Create(403, 'm', 'tenant_frozen')).Code);
+  TAssert.AssertEquals('bad_name', Map(EValidationException.Create('m', 'bad_name')).Code);
+  TAssert.AssertEquals('taken', Map(EConflictException.Create('m', 'taken')).Code);
+  TAssert.AssertEquals('', Map(EValidationException.Create('m')).Code);
+  TAssert.AssertEquals('', Map(EInvalidOpException.Create('m')).Code);
+end;
+
+procedure TErrorMappingTests.Http401_NamesItsScheme;
+var
+  R: TErrorResponse;
+begin
+  R := Map(EUnauthorizedException.Create('Invalid email or password.', 'invalid_credentials'));
+  TAssert.AssertEquals(401, R.Status);
+  TAssert.AssertEquals('Invalid email or password.', R.Message);
+  TAssert.AssertEquals('invalid_credentials', R.Code);
+  TAssert.AssertEquals('Bearer', R.Challenge);
+  TAssert.AssertEquals('', R.LogLine);
+  TAssert.AssertEquals('', Map(EUnauthorizedException.Create('m')).Code);
+  TAssert.AssertEquals('Bearer', Map(EHttpException.Create(401, 'm')).Challenge);
+  TAssert.AssertEquals('', Map(EHttpException.Create(403, 'm')).Challenge);
+  TAssert.AssertEquals('', Map(EValidationException.Create('m')).Challenge);
+  TAssert.AssertEquals('', Map(EInvalidOpException.Create('m')).Challenge);
 end;
 
 procedure TErrorMappingTests.NotFound_DefaultMessage;
@@ -302,6 +365,14 @@ begin
   finally
     LParsed.Free;
   end;
+end;
+
+procedure TErrorMappingTests.ErrorJson_CodeOnlyWhenGiven;
+begin
+  TAssert.AssertEquals('{"error":"m","code":"c"}', ErrorJson('m', '', 'c'));
+  TAssert.AssertEquals('{"error":"m","code":"c","requestId":"4bf92f3577b34da6a3ce929d0e0e4736"}',
+    ErrorJson('m', '4bf92f3577b34da6a3ce929d0e0e4736', 'c'));
+  TAssert.AssertEquals('{"error":"m"}', ErrorJson('m', '', ''));
 end;
 
 procedure TErrorMappingTests.ErrorJson_RequestIdOnlyWhenGiven;

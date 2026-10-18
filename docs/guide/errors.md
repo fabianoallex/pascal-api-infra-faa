@@ -63,12 +63,47 @@ error handler, registered with `TErrorHandlerMiddleware.Register`, answers it:
 | `ENotFoundException.Create` | 404 | `TApiMessages.NotFound` ("Resource not found.") |
 | `ENotFoundException.Create(AMessage)` | 404 | your message |
 | `EConflictException.Create(AMessage)` | 409 | your message |
+| `EUnauthorizedException.Create(AMessage)` | 401 | your message, and `WWW-Authenticate: Bearer` |
 | `EHttpException.Create(AStatus, AMessage)` | `AStatus` | your message |
 
-All five are client errors: expected outcomes, not logged, with no `requestId` (tested:
+All of them are client errors: expected outcomes, not logged, with no `requestId` (tested:
 `HttpExceptions_KeepStatusAndMessage`, `NotFound_DefaultMessage`; `EHttpException.Create(418,
 ...)` keeps its 418, and the probe answered `EHttpException.Create(422, 'Value out of range.')`
 with a 422 and that body).
+
+**A code the client can branch on** (0.17.0): `EValidationException`, `EConflictException`,
+`EUnauthorizedException` and `EHttpException` take one more argument, sent as `"code"` next to
+`"error"`. From `samples/01-api` (`/fail/unauthorized`, checked by `tools/http_scenarios.sh`):
+
+```pascal
+raise EUnauthorizedException.Create('Invalid email or password.', 'invalid_credentials');
+```
+
+```
+401  WWW-Authenticate: Bearer
+     {"error":"Invalid email or password.","code":"invalid_credentials"}
+```
+
+The message is for people and may be translated ([step 6](#6-the-messages-in-english-or-portuguese));
+the code is for programs and stays the same. Without one, the body has no `"code"`.
+
+**Every 401 names its scheme.** HTTP requires `WWW-Authenticate` on a 401 (RFC 9110, 11.6.1):
+the error handler adds `Bearer` to any 401 an `EHttpException` becomes, as the authentication
+middlewares do for theirs (tested: `Http401_NamesItsScheme`).
+
+**`CreateFmt` works** (0.17.0): the constructors these classes inherit from `Exception`
+(`CreateFmt`, `CreateRes`...) give the class's own status, 400, 404, 409, 401, and 500 for
+`EHttpException` itself:
+
+```pascal
+raise EValidationException.CreateFmt('"%s" is required.', [AName]);   // 400
+```
+
+Until 0.17.0 they left the status 0, and the error handler answered `HTTP/1.1 0`, which clients
+refuse (curl: "Unsupported HTTP/1 subversion", status `000`; the access log said `"status":0`),
+found by pascal-agenda-faa on FPC/Windows. A status that can't go on a status line (below 100,
+above 599) is answered as a 500 and logged (tested: `HttpExceptions_CreateFmt_GetsTheClassStatus`,
+`HttpException_StatusOutsideHttp_Is500_Logged`; `/fail/createfmt` over HTTP).
 
 From `samples/01-api/ApiSample.Cities.pas`:
 
@@ -279,7 +314,8 @@ a validation is missing on the server. If your clients expect 422 for invalid fi
 
 ### Your own exception classes
 
-Derive from `EHttpException` to give an error of your domain a name and a status:
+Derive from `EHttpException` to give an error of your domain a name and a status (override
+`DefaultStatusCode` too, so its inherited `CreateFmt` gets that status):
 
 ```pascal
 type
@@ -300,8 +336,8 @@ registration. Any other exception class is a 500.
 ### English or Portuguese
 
 One language per process. The messages are chosen at startup, not per request: there is no
-`Accept-Language` support. An API with clients in both languages would send a code the client
-translates, which the library doesn't have today.
+`Accept-Language` support. An API with clients in both languages sends a code (step 1) the
+client translates; the library's own messages (`TApiMessages`) have none.
 
 ## Pitfalls
 

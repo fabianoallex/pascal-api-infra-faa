@@ -19,6 +19,10 @@
     GET  /fail/database       the database is down: 503
     GET  /fail/busy           no free database connection in time: 503
     GET  /fail/middleware     a middleware raises: 500 (?kind=validation: 400)
+    GET  /fail/createfmt      EValidationException.CreateFmt: 400 (until 0.17.0
+                              status 0, an "HTTP/1.1 0" answer)
+    GET  /fail/unauthorized   EUnauthorizedException with a code: 401, its
+                              WWW-Authenticate and "code"
     GET  /limited             rate limited: 3 requests per minute per X-Client header
     GET  /trace               the request's trace context, as the handler sees it
     PUT  /maintenance         {"on":true|false}; while on, /health/ready answers 503
@@ -226,6 +230,16 @@ end;
 
 // What pascal-db-faa's pool raises when every connection stayed busy for the
 // whole wait.
+procedure FailCreateFmt(AReq: THorseRequest; ARes: THorseResponse; ANext: TNextProc);
+begin
+  raise EValidationException.CreateFmt('"%s" is required.', ['name']);
+end;
+
+procedure FailUnauthorized(AReq: THorseRequest; ARes: THorseResponse; ANext: TNextProc);
+begin
+  raise EUnauthorizedException.Create('Invalid email or password.', 'invalid_credentials');
+end;
+
 procedure FailBusy(AReq: THorseRequest; ARes: THorseResponse; ANext: TNextProc);
 begin
   raise EPoolTimeoutException.Create(5, 5, 3, 50);
@@ -372,6 +386,10 @@ begin
     .Error(503).Register(FailDatabase);
   TRouteDoc.Get('/fail/busy').Summary('Always 503 (pool timeout)').Tag('errors').NoMcp
     .Error(503).Register(FailBusy);
+  TRouteDoc.Get('/fail/createfmt').Summary('Always 400 (CreateFmt)').Tag('errors').NoMcp
+    .Error(400).Register(FailCreateFmt);
+  TRouteDoc.Get('/fail/unauthorized').Summary('Always 401 with a code').Tag('errors').NoMcp
+    .Error(401).Register(FailUnauthorized);
   THorse.Use('/fail/middleware', FailingMiddleware);
   TRouteDoc.Get('/fail/middleware').Summary('A middleware raises').Tag('errors').NoMcp
     .QueryParam('kind', 'validation: a 400').Error(400).Error(500).Register(NeverReached);

@@ -386,16 +386,18 @@ var
   LRequestId: string;
 begin
   LError := MapException(AException, ARequest.Method, ARequest.PathInfo);
+  if LError.Challenge <> '' then
+    AResponse.AddHeader('WWW-Authenticate', LError.Challenge);
   if LError.LogLine = '' then
   begin
-    SendError(AResponse, LError.Status, LError.Message);
+    TJsonSend.Send(AResponse, ErrorJson(LError.Message, '', LError.Code), LError.Status);
     Exit;
   end;
   // A logged error: the body carries the id its log line ends with.
   LRequestId := LoggedRequestId(ARequest);
   if Assigned(GOnError) then
     GOnError(WithTraceId(LError.LogLine, LRequestId));
-  TJsonSend.Send(AResponse, ErrorJson(LError.Message, LRequestId), LError.Status);
+  TJsonSend.Send(AResponse, ErrorJson(LError.Message, LRequestId, LError.Code), LError.Status);
 end;
 
 class procedure TErrorHandlerMiddleware.Register;

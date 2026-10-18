@@ -39,7 +39,19 @@
   - Any other exception is a 500 with a fixed message
     (TApiMessages.InternalError); its class and message go to the error log
     only. The origin, and this unit until 0.13.0, sent E.Message to the
-    client, which can carry paths, hosts or SQL. *)
+    client, which can carry paths, hosts or SQL.
+  - An EHttpException built through a constructor it inherits from
+    Exception (CreateFmt, CreateRes...) gets its class's status
+    (DefaultStatusCode: 400, 404, 409, 401; 500 for the base class) in
+    AfterConstruction. Until 0.17.0 such an exception kept StatusCode 0, and
+    the error handler answered "HTTP/1.1 0", which clients refuse (found by
+    pascal-agenda-faa, measured on FPC Windows: curl's "Unsupported HTTP/1
+    subversion"). A status outside 100-599 that still reaches MapException
+    is a 500, logged.
+  - An EHttpException may carry a Code (0.17.0), sent as "code" next to
+    "error", for clients that branch on it; and every 401 it becomes names
+    its scheme (TErrorResponse.Challenge: 'Bearer'), as the middlewares'
+    401s do. EUnauthorizedException is the 401 for handlers (a login). *)
 
 interface
 
@@ -58,27 +70,51 @@ type
   EHttpException = class(Exception)
   private
     FStatusCode: Integer;
+    FCode: string;
   public
-    constructor Create(AStatusCode: Integer; const AMessage: string);
+    constructor Create(AStatusCode: Integer; const AMessage: string); overload;
+    /// ACode: a machine-readable name of the refusal, sent as "code"
+    /// ('' sends none).
+    constructor Create(AStatusCode: Integer; const AMessage, ACode: string); overload;
+    /// The status of a subclass built through an inherited Exception
+    /// constructor (CreateFmt...): 500 here, each subclass its own.
+    class function DefaultStatusCode: Integer; virtual;
+    /// Gives StatusCode its class's default when a constructor inherited
+    /// from Exception left it 0.
+    procedure AfterConstruction; override;
     property StatusCode: Integer read FStatusCode;
+    property Code: string read FCode;
   end;
 
   /// 400: invalid field, missing parameter, business rule broken.
   EValidationException = class(EHttpException)
   public
-    constructor Create(const AMessage: string);
+    constructor Create(const AMessage: string); overload;
+    constructor Create(const AMessage, ACode: string); overload;
+    class function DefaultStatusCode: Integer; override;
+  end;
+
+  /// 401 from a handler (a login refused): answered with WWW-Authenticate,
+  /// as the authentication middlewares' 401s.
+  EUnauthorizedException = class(EHttpException)
+  public
+    constructor Create(const AMessage: string; const ACode: string = '');
+    class function DefaultStatusCode: Integer; override;
   end;
 
   /// 404: no resource with the given identifier.
   ENotFoundException = class(EHttpException)
   public
     constructor Create(const AMessage: string = '');
+    class function DefaultStatusCode: Integer; override;
   end;
 
   /// 409: uniqueness conflict or incompatible state.
   EConflictException = class(EHttpException)
   public
-    constructor Create(const AMessage: string);
+    constructor Create(const AMessage: string); overload;
+    constructor Create(const AMessage, ACode: string); overload;
+    class function DefaultStatusCode: Integer; override;
   end;
 
   TApiMessages = record
@@ -110,6 +146,10 @@ type
   TErrorResponse = record
     Status: Integer;
     Message: string;
+    /// The EHttpException's Code, sent as "code"; '' for none.
+    Code: string;
+    /// The WWW-Authenticate value a 401 needs ('Bearer'); '' otherwise.
+    Challenge: string;
     /// What goes to the error log; '' when the exception is an expected
     /// outcome (a client error) and isn't logged.
     LogLine: string;
@@ -184,6 +224,10 @@ function ErrorJson(const AMessage: string): string; overload;
 /// (TErrorResponse.LogLine <> ''), so the id a client reports leads support
 /// to the log line (which ends with trace_id=<the same id>).
 function ErrorJson(const AMessage, ARequestId: string): string; overload;
+
+/// {"error":"<message>","code":"<ACode>","requestId":"<ARequestId>"}; code
+/// and requestId only when not ''.
+function ErrorJson(const AMessage, ARequestId, ACode: string): string; overload;
 
 /// The CORS headers for a request from ARequestOrigin; none when the origin
 /// isn't allowed.
@@ -323,9 +367,49 @@ begin
   FStatusCode := AStatusCode;
 end;
 
+constructor EHttpException.Create(AStatusCode: Integer; const AMessage, ACode: string);
+begin
+  inherited Create(AMessage);
+  FStatusCode := AStatusCode;
+  FCode := ACode;
+end;
+
+class function EHttpException.DefaultStatusCode: Integer;
+begin
+  Result := 500;
+end;
+
+procedure EHttpException.AfterConstruction;
+begin
+  inherited AfterConstruction;
+  // CreateFmt, CreateRes... are Exception's: they never set the status.
+  if FStatusCode = 0 then
+    FStatusCode := DefaultStatusCode;
+end;
+
 constructor EValidationException.Create(const AMessage: string);
 begin
   inherited Create(400, AMessage);
+end;
+
+constructor EValidationException.Create(const AMessage, ACode: string);
+begin
+  inherited Create(400, AMessage, ACode);
+end;
+
+class function EValidationException.DefaultStatusCode: Integer;
+begin
+  Result := 400;
+end;
+
+constructor EUnauthorizedException.Create(const AMessage, ACode: string);
+begin
+  inherited Create(401, AMessage, ACode);
+end;
+
+class function EUnauthorizedException.DefaultStatusCode: Integer;
+begin
+  Result := 401;
 end;
 
 constructor ENotFoundException.Create(const AMessage: string);
@@ -336,9 +420,24 @@ begin
     inherited Create(404, AMessage);
 end;
 
+class function ENotFoundException.DefaultStatusCode: Integer;
+begin
+  Result := 404;
+end;
+
 constructor EConflictException.Create(const AMessage: string);
 begin
   inherited Create(409, AMessage);
+end;
+
+constructor EConflictException.Create(const AMessage, ACode: string);
+begin
+  inherited Create(409, AMessage, ACode);
+end;
+
+class function EConflictException.DefaultStatusCode: Integer;
+begin
+  Result := 409;
 end;
 
 { TApiMessages }
@@ -408,12 +507,28 @@ var
 begin
   LMessages := TApiMessages.Current;
   Result.LogLine := '';
+  Result.Code := '';
+  Result.Challenge := '';
 
+  // An HTTP status that can't go on a status line: the code that raised it
+  // is wrong, and the client gets a plain 500.
+  if (E is EHttpException) and
+    ((EHttpException(E).StatusCode < 100) or (EHttpException(E).StatusCode > 599)) then
+  begin
+    Result.Status := 500;
+    Result.Message := LMessages.InternalError;
+    Result.LogLine := Format('%s %s -> %d: %s with status %d, not an HTTP status: %s',
+      [AMethod, APath, Result.Status, E.ClassName, EHttpException(E).StatusCode, E.Message]);
+  end
   // Client errors: expected outcomes, not logged.
-  if E is EHttpException then
+  else if E is EHttpException then
   begin
     Result.Status := EHttpException(E).StatusCode;
     Result.Message := E.Message;
+    Result.Code := EHttpException(E).Code;
+    // HTTP requires the scheme on every 401 (RFC 9110, 11.6.1).
+    if Result.Status = 401 then
+      Result.Challenge := BearerChallenge(False);
   end
   else if E is EOrderByException then
   begin
@@ -502,6 +617,11 @@ begin
 end;
 
 function ErrorJson(const AMessage, ARequestId: string): string;
+begin
+  Result := ErrorJson(AMessage, ARequestId, '');
+end;
+
+function ErrorJson(const AMessage, ARequestId, ACode: string): string;
 var
   LWriter: TJsonWriter;
 begin
@@ -510,6 +630,11 @@ begin
     LWriter.BeginObject;
     LWriter.Name('error');
     LWriter.WriteString(AMessage);
+    if ACode <> '' then
+    begin
+      LWriter.Name('code');
+      LWriter.WriteString(ACode);
+    end;
     if ARequestId <> '' then
     begin
       LWriter.Name('requestId');
