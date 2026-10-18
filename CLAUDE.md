@@ -88,8 +88,8 @@ all (measured, skill `references/rtti-gotchas.md`).
 
 ## Dependencies
 
-`external/` holds the dependencies as git submodules, pinned: pascal-common-faa `v1.13.0` (the library itself needs 1.8.1; sample 02 uses 1.13.0's
-normalizer factories, `TNorm = class(TPcStringNormalizers)` in `DbApiSample.Normalizers`; the samples turn on 1.10.0's
+`external/` holds the dependencies as git submodules, pinned: pascal-common-faa `v1.14.0` (the library itself needs 1.8.1; sample 02 uses 1.14.0's
+normalizer factories, unit `PascalCommon.Normalizers`, `TNorm = class(TPcStringNormalizers)` in `DbApiSample.Normalizers`; the samples turn on 1.10.0's
 `PcSetSafeLogUtf8` and log only through `SafeWriteln`, never plain `Writeln`),
 pascal-jsonmapper-faa `v0.6.0` (refuses duplicate members; `EJsonInputError` = 400; exact
 `Currency` on FPC), pascal-db-faa `v0.15.0` (`TSQLResult`'s operations

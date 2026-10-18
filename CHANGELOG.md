@@ -12,6 +12,14 @@ may change the API; each such change is listed here.
   files, code rules, mirrored tests and CI for an application of your own on Delphi and
   Lazarus/FPC, and the Claude Code skills that carry the rules (pascal-skills-faa).
 
+### Changed
+
+- The pascal-common-faa submodule (used by this repository's tests and samples) moved from
+  1.10.0 to 1.14.0. Sample 02 names its normalization rules in a factory
+  (`DbApiSample.Normalizers`, `TNorm = class(TPcStringNormalizers)` from
+  `PascalCommon.Normalizers`), and the DTOs and JSON guide shows it. The library's own minimum
+  stays 1.8.1: `src` doesn't use normalizers.
+
 ## [0.14.0] - 2026-10-16
 
 The user guides (`docs/guide/`, twelve topics), the fixes found while writing them, and the
