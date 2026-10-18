@@ -294,3 +294,9 @@ minimum), `TRotatingJwtKeyRing` with the database, memory and Redis stores (`src
 pascal-redis-faa 0.2.0 as a test-only submodule); sample 03's `JWT_KEY_STORE=db|redis`, checked
 by `tools/http_scenarios_jwt_rotation.sh` with two instances (22 checks each). FPC on Windows
 and Linux and Delphi 12 Win32/Win64: 323 tests, 0 leaks; 186 + 93 + 107 + 22 + 22 checks.
+
+Phase 3 done on 2026-10-18 (unreleased): `TTenantJwtKeyRing` in `PascalApi.Tenancy`, a key ring
+per tenant with the claim checked against the key's tenant; sample 03's `db`/`redis` modes use
+it (29 and 25 checks). FPC on Windows and Linux and Delphi 12 Win32/Win64: 330 tests, 0 leaks.
+Three choices taken as consequences of the design ("Phase 3 as built" in
+`docs/jwt-keys-design.md`), shown to the user, no change asked. All three phases done.

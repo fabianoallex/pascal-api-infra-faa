@@ -32,9 +32,11 @@
   scenario script signs itself. A token lives at most one hour (the ring's
   MaxTokenSeconds).
 
-  With JWT_KEY_STORE=db the keys are generated instead, kept in the control
-  database (TDbJwtKeyStore, table JWT_KEYS) and rotated by the ring itself
-  (TRotatingJwtKeyRing, phase 2): every JWT_ROTATE_SECONDS (default 30 days)
+  With JWT_KEY_STORE=db the keys are generated instead, one ring per tenant
+  (TTenantJwtKeyRing, phase 3: kid "<tenant>/<hex>", and a tenant's key
+  verifies only tokens whose tenant_id names it), kept in the control
+  database (TDbJwtKeyStore, table JWT_KEYS) and rotated by the rings
+  themselves (TRotatingJwtKeyRing, phase 2): every JWT_ROTATE_SECONDS (default 30 days)
   a new key, signing JWT_PROPAGATION_SECONDS later (default 120), the keys
   read again every JWT_RELOAD_SECONDS (default 60); an old key verifies one
   token lifetime after the next one signs. JWT_SECRET stays the legacy
@@ -488,7 +490,7 @@ var
   LMode: string;
   LOptions: TJwtRotationOptions;
   LStore: IJwtKeyStore;
-  LRing: TRotatingJwtKeyRing;
+  LRing: TTenantJwtKeyRing;
   LParams: TRedisParams;
 begin
   LMode := LowerCase(TAppConfig.Get('JWT_KEY_STORE', 'static'));
@@ -517,11 +519,11 @@ begin
     LStore := TRedisJwtKeyStore.Create(TRedisClient.Create(LParams),
       TAppConfig.Get('JWT_REDIS_PREFIX', 'tenants-api:'), True);
   end;
-  LRing := TRotatingJwtKeyRing.Create(LStore, LOptions);
-  Result := LRing;
   // A reload that fails later keeps the loaded keys; the log says so.
-  LRing.OnError := ALog.Error;
-  SafeWriteln('JWT keys: generated, in %s (%d loaded)', [LMode, Length(LRing.Keys)]);
+  LRing := TTenantJwtKeyRing.Create(GCatalog, LStore, LOptions, GClaim, ALog.Error);
+  Result := LRing;
+  SafeWriteln('JWT keys: generated, in %s, one ring per tenant (%d tenants)',
+    [LMode, LRing.TenantCount]);
 end;
 
 var

@@ -36,6 +36,15 @@
     for a JOIN (measured on SQLite 3.50: a bare TENANT_ID with two tables
     that have it is "ambiguous column name", and a join whose ON lacks the
     tenant returns the other tenants' joined rows).
+  - TTenantJwtKeyRing: one rotating JWT key ring per tenant (PascalApi.JwtKeys,
+    decision 8 of docs/jwt-keys-design.md). A tenant's kid is
+    "<tenant>/<16 hex>"; a token verifies only with its tenant's key AND
+    when its tenant claim names that tenant, so one tenant's key can't sign
+    for another. Rings exist for the catalog's tenants (read at creation and
+    again every ReloadSeconds, on a request) and for a tenant that signs (a
+    login, which the application checked against the catalog): a kid naming
+    any other tenant is refused without a query, the store and the catalog
+    never asked.
   - CheckTenant, TenantIdFromClaims and TenantRejection: a token's tenant
     against the catalog, and the status and body of each refusal (401 no
     tenant or a removed one, 403 suspended, with "code":"tenant_suspended").
@@ -54,7 +63,9 @@ uses
   Generics.Collections,
   PascalJsonMapper.Json,
   PascalDb.SqlLoader,
-  PascalDb.Interfaces;
+  PascalDb.Interfaces,
+  PascalCommon.Tracing,
+  PascalApi.JwtKeys;
 
 const
   /// The "code" of a 403 for a suspended tenant.
@@ -215,6 +226,46 @@ type
       const ASql: TSQLResult); overload; static;
   end;
 
+  /// One TRotatingJwtKeyRing per tenant, all on AStore, scope = the tenant
+  /// id (the unit's comment). ScopeClaim is AClaim: TJwtKeys.Decode refuses
+  /// a token whose claim doesn't name its key's tenant. SigningKey takes the
+  /// tenant from the claims (False without one, or for a tenant the catalog
+  /// doesn't have). The legacy secret (AOptions.LegacySecret) is one for
+  /// every tenant: tokens without kid, from before the rings, carry no
+  /// tenant to check. Thread-safe.
+  TTenantJwtKeyRing = class(TInterfacedObject, IJwtKeyRing)
+  private
+    FCatalog: ITenantCatalog;
+    FStore: IJwtKeyStore;
+    FOptions: TJwtRotationOptions;
+    FClaim: string;
+    FOnError: TPcLogProc;
+    FLock: TCriticalSection;
+    FRings: TDictionary<string, IJwtKeyRing>;
+    FTenantsAtMs: UInt64;
+    FBusy: Boolean;
+    function RingOf(const ATenant: string): IJwtKeyRing;
+    function AddRing(const ATenant: string): IJwtKeyRing;
+    procedure AddCatalogTenants(ARaise: Boolean);
+    procedure MaintainTenants;
+    procedure Report(const ATenant: string; E: Exception);
+  public
+    /// Creates a ring for every tenant of ACatalog: the store's errors raise
+    /// here (at startup). AOnError gets the failures after that (a reload,
+    /// a new tenant's ring), for every tenant.
+    constructor Create(const ACatalog: ITenantCatalog; const AStore: IJwtKeyStore;
+      const AOptions: TJwtRotationOptions; const AClaim: string = TENANT_DEFAULT_CLAIM;
+      const AOnError: TPcLogProc = nil);
+    destructor Destroy; override;
+    function SigningKey(const AClaims: TJsonValue; out AKey: TJwtKey): Boolean;
+    function FindKey(const AKid: string; out AKey: TJwtKey): Boolean;
+    function LegacySecret: string;
+    function MaxTokenSeconds: Int64;
+    function ScopeClaim: string;
+    /// Tenants with a ring (for tests and diagnostics).
+    function TenantCount: Integer;
+  end;
+
   TTenantCheck = (tcOk, tcNoTenant, tcUnknown, tcSuspended);
 
 /// The tenant a token names, against the catalog: tcNoTenant for an empty
@@ -259,6 +310,206 @@ begin
     for I := 1 to Length(AId) do
       if not CharInSet(AId[I], ['a'..'z', '0'..'9', '-']) then
         Exit(False);
+end;
+
+{ TTenantJwtKeyRing }
+
+constructor TTenantJwtKeyRing.Create(const ACatalog: ITenantCatalog;
+  const AStore: IJwtKeyStore; const AOptions: TJwtRotationOptions; const AClaim: string;
+  const AOnError: TPcLogProc);
+begin
+  inherited Create;
+  if (ACatalog = nil) or (AStore = nil) then
+    raise EArgumentException.Create('TTenantJwtKeyRing: no catalog or no store');
+  if AClaim = '' then
+    raise EArgumentException.Create('TTenantJwtKeyRing: no tenant claim');
+  FCatalog := ACatalog;
+  FStore := AStore;
+  FOptions := AOptions;
+  FClaim := AClaim;
+  FOnError := AOnError;
+  FLock := TCriticalSection.Create;
+  FRings := TDictionary<string, IJwtKeyRing>.Create;
+  AddCatalogTenants(True);
+  FTenantsAtMs := TTicker.NowMs;
+end;
+
+destructor TTenantJwtKeyRing.Destroy;
+begin
+  FRings.Free;
+  FLock.Free;
+  inherited Destroy;
+end;
+
+procedure TTenantJwtKeyRing.Report(const ATenant: string; E: Exception);
+begin
+  if Assigned(FOnError) then
+    FOnError(Format('JWT key ring of tenant "%s": %s: %s', [ATenant, E.ClassName, E.Message]));
+end;
+
+function TTenantJwtKeyRing.RingOf(const ATenant: string): IJwtKeyRing;
+begin
+  FLock.Acquire;
+  try
+    if not FRings.TryGetValue(ATenant, Result) then
+      Result := nil;
+  finally
+    FLock.Release;
+  end;
+end;
+
+function TTenantJwtKeyRing.AddRing(const ATenant: string): IJwtKeyRing;
+var
+  LRing: TRotatingJwtKeyRing;
+  LExisting: IJwtKeyRing;
+begin
+  // Outside the lock: it reads the store (and may add the tenant's first
+  // key). Two threads may both create one; the first stored stays.
+  LRing := TRotatingJwtKeyRing.Create(FStore, FOptions, ATenant);
+  Result := LRing;
+  LRing.OnError := FOnError;
+  FLock.Acquire;
+  try
+    if FRings.TryGetValue(ATenant, LExisting) then
+      Result := LExisting
+    else
+      FRings.Add(ATenant, Result);
+  finally
+    FLock.Release;
+  end;
+end;
+
+procedure TTenantJwtKeyRing.AddCatalogTenants(ARaise: Boolean);
+var
+  LTenants: TArray<TTenantInfo>;
+  I: Integer;
+begin
+  try
+    LTenants := FCatalog.All;
+  except
+    on E: Exception do
+    begin
+      if ARaise then
+        raise;
+      Report('*', E);
+      Exit;
+    end;
+  end;
+  for I := 0 to High(LTenants) do
+    if RingOf(LTenants[I].Id) = nil then
+      try
+        AddRing(LTenants[I].Id);
+      except
+        on E: Exception do
+        begin
+          if ARaise then
+            raise;
+          // One tenant's failure doesn't keep the others from their keys.
+          Report(LTenants[I].Id, E);
+        end;
+      end;
+end;
+
+procedure TTenantJwtKeyRing.MaintainTenants;
+var
+  LDue: Boolean;
+begin
+  FLock.Acquire;
+  try
+    LDue := not FBusy and (TTicker.ElapsedMs(FTenantsAtMs) >= UInt64(FOptions.ReloadSeconds) * 1000);
+    if LDue then
+      FBusy := True;
+  finally
+    FLock.Release;
+  end;
+  if not LDue then
+    Exit;
+  try
+    AddCatalogTenants(False);
+  finally
+    FLock.Acquire;
+    try
+      FBusy := False;
+      FTenantsAtMs := TTicker.NowMs;
+    finally
+      FLock.Release;
+    end;
+  end;
+end;
+
+function TTenantJwtKeyRing.SigningKey(const AClaims: TJsonValue; out AKey: TJwtKey): Boolean;
+var
+  LTenant: string;
+  LRing: IJwtKeyRing;
+  LInfo: TTenantInfo;
+begin
+  AKey := TJwtKey.Create('', '');
+  Result := False;
+  LTenant := TenantIdFromClaims(AClaims, FClaim);
+  if not ValidTenantId(LTenant) then
+    Exit;
+  MaintainTenants;
+  LRing := RingOf(LTenant);
+  if LRing = nil then
+  begin
+    // A tenant provisioned after the last catalog read, signing: it must be
+    // in the catalog (the login asked it too), then it gets its ring.
+    if not FCatalog.Find(LTenant, LInfo) then
+      Exit;
+    LRing := AddRing(LTenant);
+  end;
+  Result := LRing.SigningKey(nil, AKey);
+end;
+
+function TTenantJwtKeyRing.FindKey(const AKid: string; out AKey: TJwtKey): Boolean;
+var
+  LSlash, I: Integer;
+  LTenant: string;
+  LRing: IJwtKeyRing;
+begin
+  AKey := TJwtKey.Create('', '');
+  Result := False;
+  LSlash := 0;
+  for I := Length(AKid) downto 1 do
+    if AKid[I] = '/' then
+    begin
+      LSlash := I;
+      Break;
+    end;
+  LTenant := Copy(AKid, 1, LSlash - 1);
+  if (LSlash = 0) or not ValidTenantId(LTenant) then
+    Exit;
+  MaintainTenants;
+  // Only rings that exist: a kid naming an unknown tenant reaches neither
+  // the store nor the catalog.
+  LRing := RingOf(LTenant);
+  if LRing <> nil then
+    Result := LRing.FindKey(AKid, AKey);
+end;
+
+function TTenantJwtKeyRing.LegacySecret: string;
+begin
+  Result := FOptions.LegacySecret;
+end;
+
+function TTenantJwtKeyRing.MaxTokenSeconds: Int64;
+begin
+  Result := FOptions.MaxTokenSeconds;
+end;
+
+function TTenantJwtKeyRing.ScopeClaim: string;
+begin
+  Result := FClaim;
+end;
+
+function TTenantJwtKeyRing.TenantCount: Integer;
+begin
+  FLock.Acquire;
+  try
+    Result := FRings.Count;
+  finally
+    FLock.Release;
+  end;
 end;
 
 function CheckTenant(const ACatalog: ITenantCatalog; const AId: string;

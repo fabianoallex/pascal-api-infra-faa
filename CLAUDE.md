@@ -176,7 +176,7 @@ with the user: `docs/multitenancy-design.md`.
 `PascalApi.JwtKeys` (pure, tested in `PascalApi.JwtKeysTests`): keys named by `kid`, so the
 secret rotates without invalidating tokens. Design, phases and the user's decisions:
 `docs/jwt-keys-design.md` (phase 1 done: the static ring; 2: generated keys in a database or
-Redis store, done; 3: one ring per tenant, the tenant inside the `kid`).
+Redis store, done; 3: one ring per tenant, the tenant inside the `kid`, done).
 
 - `src/redis` is outside the `.lpk`, as `src/horse` is: the core has no Redis code.
 - The rotation runs on a request (no thread): a check that waits idle sees no rotation.
@@ -189,6 +189,10 @@ Redis store, done; 3: one ring per tenant, the tenant inside the `kid`).
   in memory (never a query per unknown kid), and an unknown or retired kid answers the same
   401 as a bad signature.
 - Error messages never contain a secret (`Parse_ErrorsNeverShowTheSecret`).
+- Per tenant: `TTenantJwtKeyRing` (`PascalApi.Tenancy`). A key's `Scope` and the ring's
+  `ScopeClaim` make `TJwtKeys.Decode` refuse a tenant's key on another tenant's claim. Rings
+  only for the catalog's tenants and tenants that sign: never create one, or query anything,
+  for the tenant a kid names.
 
 ### Horse
 

@@ -355,6 +355,37 @@ of an older key keeps verifying, and the two instances sign with one key and ver
 other's tokens, also after racing for the next key. The life of a key second by second,
 the race, a store that fails, in `PascalApi.JwtRotationTests` (a test clock).
 
+### 10. A key per tenant
+
+In a multi-tenant API one key for everyone means that a key that leaks signs tokens for every
+tenant. `TTenantJwtKeyRing` (`PascalApi.Tenancy`) keeps one rotating ring per tenant, on one
+store. From sample 03 (`OpenKeys`, `JWT_KEY_STORE=db` or `redis`):
+
+```pascal
+LRing := TTenantJwtKeyRing.Create(GCatalog, LStore, LOptions, GClaim, ALog.Error);
+```
+
+- **The tenant is in the kid**: `acme/1f0c...`. A token verifies only with its tenant's key,
+  **and** only when its tenant claim (`tenant_id`, or the name you pass) names that tenant:
+  acme's key on a token claiming globex is the same 401 as a bad signature.
+- **Signing**: `TJwtMiddleware.Sign(LClaims)` reads the tenant from the claims and signs with
+  that tenant's key; claims without a tenant, or naming one the catalog doesn't have, raise
+  `EJwtKeyError` (a 500: the login must check the tenant first, as step 5 of
+  [Multi-tenancy](multitenancy.md) does).
+- **Which tenants have keys**: the catalog's, read when the ring is created and again every
+  `ReloadSeconds` (on a request), plus a tenant that signs (its login found it in the catalog).
+  A kid naming any other tenant is refused without asking the store or the catalog, so a client
+  can't make the API query anything with made-up kids. A tenant provisioned after an instance
+  started is known there at its next catalog read.
+- **Each tenant rotates on its own requests**: a quiet tenant keeps its key until its next one.
+- **The legacy secret** is one for all tenants (the tokens from before the rings carry no tenant
+  to check). Remove it once those tokens have expired.
+
+Checked over HTTP by `tools/http_scenarios_jwt_rotation.sh` (acme's key read from the store and
+tried on a token claiming globex, a kid naming a tenant that doesn't exist, each tenant's own
+key) and in `PascalApi.JwtRotationTests` (`TTenantJwtKeyRingTests`: no store or catalog query for
+50 unknown tenants' kids, a tenant added to the catalog later).
+
 ## Choices
 
 ### JWT or your own tokens
@@ -394,6 +425,8 @@ revoked tokens and check it in your own middleware after `TJwtMiddleware`.
 - **A Redis that forgets.** Without persistence (RDB or AOF) a restart of Redis loses the
   keys, and an eviction policy other than `noeviction` (or a `volatile-*` one) can evict them:
   either way every token is refused and new keys are made.
+- **A tenant ring's legacy secret kept forever.** It signs for every tenant, which is what the
+  rings are there to prevent: drop it when the old tokens have expired.
 - **A memory store with several instances.** `TMemoryJwtKeyStore` is one process's: each
   instance would have its own keys and refuse the others' tokens. It is for tests.
 - **Removing an old key too early.** Its tokens are refused from that moment: keep it until

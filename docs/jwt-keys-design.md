@@ -1,6 +1,6 @@
 # Design: JWT signing keys with rotation
 
-Status: **phases 1 and 2 done (2026-10-18)**; phase 3 designed. Three decisions taken with the
+Status: **phases 1, 2 and 3 done (2026-10-18).** Three decisions taken with the
 user (decisions 5, 6 and 8); the others are proposals that the implementation may change, and
 what it measures goes back here, as in the other design records.
 
@@ -216,6 +216,34 @@ a generation). Nothing to store, but a leaked master signs for every tenant.
   3 s): 22 checks on the database and on Redis 7.2, on FPC Windows and Linux and on Delphi 12
   Win32/Win64 (FireDAC); 323 unit tests, 0 leaks, on all four.
 
+## Phase 3 as built (2026-10-18)
+
+The design's `IJwtKeyResolver` became no new interface: `TTenantJwtKeyRing` is an
+`IJwtKeyRing`, so `TJwtMiddleware` didn't change. Two additions to the ring contract carry what
+the resolver would have: `SigningKey(AClaims, ...)` (the claims pick the tenant) and
+`ScopeClaim` (the claim `TJwtKeys.Decode` checks against the key's `Scope`; '' for the static
+and plain rotating rings, which check nothing). Taken as consequences of the design's rules
+and shown to the user, who asked for no change (2026-10-18):
+
+- **Which tenants get a ring.** "A kid is only looked up in memory" (decision 2) ruled out
+  creating a ring, or asking the catalog, for whatever tenant a kid names: a client could make
+  the API query the store and the catalog with each made-up kid (`TCachedTenantCatalog` doesn't
+  keep misses). So rings exist for the catalog's tenants (`All`, at creation and every
+  `ReloadSeconds` on a request) and for a tenant that signs, after `Find` (the login already
+  checked it). A tenant provisioned on another instance is known here at the next catalog read.
+- **The first key of a tenant** is made when its ring is created (at startup for every tenant
+  of the catalog), not at its first login as decision 8 said: the ring's constructor always
+  ensures a key, and a tenant's tokens must verify on every instance anyway.
+- **The legacy secret is one for every tenant.** A token without kid has no key scope to check
+  its claim against. Documented as a pitfall: drop it once the old tokens expired.
+- **A wrong claim is `jrBadSignature`**, so the 401 is the same as a bad signature's (decision 2).
+
+Measured: `TTenantJwtKeyRingTests` (7 tests: 50 unknown tenants' kids with no store load and no
+catalog query, acme's key refused on globex's claim, a tenant added to the catalog later, each
+tenant rotating on its own) and `tools/http_scenarios_jwt_rotation.sh` (acme's secret read from
+`control.sqlite` and tried on a token claiming globex: 401), on FPC Windows and Linux and
+Delphi 12 Win32/Win64 (330 tests, 0 leaks; 29 checks on the database, 25 on Redis).
+
 ## Where each piece lives (proposal)
 
 | Piece | Unit |
@@ -238,7 +266,8 @@ the MCP executor forwards the caller's `Authorization` header as it is.
 2. **Done (2026-10-18).** `PcRandomBytes` in pascal-common-faa 1.15.0 (`PascalCommon.Random`),
    `TRotatingJwtKeyRing`, `TDbJwtKeyStore`, `TMemoryJwtKeyStore` and `TRedisJwtKeyStore`. As
    built: see "Phase 2 as built".
-3. The per-tenant resolver and the claim check, in sample 03.
+3. **Done (2026-10-18).** The per-tenant ring and the claim check, in sample 03. As built:
+   see "Phase 3 as built".
 
 Then the guide: `docs/guide/authentication.md` (rotation, its settings, the pitfall above
 replaced) and `docs/guide/multitenancy.md`.

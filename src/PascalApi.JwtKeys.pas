@@ -57,7 +57,13 @@ unit PascalApi.JwtKeys;
   application's SQL by name). The Redis store is in src/redis
   (PascalApi.Redis.JwtKeys), outside the package. A scope names whose keys
   they are: '' for an API without tenants; a scope's kids start with
-  "<scope>/" (phase 3, one ring per tenant). *)
+  "<scope>/".
+
+  Phase 3, one ring per tenant: PascalApi.Tenancy's TTenantJwtKeyRing. A
+  ring whose ScopeClaim isn't '' makes Decode require that claim of the
+  verified token to equal the scope of the key that signed it, so a
+  tenant's key can't sign another tenant's tokens; SigningKey gets the
+  claims to pick the scope. *)
 
 interface
 
@@ -84,6 +90,9 @@ type
     /// Unix seconds: the key signs from then on (until a newer key does).
     /// 0 for a static key.
     ActiveFrom: Int64;
+    /// Whose key it is ('' for a static key or a ring without scope). Set by
+    /// the ring, never stored.
+    Scope: string;
     class function Create(const AKid, ASecret: string; ANotAfter: Int64 = 0): TJwtKey; static;
   end;
 
@@ -91,9 +100,11 @@ type
 
   IJwtKeyRing = interface
     ['{1AB09029-B34D-4148-99E2-57201B707C00}']
-    /// The key that signs now; False when there is none (a ring with only a
-    /// legacy secret, or whose signing key is past its NotAfter).
-    function SigningKey(out AKey: TJwtKey): Boolean;
+    /// The key that signs AClaims now (a JSON object; nil when the ring
+    /// needs none, as the static and rotating rings); False when there is
+    /// none (a ring with only a legacy secret, a signing key past its
+    /// NotAfter, claims naming no scope the ring knows).
+    function SigningKey(const AClaims: TJsonValue; out AKey: TJwtKey): Boolean;
     /// The key named AKid, whatever its NotAfter.
     function FindKey(const AKid: string; out AKey: TJwtKey): Boolean;
     /// The secret of tokens without "kid"; '' refuses them.
@@ -101,6 +112,8 @@ type
     /// The longest lifetime Sign accepts, in seconds; 0: no limit but the
     /// signing key's NotAfter.
     function MaxTokenSeconds: Int64;
+    /// The claim a token must carry equal to its key's Scope ('' : none).
+    function ScopeClaim: string;
   end;
 
   /// Where generated keys live, shared by every instance of the API. Only
@@ -131,10 +144,11 @@ type
     /// A ring from JWT_KEYS' format (the unit's comment).
     class function Parse(const AText: string; const ALegacySecret: string = '';
       AMaxTokenSeconds: Int64 = 0): IJwtKeyRing; static;
-    function SigningKey(out AKey: TJwtKey): Boolean;
+    function SigningKey(const AClaims: TJsonValue; out AKey: TJwtKey): Boolean;
     function FindKey(const AKid: string; out AKey: TJwtKey): Boolean;
     function LegacySecret: string;
     function MaxTokenSeconds: Int64;
+    function ScopeClaim: string;
   end;
 
   TJwtRotationOptions = record
@@ -178,10 +192,12 @@ type
     /// Reloads and rotates now, whatever ReloadSeconds says; raises the
     /// store's error.
     procedure Reload;
-    function SigningKey(out AKey: TJwtKey): Boolean;
+    function SigningKey(const AClaims: TJsonValue; out AKey: TJwtKey): Boolean;
     function FindKey(const AKid: string; out AKey: TJwtKey): Boolean;
     function LegacySecret: string;
     function MaxTokenSeconds: Int64;
+    /// '': a ring on its own checks no claim (TTenantJwtKeyRing does).
+    function ScopeClaim: string;
     /// The keys as loaded (NotAfter computed), oldest first.
     function Keys: TJwtKeyArray;
     /// A reload that failed after startup (the loaded keys stay in use).
@@ -300,6 +316,7 @@ begin
   Result.Generation := 0;
   Result.CreatedAt := 0;
   Result.ActiveFrom := 0;
+  Result.Scope := '';
 end;
 
 { TStaticJwtKeyRing }
@@ -383,7 +400,7 @@ begin
   Result := TStaticJwtKeyRing.Create(LKeys, ALegacySecret, AMaxTokenSeconds);
 end;
 
-function TStaticJwtKeyRing.SigningKey(out AKey: TJwtKey): Boolean;
+function TStaticJwtKeyRing.SigningKey(const AClaims: TJsonValue; out AKey: TJwtKey): Boolean;
 begin
   Result := (Length(FKeys) > 0) and Alive(FKeys[0]);
   if Result then
@@ -416,6 +433,11 @@ begin
   Result := FMaxTokenSeconds;
 end;
 
+function TStaticJwtKeyRing.ScopeClaim: string;
+begin
+  Result := '';
+end;
+
 { TJwtRotationOptions }
 
 class function TJwtRotationOptions.Default: TJwtRotationOptions;
@@ -433,7 +455,7 @@ end;
 // left out (and named in AGone, for the store). Raises on a key the store
 // can't have written: such a ring would sign or verify wrongly.
 function PrepareKeys(const ALoaded: TJwtKeyArray; AMaxTokenSeconds: Int64;
-  out AGone: TJwtKeyArray): TJwtKeyArray;
+  const AScope: string; out AGone: TJwtKeyArray): TJwtKeyArray;
 var
   LSorted: TJwtKeyArray;
   LKey: TJwtKey;
@@ -477,6 +499,7 @@ begin
   for I := 0 to High(LSorted) do
   begin
     LKey := LSorted[I];
+    LKey.Scope := AScope;
     if I < High(LSorted) then
       LKey.NotAfter := LSorted[I + 1].ActiveFrom + AMaxTokenSeconds
     else
@@ -540,7 +563,7 @@ var
 begin
   try
     LLoaded := FStore.Load(FScope);
-    LKeys := PrepareKeys(LLoaded, FOptions.MaxTokenSeconds, LGone);
+    LKeys := PrepareKeys(LLoaded, FOptions.MaxTokenSeconds, FScope, LGone);
     LNow := TJwt.UnixNow;
     // Rotation: no key yet, or the newest one is old enough. The first key
     // signs at once (no instance holds an older one to wait for).
@@ -560,7 +583,7 @@ begin
       // Lost or won, the store now has generation n+1: read it back.
       FStore.TryAdd(FScope, LNew);
       LLoaded := FStore.Load(FScope);
-      LKeys := PrepareKeys(LLoaded, FOptions.MaxTokenSeconds, LGone);
+      LKeys := PrepareKeys(LLoaded, FOptions.MaxTokenSeconds, FScope, LGone);
     end;
     for I := 0 to High(LGone) do
       FStore.Delete(FScope, LGone[I].Kid);
@@ -623,7 +646,7 @@ begin
   end;
 end;
 
-function TRotatingJwtKeyRing.SigningKey(out AKey: TJwtKey): Boolean;
+function TRotatingJwtKeyRing.SigningKey(const AClaims: TJsonValue; out AKey: TJwtKey): Boolean;
 var
   I: Integer;
   LNow: Int64;
@@ -673,6 +696,11 @@ end;
 function TRotatingJwtKeyRing.MaxTokenSeconds: Int64;
 begin
   Result := FOptions.MaxTokenSeconds;
+end;
+
+function TRotatingJwtKeyRing.ScopeClaim: string;
+begin
+  Result := '';
 end;
 
 function TRotatingJwtKeyRing.Keys: TJwtKeyArray;
@@ -894,13 +922,33 @@ end;
 class function TJwtKeys.Sign(const ARing: IJwtKeyRing; const AClaimsJson: string): string;
 var
   LKey: TJwtKey;
+  LClaims: TJsonValue;
+  LFound: Boolean;
 begin
   if ARing = nil then
     raise EArgumentException.Create('TJwtKeys.Sign: no key ring');
-  if not ARing.SigningKey(LKey) then
-    raise EJwtKeyError.Create('JWT key ring: no key signs now');
+  // The claims as JSON first (EArgumentException): a ring with scopes picks
+  // the key by one of them.
+  CheckLifetime(AClaimsJson, ARing.MaxTokenSeconds, 0);
+  LClaims := ParseJson(AClaimsJson);
+  try
+    LFound := ARing.SigningKey(LClaims, LKey);
+  finally
+    LClaims.Free;
+  end;
+  if not LFound then
+    raise EJwtKeyError.Create('JWT key ring: no key signs these claims now');
   CheckLifetime(AClaimsJson, ARing.MaxTokenSeconds, LKey.NotAfter);
   Result := TJwt.SignHS256(AClaimsJson, LKey.Secret, LKey.Kid);
+end;
+
+// AClaims' member AName is the string AValue.
+function ClaimIs(AClaims: TJsonValue; const AName, AValue: string): Boolean;
+var
+  LMember: TJsonValue;
+begin
+  LMember := AClaims.Find(AName);
+  Result := (LMember <> nil) and (LMember.Kind = jkString) and (LMember.AsString = AValue);
 end;
 
 class function TJwtKeys.Decode(const ARing: IJwtKeyRing; const AToken: string;
@@ -921,6 +969,14 @@ begin
   if not ARing.FindKey(LKid, LKey) or not Alive(LKey) then
     Exit(jrBadSignature);
   Result := TJwt.Decode(AToken, LKey.Secret, AClaims);
+  // A scope's key signs only its scope's tokens: a tenant whose key leaked
+  // can't sign for another one.
+  if (Result = jrValid) and (LKey.Scope <> '') and (ARing.ScopeClaim <> '') and
+    not ClaimIs(AClaims, ARing.ScopeClaim, LKey.Scope) then
+  begin
+    FreeAndNil(AClaims);
+    Result := jrBadSignature;
+  end;
 end;
 
 class function TJwtKeys.Validate(const ARing: IJwtKeyRing; const AToken: string): Boolean;

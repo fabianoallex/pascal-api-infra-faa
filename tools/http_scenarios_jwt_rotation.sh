@@ -8,7 +8,9 @@
 #   sh tools/http_scenarios_jwt_rotation.sh [port [port2]]   (default 9351)
 #
 # JWT_KEY_STORE=redis keeps the keys in Redis instead (REDIS_HOST,
-# REDIS_PORT, JWT_REDIS_PREFIX). With port2, a second instance of the
+# REDIS_PORT, JWT_REDIS_PREFIX). One ring per tenant (phase 3): a kid is
+# "<tenant>/<16 hex>". CONTROL_DB, the sample's control.sqlite (db mode),
+# lets this script read acme's key and try it on a token claiming globex. With port2, a second instance of the
 # sample on the same store (started after the first, without --reset): the
 # two must sign with the same key and verify each other's tokens, also
 # after both raced for the next generation.
@@ -75,16 +77,38 @@ print(h + "." + p + "." + s)' "$1" "$2" "$3"
 # on2 COMMAND... -> the command against the second instance
 on2() { SAVED="$BASE"; BASE="http://127.0.0.1:$PORT2"; "$@"; BASE="$SAVED"; }
 is_hex16() { echo "$1" | grep -qE '^[0-9a-f]{16}$'; }
+# tenant_kid TENANT KID: KID is TENANT/<16 hex>
+tenant_kid() { echo "$2" | grep -qE "^$1/[0-9a-f]{16}\$"; }
 
 # --- the first key: generated at startup, signs at once
 TOKEN1="$(login acme ana)"
 [ -n "$TOKEN1" ] && ok || fail "login: $(cat "$T/body")"
 KID1="$(kid "$TOKEN1")"
-is_hex16 "$KID1" && ok || fail "a generated kid is 16 hex digits (got '$KID1')"
+tenant_kid acme "$KID1" && ok || fail "acme's kid is acme/<16 hex> (got '$KID1')"
 req GET /tenant "" -H "Authorization: Bearer $TOKEN1"
 status_is 200 "a token of the first key"
 body_is '{"tenant":"acme","mode":"dedicated"}' "a token of the first key"
-[ "$(kid "$(login globex bia)")" = "$KID1" ] && ok || fail "the same key signs every login"
+[ "$(kid "$(login acme bia)")" = "$KID1" ] && ok || fail "the same key signs every acme login"
+KIDG="$(kid "$(login globex bia)")"
+tenant_kid globex "$KIDG" && ok || fail "globex has its own key (got '$KIDG')"
+[ "${KIDG#globex/}" != "${KID1#acme/}" ] && ok || fail "two tenants, two keys"
+
+# --- a tenant's key can't sign for another tenant (needs its secret: db mode)
+if [ -n "$CONTROL_DB" ]; then
+  ACME_SECRET="$($PY -c '
+import sqlite3, sys
+c = sqlite3.connect(sys.argv[1])
+print(c.execute("SELECT SECRET FROM JWT_KEYS WHERE KID = ?", (sys.argv[2],)).fetchone()[0])' "$CONTROL_DB" "$KID1")"
+  req GET /tenant "" -H "Authorization: Bearer $(sign_header "{\"alg\":\"HS256\",\"typ\":\"JWT\",\"kid\":\"$KID1\"}" '{"sub":"ana","tenant_id":"acme"}' "$ACME_SECRET")"
+  status_is 200 "acme's key, read from the store, signs acme's token"
+  req GET /tenant "" -H "Authorization: Bearer $(sign_header "{\"alg\":\"HS256\",\"typ\":\"JWT\",\"kid\":\"$KID1\"}" '{"sub":"ana","tenant_id":"globex"}' "$ACME_SECRET")"
+  status_is 401 "acme's key on a token claiming globex"
+  body_is '{"error":"Invalid or expired token."}' "acme's key on a token claiming globex"
+  req GET /tenant "" -H "Authorization: Bearer $(sign_header "{\"alg\":\"HS256\",\"typ\":\"JWT\",\"kid\":\"$KIDG\"}" '{"sub":"ana","tenant_id":"globex"}' "$ACME_SECRET")"
+  status_is 401 "globex's kid with acme's secret"
+fi
+req GET /tenant "" -H "Authorization: Bearer $(sign_header '{"alg":"HS256","typ":"JWT","kid":"wayne/0123456789abcdef"}' '{"sub":"ana","tenant_id":"wayne"}' "$SECRET")"
+status_is 401 "a kid naming a tenant the catalog doesn't have"
 
 # --- the legacy secret and an unknown kid, as with static keys
 req GET /tenant "" -H "Authorization: Bearer $(sign_header '{"alg":"HS256","typ":"JWT"}' '{"sub":"ana","tenant_id":"acme"}' "$SECRET")"
@@ -104,7 +128,7 @@ while [ "$KID2" = "$KID1" ] && [ $WAITED -lt $LIMIT ]; do
   TOKEN2="$(login acme ana)"
   KID2="$(kid "$TOKEN2")"
 done
-is_hex16 "$KID2" && ok || fail "the second key's kid (got '$KID2')"
+tenant_kid acme "$KID2" && ok || fail "the second key's kid (got '$KID2')"
 [ "$KID2" != "$KID1" ] && ok || fail "a new key signs within $LIMIT s (still '$KID1')"
 req GET /tenant "" -H "Authorization: Bearer $TOKEN2"
 status_is 200 "a token of the new key"

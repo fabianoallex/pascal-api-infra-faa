@@ -303,7 +303,7 @@ var
   LKey: TJwtKey;
 begin
   LRing := TStaticJwtKeyRing.Parse('k2:' + SECRET_2 + ',k1:' + SECRET_1, LEGACY, 3600);
-  TAssert.AssertTrue(LRing.SigningKey(LKey));
+  TAssert.AssertTrue(LRing.SigningKey(nil, LKey));
   TAssert.AssertEquals('k2', LKey.Kid);
   TAssert.AssertEquals(SECRET_2, LKey.Secret);
   TAssert.AssertEquals(Int64(0), LKey.NotAfter);

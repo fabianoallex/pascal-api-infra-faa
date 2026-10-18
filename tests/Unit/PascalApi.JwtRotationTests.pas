@@ -7,7 +7,11 @@ unit PascalApi.JwtRotationTests;
   startup, a corrupt store, an unknown kid that doesn't reach the store),
   TMemoryJwtKeyStore, and TDbJwtKeyStore against pascal-db-faa's
   TMockDBFactory (its SQL names and parameters, a unique violation as
-  TryAdd's False, any other error raised).
+  TryAdd's False, any other error raised); and phase 3, PascalApi.Tenancy's
+  TTenantJwtKeyRing (a key per tenant, a tenant's key refused for another
+  tenant's claim, a kid naming an unknown tenant answered without a query,
+  a tenant added to the catalog later). TTestCatalog is a catalog the test
+  changes and counts.
 
   Time is the test's: a fixed wall clock in TClock (TJwt.UnixNow, what the
   keys' dates use) and a manual TTicker (the reload interval), moved
@@ -31,7 +35,8 @@ uses
   PascalDb.Interfaces,
   PascalDb.Mock,
   PascalApi.Jwt,
-  PascalApi.JwtKeys;
+  PascalApi.JwtKeys,
+  PascalApi.Tenancy;
 
 type
   TRotationClock = class(TInterfacedObject, IClock)
@@ -63,6 +68,16 @@ type
     function Inner: IJwtKeyStore;
   end;
 
+  /// A catalog the test changes (Add) and counts (FindCount, AllCount).
+  TTestCatalog = class(TInterfacedObject, ITenantCatalog)
+  public
+    Ids: array of string;
+    FindCount, AllCount: Integer;
+    procedure Add(const AId: string);
+    function Find(const AId: string; out AInfo: TTenantInfo): Boolean;
+    function All: TArray<TTenantInfo>;
+  end;
+
   TErrorSink = class
   public
     Lines: string;
@@ -87,6 +102,20 @@ type
     [Test] procedure Sign_HonoursMaxTokenSeconds;
     [Test] procedure LegacySecret_ForTokensWithoutKid;
     [Test] procedure MemoryStore_Rules;
+  end;
+
+  [TestFixture]
+  TTenantJwtKeyRingTests = class
+  public
+    [Setup] procedure Setup;
+    [TearDown] procedure TearDown;
+    [Test] procedure EachTenant_ItsOwnKey;
+    [Test] procedure TenantsKey_RefusedForAnotherTenantsClaim;
+    [Test] procedure UnknownTenantKid_NoQuery;
+    [Test] procedure Sign_NeedsAKnownTenant;
+    [Test] procedure TenantAddedLater;
+    [Test] procedure LegacyAndMalformedKids;
+    [Test] procedure Rotation_PerTenant;
   end;
 
   [TestFixture]
@@ -139,7 +168,7 @@ function SigningKid(const ARing: IJwtKeyRing): string;
 var
   LKey: TJwtKey;
 begin
-  if ARing.SigningKey(LKey) then
+  if ARing.SigningKey(nil, LKey) then
     Result := LKey.Kid
   else
     Result := '<none>';
@@ -264,6 +293,43 @@ end;
 function TTestStore.Inner: IJwtKeyStore;
 begin
   Result := FInner;
+end;
+
+{ TTestCatalog }
+
+procedure TTestCatalog.Add(const AId: string);
+begin
+  SetLength(Ids, Length(Ids) + 1);
+  Ids[High(Ids)] := AId;
+end;
+
+function TTestCatalog.Find(const AId: string; out AInfo: TTenantInfo): Boolean;
+var
+  I: Integer;
+begin
+  Inc(FindCount);
+  AInfo := Default(TTenantInfo);
+  for I := 0 to High(Ids) do
+    if Ids[I] = AId then
+    begin
+      AInfo.Id := AId;
+      Exit(True);
+    end;
+  Result := False;
+end;
+
+function TTestCatalog.All: TArray<TTenantInfo>;
+var
+  I: Integer;
+begin
+  Inc(AllCount);
+  Result := nil;
+  SetLength(Result, Length(Ids));
+  for I := 0 to High(Ids) do
+  begin
+    Result[I] := Default(TTenantInfo);
+    Result[I].Id := Ids[I];
+  end;
 end;
 
 { TErrorSink }
@@ -589,6 +655,234 @@ begin
   TAssert.AssertEquals('the other scope stays', 1, Length(LStore.Load('acme')));
 end;
 
+{ TTenantJwtKeyRingTests }
+
+function TenantClaims(const ATenant: string; AExp: Int64): string;
+begin
+  Result := Format('{"sub":"ana","tenant_id":"%s","exp":%d}', [ATenant, AExp]);
+end;
+
+function NewTenantRing(const ACatalog: ITenantCatalog; const AStore: IJwtKeyStore;
+  const ALegacy: string = ''): IJwtKeyRing;
+var
+  LOptions: TJwtRotationOptions;
+begin
+  LOptions := Options;
+  LOptions.LegacySecret := ALegacy;
+  Result := TTenantJwtKeyRing.Create(ACatalog, AStore, LOptions);
+end;
+
+function TwoTenants(out ACatalog: TTestCatalog): ITenantCatalog;
+begin
+  ACatalog := TTestCatalog.Create;
+  Result := ACatalog;
+  ACatalog.Add('acme');
+  ACatalog.Add('globex');
+end;
+
+function SignError(const ARing: IJwtKeyRing; const AClaims: string): string;
+begin
+  Result := '';
+  try
+    TJwtKeys.Sign(ARing, AClaims);
+  except
+    on E: Exception do
+      Result := E.ClassName;
+  end;
+end;
+
+procedure TTenantJwtKeyRingTests.Setup;
+begin
+  GNow := START;
+  GTickMs := 5000000;
+  TClock.SetClock(TRotationClock.Create);
+  TTicker.SetTicker(TRotationTicker.Create);
+end;
+
+procedure TTenantJwtKeyRingTests.TearDown;
+begin
+  TClock.Reset;
+  TTicker.Reset;
+end;
+
+procedure TTenantJwtKeyRingTests.EachTenant_ItsOwnKey;
+var
+  LCatalog: TTestCatalog;
+  LCatalogRef: ITenantCatalog;
+  LStore: IJwtKeyStore;
+  LRing: IJwtKeyRing;
+  LAcme, LGlobex: string;
+  LClaims: TJsonValue;
+begin
+  LCatalogRef := TwoTenants(LCatalog);
+  LStore := TMemoryJwtKeyStore.Create;
+  LRing := NewTenantRing(LCatalogRef, LStore);
+  TAssert.AssertEquals('a key per tenant at startup', 1, Length(LStore.Load('acme')));
+  TAssert.AssertEquals(1, Length(LStore.Load('globex')));
+  TAssert.AssertEquals('none without a tenant', 0, Length(LStore.Load('')));
+  TAssert.AssertEquals('tenant_id', LRing.ScopeClaim);
+  LAcme := TJwtKeys.Sign(LRing, TenantClaims('acme', GNow + 60));
+  LGlobex := TJwtKeys.Sign(LRing, TenantClaims('globex', GNow + 60));
+  TAssert.AssertEquals('acme/', Copy(KidOf(LAcme), 1, 5));
+  TAssert.AssertEquals('globex/', Copy(KidOf(LGlobex), 1, 7));
+  TAssert.AssertEquals('acme''s token', Ord(jrValid),
+    Ord(TJwtKeys.Decode(LRing, LAcme, LClaims)));
+  try
+    TAssert.AssertEquals('acme', LClaims.Find('tenant_id').AsString);
+  finally
+    LClaims.Free;
+  end;
+  TAssert.AssertEquals('globex''s token', Ord(jrValid), Ord(DecodeWith(LRing, LGlobex)));
+end;
+
+procedure TTenantJwtKeyRingTests.TenantsKey_RefusedForAnotherTenantsClaim;
+var
+  LCatalog: TTestCatalog;
+  LCatalogRef: ITenantCatalog;
+  LStore: IJwtKeyStore;
+  LRing: IJwtKeyRing;
+  LKey: TJwtKey;
+begin
+  LCatalogRef := TwoTenants(LCatalog);
+  LStore := TMemoryJwtKeyStore.Create;
+  LRing := NewTenantRing(LCatalogRef, LStore);
+  LKey := LStore.Load('acme')[0];
+  // acme's key (leaked, say) signing a token that claims globex.
+  TAssert.AssertEquals('another tenant''s claim', Ord(jrBadSignature), Ord(DecodeWith(LRing,
+    TJwt.SignHS256(TenantClaims('globex', GNow + 60), LKey.Secret, LKey.Kid))));
+  TAssert.AssertEquals('no tenant claim', Ord(jrBadSignature), Ord(DecodeWith(LRing,
+    TJwt.SignHS256(Claims(GNow + 60), LKey.Secret, LKey.Kid))));
+  TAssert.AssertEquals('a non-string claim', Ord(jrBadSignature), Ord(DecodeWith(LRing,
+    TJwt.SignHS256(Format('{"tenant_id":7,"exp":%d}', [GNow + 60]), LKey.Secret, LKey.Kid))));
+  // And globex's kid with acme's secret: the signature.
+  TAssert.AssertEquals('another tenant''s kid', Ord(jrBadSignature), Ord(DecodeWith(LRing,
+    TJwt.SignHS256(TenantClaims('globex', GNow + 60), LKey.Secret,
+      LStore.Load('globex')[0].Kid))));
+  TAssert.AssertEquals('its own claim', Ord(jrValid), Ord(DecodeWith(LRing,
+    TJwt.SignHS256(TenantClaims('acme', GNow + 60), LKey.Secret, LKey.Kid))));
+end;
+
+procedure TTenantJwtKeyRingTests.UnknownTenantKid_NoQuery;
+var
+  LCatalog: TTestCatalog;
+  LCatalogRef: ITenantCatalog;
+  LStore: TTestStore;
+  LStoreRef: IJwtKeyStore;
+  LTenantRing: TTenantJwtKeyRing;
+  LRing: IJwtKeyRing;
+  LLoads, LFinds, LAlls, I: Integer;
+begin
+  LCatalogRef := TwoTenants(LCatalog);
+  LStore := TTestStore.Create;
+  LStoreRef := LStore;
+  LTenantRing := TTenantJwtKeyRing.Create(LCatalogRef, LStoreRef, Options);
+  LRing := LTenantRing;
+  LLoads := LStore.LoadCount;
+  LFinds := LCatalog.FindCount;
+  LAlls := LCatalog.AllCount;
+  for I := 1 to 50 do
+    TAssert.AssertEquals(Ord(jrBadSignature), Ord(DecodeWith(LRing,
+      TJwt.SignHS256(TenantClaims(Format('t%d', [I]), GNow + 60), 'x',
+        Format('t%d/%.16x', [I, I])))));
+  TAssert.AssertEquals('no store load', LLoads, LStore.LoadCount);
+  TAssert.AssertEquals('no catalog find', LFinds, LCatalog.FindCount);
+  TAssert.AssertEquals('no catalog read', LAlls, LCatalog.AllCount);
+  TAssert.AssertEquals('no ring for them', 2, LTenantRing.TenantCount);
+end;
+
+procedure TTenantJwtKeyRingTests.Sign_NeedsAKnownTenant;
+var
+  LCatalog: TTestCatalog;
+  LCatalogRef: ITenantCatalog;
+  LStore: IJwtKeyStore;
+  LRing: IJwtKeyRing;
+begin
+  LCatalogRef := TwoTenants(LCatalog);
+  LStore := TMemoryJwtKeyStore.Create;
+  LRing := NewTenantRing(LCatalogRef, LStore);
+  TAssert.AssertEquals('no tenant', 'EJwtKeyError', SignError(LRing, Claims(GNow + 60)));
+  TAssert.AssertEquals('not in the catalog', 'EJwtKeyError',
+    SignError(LRing, TenantClaims('wayne', GNow + 60)));
+  TAssert.AssertEquals('not a tenant id', 'EJwtKeyError',
+    SignError(LRing, TenantClaims('Acme', GNow + 60)));
+  TAssert.AssertEquals('no key stored for them', 0, Length(LStore.Load('wayne')));
+  TAssert.AssertEquals('past MaxTokenSeconds', 'EArgumentException',
+    SignError(LRing, TenantClaims('acme', GNow + 601)));
+end;
+
+procedure TTenantJwtKeyRingTests.TenantAddedLater;
+var
+  LCatalog: TTestCatalog;
+  LCatalogRef: ITenantCatalog;
+  LStore: IJwtKeyStore;
+  LA, LB: IJwtKeyRing;
+  LToken: string;
+begin
+  LCatalogRef := TwoTenants(LCatalog);
+  LStore := TMemoryJwtKeyStore.Create;
+  LA := NewTenantRing(LCatalogRef, LStore);
+  LB := NewTenantRing(LCatalogRef, LStore);
+  LCatalog.Add('initech');
+  // A signs for the new tenant at once (its login found it in the catalog).
+  LToken := TJwtKeys.Sign(LA, TenantClaims('initech', GNow + 60));
+  TAssert.AssertEquals('initech/', Copy(KidOf(LToken), 1, 8));
+  // B doesn't know the tenant until its next catalog read...
+  TAssert.AssertEquals('B, before its catalog read', Ord(jrBadSignature),
+    Ord(DecodeWith(LB, LToken)));
+  // ...ReloadSeconds later, on a request.
+  Advance(10);
+  TAssert.AssertEquals('B, after', Ord(jrValid), Ord(DecodeWith(LB, LToken)));
+  TAssert.AssertEquals('one key for initech', 1, Length(LStore.Load('initech')));
+end;
+
+procedure TTenantJwtKeyRingTests.LegacyAndMalformedKids;
+var
+  LCatalog: TTestCatalog;
+  LCatalogRef: ITenantCatalog;
+  LStore: IJwtKeyStore;
+  LRing: IJwtKeyRing;
+  LKey: TJwtKey;
+begin
+  LCatalogRef := TwoTenants(LCatalog);
+  LStore := TMemoryJwtKeyStore.Create;
+  LRing := NewTenantRing(LCatalogRef, LStore, 'legacy');
+  TAssert.AssertEquals('no kid: the legacy secret', Ord(jrValid),
+    Ord(DecodeWith(LRing, TJwt.SignHS256(TenantClaims('acme', GNow + 60), 'legacy'))));
+  LKey := LStore.Load('acme')[0];
+  TAssert.AssertEquals('a kid without tenant', Ord(jrBadSignature), Ord(DecodeWith(LRing,
+    TJwt.SignHS256(TenantClaims('acme', GNow + 60), LKey.Secret,
+      Copy(LKey.Kid, 6, MaxInt)))));
+  TAssert.AssertEquals('an empty tenant', Ord(jrBadSignature), Ord(DecodeWith(LRing,
+    TJwt.SignHS256(TenantClaims('acme', GNow + 60), LKey.Secret,
+      Copy(LKey.Kid, 5, MaxInt)))));
+  TAssert.AssertEquals('a tenant with "/" in front', Ord(jrBadSignature), Ord(DecodeWith(LRing,
+    TJwt.SignHS256(TenantClaims('acme', GNow + 60), LKey.Secret, 'x/' + LKey.Kid))));
+end;
+
+procedure TTenantJwtKeyRingTests.Rotation_PerTenant;
+var
+  LCatalog: TTestCatalog;
+  LCatalogRef: ITenantCatalog;
+  LStore: IJwtKeyStore;
+  LRing: IJwtKeyRing;
+  LOld, LNew: string;
+begin
+  LCatalogRef := TwoTenants(LCatalog);
+  LStore := TMemoryJwtKeyStore.Create;
+  LRing := NewTenantRing(LCatalogRef, LStore);
+  Advance(1000);
+  // acme's ring rotates on this request; the old key signs until the new
+  // one is active.
+  LOld := TJwtKeys.Sign(LRing, TenantClaims('acme', GNow + 600));
+  Advance(60);
+  LNew := TJwtKeys.Sign(LRing, TenantClaims('acme', GNow + 60));
+  TAssert.AssertTrue('a new acme key', KidOf(LNew) <> KidOf(LOld));
+  TAssert.AssertEquals('acme''s old token', Ord(jrValid), Ord(DecodeWith(LRing, LOld)));
+  TAssert.AssertEquals('acme rotated', 2, Length(LStore.Load('acme')));
+  // globex's ring rotates on its own requests, not on acme's.
+  TAssert.AssertEquals('globex untouched', 1, Length(LStore.Load('globex')));
+end;
+
 { TDbJwtKeyStoreTests }
 
 function KeyRows: IQueryResult;
@@ -708,7 +1002,7 @@ begin
     LFactory := LMock;
     LMock.AddResult('JWT_KEY.BY_TENANT', KeyRows);
     LRing := NewRing(DbStore(LFactory), Options);
-    TAssert.AssertTrue(LRing.SigningKey(LKey));
+    TAssert.AssertTrue(LRing.SigningKey(nil, LKey));
     TAssert.AssertEquals('the newest active key signs', 'k2', LKey.Kid);
     TAssert.AssertTrue(LRing.FindKey('k1', LKey));
     TAssert.AssertEquals('k1 until k2 + MaxTokenSeconds', Int64(START + 1600), LKey.NotAfter);
@@ -720,6 +1014,7 @@ end;
 
 initialization
   TDUnitX.RegisterTestFixture(TJwtRotationTests);
+  TDUnitX.RegisterTestFixture(TTenantJwtKeyRingTests);
   TDUnitX.RegisterTestFixture(TDbJwtKeyStoreTests);
 
 end.

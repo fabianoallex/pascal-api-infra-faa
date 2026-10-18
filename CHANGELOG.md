@@ -27,6 +27,14 @@ may change the API; each such change is listed here.
   (tests), and `TRedisJwtKeyStore` in `src/redis/PascalApi.Redis.JwtKeys` (pascal-redis-faa,
   outside the package). Sample 03: `JWT_KEY_STORE=db` or `redis`;
   `tools/http_scenarios_jwt_rotation.sh` checks both with two instances (22 checks each).
+- **A JWT signing key per tenant** (phase 3 of [docs/jwt-keys-design.md](docs/jwt-keys-design.md)):
+  `TTenantJwtKeyRing` (`PascalApi.Tenancy`), one rotating ring per tenant on one store, the
+  tenant inside the kid (`acme/<16 hex>`); a token verifies only when its tenant claim names
+  its key's tenant. Rings for the catalog's tenants (read again every `ReloadSeconds`) and for a
+  tenant that signs; a kid naming any other tenant asks neither the store nor the catalog.
+  `IJwtKeyRing.SigningKey` now takes the claims, and the ring has `ScopeClaim`; `TJwtKey` has
+  `Scope`. Sample 03's `db`/`redis` modes use it; `tools/http_scenarios_jwt_rotation.sh`
+  tries acme's key on a token claiming globex (29 checks on the database, 25 on Redis).
 - Guide [Your project on both compilers](docs/guide/dual-compiler.md): the layout, project
   files, code rules, mirrored tests and CI for an application of your own on Delphi and
   Lazarus/FPC, and the Claude Code skills that carry the rules (pascal-skills-faa).

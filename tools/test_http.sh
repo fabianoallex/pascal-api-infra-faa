@@ -72,7 +72,9 @@ rotation() {
   (cd samples/03-tenants && ./TenantApiSample.exe 9352 > server2.log 2>&1 &)
   for I in 1 2 3 4 5 6 7 8 9 10; do curl -s -o /dev/null "http://127.0.0.1:9352/" && break; sleep 1; done
   RC=0
-  sh tools/http_scenarios_jwt_rotation.sh 9351 9352 || RC=$?
+  CONTROL_DB=""
+  [ "$1" = db ] && CONTROL_DB="samples/03-tenants/control.sqlite"
+  CONTROL_DB="$CONTROL_DB" sh tools/http_scenarios_jwt_rotation.sh 9351 9352 || RC=$?
   taskkill //F //IM TenantApiSample.exe >/dev/null 2>&1 || pkill -f TenantApiSample 2>/dev/null || true
   unset JWT_KEY_STORE JWT_ROTATE_SECONDS JWT_PROPAGATION_SECONDS JWT_RELOAD_SECONDS JWT_REDIS_PREFIX
   [ $RC -eq 0 ] || { echo "--- server.log"; tail -20 samples/03-tenants/server.log;
