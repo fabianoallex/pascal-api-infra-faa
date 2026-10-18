@@ -60,9 +60,9 @@ uses
 // (PascalApi.Horse.Observability); 1.7.0: PascalCommon.Tracing (PascalApi.Otlp, the logger,
 // the MCP executor; it replaced PascalApi.Tracing); 1.8.1: SafeWriteln flushes on Delphi (the
 // access log, with stdout in a file or a pipe); 1.15.0: PascalCommon.Random (PascalApi.JwtKeys'
-// generated keys).
-{$IF PASCALCOMMON_VERSION < 11500}
-  {$MESSAGE FATAL 'pascal-api-infra-faa needs pascal-common-faa 1.15.0 or later'}
+// generated keys); 1.16.0: PascalCommon.AesGcm (PascalApi.JwtKeys' sealed secrets).
+{$IF PASCALCOMMON_VERSION < 11600}
+  {$MESSAGE FATAL 'pascal-api-infra-faa needs pascal-common-faa 1.16.0 or later'}
 {$IFEND}
 
 type

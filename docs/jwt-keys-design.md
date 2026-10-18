@@ -151,11 +151,40 @@ A ring may also be **static**, from `JWT_KEYS` (`kid:secret[@notAfter],...`, the
 signs): manual rotation for an API without a database, and the first step of the
 implementation.
 
-### 6. Secrets are stored as plain text, for now (user, 2026-10-18)
+### 6. Secrets sealed under a master key (user, 2026-10-18, revising "plain text for now")
 
-Protected by access to the database only. Encrypting them with a master key needs AES on both
-compilers, which none of the `*-faa` libraries has. To revisit when one does. The guide says
-so, and says that a database backup holds every tenant's signing keys.
+First decided as plain text, protected by access to the database only, since no `*-faa`
+library had AES. Revised the same day, four choices by the user:
+
+- **An interface and our own AES** (`IJwtSecretCipher`, `TAesGcmSecretCipher`): AES-256-GCM in
+  pure Pascal, the same on both compilers, no dependency. The interface leaves room for a KMS
+  or Vault later. Rejected: the operating system's crypto (CNG and OpenSSL: two code paths and
+  OpenSSL required on Linux), and the interface alone.
+- **AES-GCM lives in pascal-common-faa** (`PascalCommon.AesGcm`, 1.16.0), ahead of a second
+  user, not in `PascalApi.Crypto`.
+- **Master keys listed with an id** (`JWT_KEYS_MASTER_KEY=m2:<base64>,m1:<base64>`, the format
+  of `JWT_KEYS`): the first seals, every one opens; a sealed secret names its master's id.
+- **Plain rows still load, new keys are sealed**: the rotation replaces the plain ones;
+  `ARequireSealed` refuses plain text once they are gone.
+
+As built: `TSealedJwtKeyStore` wraps any store (database, Redis, memory), so the ring and the
+stores don't change. A sealed secret is `aesgcm:v1:<master id>:<nonce>:<ciphertext+tag>`
+(Base64url, about 110 characters: sample 03's `SECRET` column went from `VARCHAR(64)` to
+`VARCHAR(255)`). The GCM's additional data is the secret's place,
+`jwt-key|<scope>|<kid>|<generation>`: a sealed secret copied to another tenant's row doesn't
+open (tested). A value that is sealed and doesn't open is `EJwtKeyError` naming the kid's place
+and the master id, never a secret or a master key; at startup that stops the API, later the
+ring keeps its loaded keys and reports it.
+
+Timing: the AES S-box is a table lookup (cache timing). Accepted for this use: a secret is
+opened when the keys reload, not on a request's input. Stated in `PascalCommon.AesGcm`.
+
+Measured: `TSealedSecretTests` (10 tests, among them a value sealed by OpenSSL through Python's
+cryptography and opened here); `tools/http_scenarios_jwt_rotation.sh` checks that every secret
+in sample 03's `control.sqlite` is sealed and opens acme's with OpenSSL (31 checks; 25 on Redis),
+on FPC Windows and Linux and Delphi 12 Win32/Win64 (SQLdb and FireDAC). AES-GCM itself:
+`PascalCommon.AesGcmTests` in pascal-common-faa (NIST and OpenSSL vectors), 307 tests on the
+same four.
 
 ### 7. Random bytes come from pascal-common-faa (proposal)
 
@@ -294,6 +323,7 @@ replaced) and `docs/guide/multitenancy.md`.
   without the secret, but need RSA or ECDSA on both compilers.
 - Refresh tokens: they make short access tokens practical, which shortens `MaxTokenLifetime`,
   but they are an application's flow.
-- Encrypting the stored secrets (decision 6).
+- Envelope encryption with an external KMS or Vault: possible behind `IJwtSecretCipher`, not
+  shipped.
 - Announcing a new key through Redis Pub/Sub: the propagation delay (decision 4) already covers
   it, without a subscriber per instance.

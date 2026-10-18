@@ -35,14 +35,20 @@ may change the API; each such change is listed here.
   `IJwtKeyRing.SigningKey` now takes the claims, and the ring has `ScopeClaim`; `TJwtKey` has
   `Scope`. Sample 03's `db`/`redis` modes use it; `tools/http_scenarios_jwt_rotation.sh`
   tries acme's key on a token claiming globex (29 checks on the database, 25 on Redis).
+- **Sealed JWT signing keys**: `TSealedJwtKeyStore` wraps any key store and keeps the secrets
+  sealed with AES-256-GCM (`TAesGcmSecretCipher`, pascal-common-faa's `PascalCommon.AesGcm`)
+  under master keys listed with an id (`JWT_KEYS_MASTER_KEY=m2:<base64>,m1:<base64>`; the first
+  seals, all open). A sealed secret is bound to its tenant, kid and generation; plain secrets
+  stored before still load unless sealing is required. `IJwtSecretCipher` leaves room for a
+  KMS. Sample 03 seals in both its `db` and `redis` modes (`SECRET` column now `VARCHAR(255)`).
 - Guide [Your project on both compilers](docs/guide/dual-compiler.md): the layout, project
   files, code rules, mirrored tests and CI for an application of your own on Delphi and
   Lazarus/FPC, and the Claude Code skills that carry the rules (pascal-skills-faa).
 
 ### Changed
 
-- **Requires pascal-common-faa 1.15.0** (was 1.8.1): `PascalApi.JwtKeys` takes its random bytes
-  from `PascalCommon.Random`. `PASCALCOMMON_VERSION` in `PascalApi.Dto` and the `.lpk` say so.
+- **Requires pascal-common-faa 1.16.0** (was 1.8.1): `PascalApi.JwtKeys` takes its random bytes
+  from `PascalCommon.Random` (1.15.0) and seals with `PascalCommon.AesGcm` (1.16.0). `PASCALCOMMON_VERSION` in `PascalApi.Dto` and the `.lpk` say so.
 - pascal-redis-faa 0.2.0 is a new submodule, only for the tests and sample 03 (Redis store).
 - The pascal-common-faa submodule (used by this repository's tests and samples) moved from
   1.10.0 to 1.14.0. Sample 02 names its normalization rules in a factory

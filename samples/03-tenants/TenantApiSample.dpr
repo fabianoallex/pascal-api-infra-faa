@@ -43,7 +43,10 @@
   secret. With JWT_KEY_STORE=redis the same, kept in Redis instead
   (TRedisJwtKeyStore, src/redis; REDIS_HOST, default 127.0.0.1, REDIS_PORT,
   default 6379, and JWT_REDIS_PREFIX, default tenants-api:).
-  tools/http_scenarios_jwt_rotation.sh runs both with seconds.
+  tools/http_scenarios_jwt_rotation.sh runs both with seconds. In both, the
+  secrets are sealed in the store (TSealedJwtKeyStore, AES-256-GCM) under
+  JWT_KEYS_MASTER_KEY, by default a development key (DEFAULT_MASTER_KEY);
+  JWT_KEYS_REQUIRE_SEALED=true refuses a secret stored in plain text.
 
   Rate limit: one window per tenant, 1000 requests a minute, 5 for the plan
   "free" (hooli). Each access line and server span carries tenant.id
@@ -133,6 +136,9 @@ const
   DEFAULT_JWT_KEYS = 'k2:development-key-2-change-me,k1:development-key-1-change-me,' +
     'k0:development-key-0-change-me@1767225600';
   TOKEN_SECONDS = 3600;
+  // Development master key (the 32 bytes "development-master-key-change-me"):
+  // never in production. Generate one with: openssl rand -base64 32
+  DEFAULT_MASTER_KEY = 'dev:ZGV2ZWxvcG1lbnQtbWFzdGVyLWtleS1jaGFuZ2UtbWU=';
 
 var
   GSecret, GClaim, GDataDir: string;
@@ -490,6 +496,7 @@ var
   LMode: string;
   LOptions: TJwtRotationOptions;
   LStore: IJwtKeyStore;
+  LMaster, LSealed: string;
   LRing: TTenantJwtKeyRing;
   LParams: TRedisParams;
 begin
@@ -519,11 +526,21 @@ begin
     LStore := TRedisJwtKeyStore.Create(TRedisClient.Create(LParams),
       TAppConfig.Get('JWT_REDIS_PREFIX', 'tenants-api:'), True);
   end;
+  // The secrets sealed in the store, under the master key.
+  LMaster := TAppConfig.Get('JWT_KEYS_MASTER_KEY', DEFAULT_MASTER_KEY);
+  if LMaster <> '' then
+    LStore := TSealedJwtKeyStore.Create(LStore, TAesGcmSecretCipher.Create(LMaster),
+      TAppConfig.GetBool('JWT_KEYS_REQUIRE_SEALED', False));
   // A reload that fails later keeps the loaded keys; the log says so.
   LRing := TTenantJwtKeyRing.Create(GCatalog, LStore, LOptions, GClaim, ALog.Error);
   Result := LRing;
-  SafeWriteln('JWT keys: generated, in %s, one ring per tenant (%d tenants)',
-    [LMode, LRing.TenantCount]);
+  // Not BoolToStr(B, 'a', 'b'): FPC has it, Delphi's second parameter is a Boolean.
+  if LMaster <> '' then
+    LSealed := 'sealed'
+  else
+    LSealed := 'not sealed';
+  SafeWriteln('JWT keys: generated, in %s, one ring per tenant (%d tenants), %s',
+    [LMode, LRing.TenantCount, LSealed]);
 end;
 
 var

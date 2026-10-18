@@ -63,7 +63,25 @@ unit PascalApi.JwtKeys;
   ring whose ScopeClaim isn't '' makes Decode require that claim of the
   verified token to equal the scope of the key that signed it, so a
   tenant's key can't sign another tenant's tokens; SigningKey gets the
-  claims to pick the scope. *)
+  claims to pick the scope.
+
+  Sealed secrets (decision 6, revised): TSealedJwtKeyStore wraps any store
+  and keeps the secrets sealed by an IJwtSecretCipher. TAesGcmSecretCipher
+  seals with AES-256-GCM (pascal-common-faa's PascalCommon.AesGcm) under a
+  master key from JWT_KEYS_MASTER_KEY, entries "id:<base64 of 32 bytes>"
+  separated by ","; the first one seals, every one opens:
+
+    JWT_KEYS_MASTER_KEY=m2:<openssl rand -base64 32>,m1:<the previous one>
+
+  A sealed secret is "aesgcm:v1:<master id>:<nonce>:<ciphertext and tag>"
+  (Base64url), about 110 characters. Its place (scope, kid, generation) is
+  the GCM's additional data: a sealed secret copied to another tenant's row
+  doesn't open. A secret stored before sealing was turned on (plain text)
+  still loads, unless ARequireSealed; every key added from then on is
+  sealed, and the rotation replaces the plain ones. A value that is sealed
+  but doesn't open (another master key, a changed value or place) is an
+  EJwtKeyError, whose message names the kid and the master id, never a
+  secret or a master key. *)
 
 interface
 
@@ -127,6 +145,52 @@ type
     /// instance won the rotation). Any other failure raises.
     function TryAdd(const AScope: string; const AKey: TJwtKey): Boolean;
     /// Removes AScope's key AKid; nothing when it isn't there.
+    procedure Delete(const AScope, AKid: string);
+  end;
+
+  /// Seals the secrets a store keeps (TSealedJwtKeyStore).
+  IJwtSecretCipher = interface
+    ['{2D81B03F-CEA9-4C1B-A283-810173654280}']
+    /// ASecret sealed for AContext: the sealed value opens only with the
+    /// same context.
+    function Seal(const ASecret, AContext: string): string;
+    /// False when AValue isn't sealed (plain text). True and ASecret when it
+    /// opens. EJwtKeyError when it is sealed and doesn't open.
+    function Open(const AValue, AContext: string; out ASecret: string): Boolean;
+  end;
+
+  /// AES-256-GCM under master keys named by id (the unit's comment).
+  TAesGcmSecretCipher = class(TInterfacedObject, IJwtSecretCipher)
+  private type
+    TMasterKey = record
+      Id: string;
+      Key: TBytes;
+    end;
+  private
+    FKeys: array of TMasterKey;
+  public
+    /// AText: JWT_KEYS_MASTER_KEY's format. EJwtKeyError for no key, an
+    /// invalid or repeated id, or a key that isn't 32 bytes in Base64.
+    constructor Create(const AText: string);
+    function Seal(const ASecret, AContext: string): string;
+    function Open(const AValue, AContext: string; out ASecret: string): Boolean;
+    /// The id that seals (the first one).
+    function SealingId: string;
+  end;
+
+  /// AInner with its secrets sealed by ACipher (the unit's comment).
+  TSealedJwtKeyStore = class(TInterfacedObject, IJwtKeyStore)
+  private
+    FInner: IJwtKeyStore;
+    FCipher: IJwtSecretCipher;
+    FRequireSealed: Boolean;
+  public
+    constructor Create(const AInner: IJwtKeyStore; const ACipher: IJwtSecretCipher;
+      ARequireSealed: Boolean = False);
+    /// What a key's secret is sealed for: 'jwt-key|<scope>|<kid>|<generation>'.
+    class function Context(const AScope: string; const AKey: TJwtKey): string; static;
+    function Load(const AScope: string): TJwtKeyArray;
+    function TryAdd(const AScope: string; const AKey: TJwtKey): Boolean;
     procedure Delete(const AScope, AKid: string);
   end;
 
@@ -268,6 +332,7 @@ implementation
 uses
   PascalCommon.SystemContext,
   PascalCommon.Random,
+  PascalCommon.AesGcm,
   PascalApi.Text,
   PascalApi.Crypto;
 
@@ -886,6 +951,186 @@ begin
     LScope.Rollback;
     raise;
   end;
+end;
+
+{ TAesGcmSecretCipher }
+
+const
+  SEALED_PREFIX = 'aesgcm:';
+  SEALED_V1 = 'aesgcm:v1:';
+  MASTER_KEY_BYTES = 32;
+
+// Base64 in either alphabet, with or without padding (openssl rand -base64
+// writes the standard one).
+function DecodeBase64Any(const AText: string; out ABytes: TBytes): Boolean;
+var
+  LText: string;
+  I: Integer;
+begin
+  LText := '';
+  for I := 1 to Length(AText) do
+    case AText[I] of
+      '+': LText := LText + '-';
+      '/': LText := LText + '_';
+      '=': ;
+    else
+      LText := LText + AText[I];
+    end;
+  Result := PaBase64UrlDecode(LText, ABytes);
+end;
+
+function JoinBytes(const A, B: TBytes): TBytes;
+begin
+  Result := nil;
+  SetLength(Result, Length(A) + Length(B));
+  if Length(A) > 0 then
+    Move(A[0], Result[0], Length(A));
+  if Length(B) > 0 then
+    Move(B[0], Result[Length(A)], Length(B));
+end;
+
+constructor TAesGcmSecretCipher.Create(const AText: string);
+var
+  LRest, LEntry, LId, LKeyText: string;
+  LComma, LColon, I: Integer;
+  LKey: TBytes;
+begin
+  inherited Create;
+  LRest := Trim(AText);
+  while LRest <> '' do
+  begin
+    LComma := Pos(',', LRest);
+    if LComma = 0 then
+    begin
+      LEntry := Trim(LRest);
+      LRest := '';
+    end
+    else
+    begin
+      LEntry := Trim(Copy(LRest, 1, LComma - 1));
+      LRest := Trim(Copy(LRest, LComma + 1, MaxInt));
+      if LRest = '' then
+        raise EJwtKeyError.Create('JWT_KEYS_MASTER_KEY: an empty entry after the last ","');
+    end;
+    LColon := Pos(':', LEntry);
+    if LColon = 0 then
+      raise EJwtKeyError.CreateFmt('JWT_KEYS_MASTER_KEY: entry %d is not id:key',
+        [Length(FKeys) + 1]);
+    LId := Trim(Copy(LEntry, 1, LColon - 1));
+    LKeyText := Trim(Copy(LEntry, LColon + 1, MaxInt));
+    if not KidIsValid(LId) then
+      raise EJwtKeyError.CreateFmt('JWT_KEYS_MASTER_KEY: entry %d has an invalid id ' +
+        '(1 to %d of A-Z a-z 0-9 . _ -)', [Length(FKeys) + 1, JWT_MAX_KID_BYTES]);
+    for I := 0 to High(FKeys) do
+      if FKeys[I].Id = LId then
+        raise EJwtKeyError.CreateFmt('JWT_KEYS_MASTER_KEY: id "%s" appears twice', [LId]);
+    if not DecodeBase64Any(LKeyText, LKey) or (Length(LKey) <> MASTER_KEY_BYTES) then
+      raise EJwtKeyError.CreateFmt('JWT_KEYS_MASTER_KEY: key "%s" is not %d bytes in Base64',
+        [LId, MASTER_KEY_BYTES]);
+    SetLength(FKeys, Length(FKeys) + 1);
+    FKeys[High(FKeys)].Id := LId;
+    FKeys[High(FKeys)].Key := LKey;
+  end;
+  if Length(FKeys) = 0 then
+    raise EJwtKeyError.Create('JWT_KEYS_MASTER_KEY: no key');
+end;
+
+function TAesGcmSecretCipher.SealingId: string;
+begin
+  Result := FKeys[0].Id;
+end;
+
+function TAesGcmSecretCipher.Seal(const ASecret, AContext: string): string;
+var
+  LNonce, LCipher, LTag: TBytes;
+begin
+  LNonce := PcRandomBytes(PC_AES_GCM_NONCE_BYTES);
+  LCipher := PcAesGcmEncrypt(FKeys[0].Key, LNonce, PaStringToUtf8Bytes(ASecret),
+    PaStringToUtf8Bytes(AContext), LTag);
+  Result := SEALED_V1 + FKeys[0].Id + ':' + PaBase64UrlEncode(LNonce) + ':' +
+    PaBase64UrlEncode(JoinBytes(LCipher, LTag));
+end;
+
+function TAesGcmSecretCipher.Open(const AValue, AContext: string; out ASecret: string): Boolean;
+var
+  LRest, LId, LNoncePart, LDataPart: string;
+  LColon, I, LIndex: Integer;
+  LNonce, LData, LPlain: TBytes;
+begin
+  ASecret := '';
+  if Copy(AValue, 1, Length(SEALED_PREFIX)) <> SEALED_PREFIX then
+    Exit(False);
+  if Copy(AValue, 1, Length(SEALED_V1)) <> SEALED_V1 then
+    raise EJwtKeyError.Create('JWT key store: a sealed secret of an unknown version');
+  LRest := Copy(AValue, Length(SEALED_V1) + 1, MaxInt);
+  LColon := Pos(':', LRest);
+  LId := Copy(LRest, 1, LColon - 1);
+  LRest := Copy(LRest, LColon + 1, MaxInt);
+  LColon := Pos(':', LRest);
+  LNoncePart := Copy(LRest, 1, LColon - 1);
+  LDataPart := Copy(LRest, LColon + 1, MaxInt);
+  LIndex := -1;
+  for I := 0 to High(FKeys) do
+    if FKeys[I].Id = LId then
+      LIndex := I;
+  if LIndex < 0 then
+    raise EJwtKeyError.CreateFmt('JWT key store: a secret sealed with master key "%s", ' +
+      'which JWT_KEYS_MASTER_KEY doesn''t have', [LId]);
+  if (LColon = 0) or not PaBase64UrlDecode(LNoncePart, LNonce) or (Length(LNonce) = 0) or
+    not PaBase64UrlDecode(LDataPart, LData) or (Length(LData) < PC_AES_GCM_TAG_BYTES) or
+    not PcAesGcmDecrypt(FKeys[LIndex].Key, LNonce,
+      Copy(LData, 0, Length(LData) - PC_AES_GCM_TAG_BYTES), PaStringToUtf8Bytes(AContext),
+      Copy(LData, Length(LData) - PC_AES_GCM_TAG_BYTES, PC_AES_GCM_TAG_BYTES), LPlain) then
+    raise EJwtKeyError.CreateFmt('JWT key store: a secret sealed with master key "%s" ' +
+      'doesn''t open (another key under that id, or the value or its place changed: %s)',
+      [LId, AContext]);
+  ASecret := PaUtf8BytesToString(LPlain, 'JWT key secret');
+  Result := True;
+end;
+
+{ TSealedJwtKeyStore }
+
+constructor TSealedJwtKeyStore.Create(const AInner: IJwtKeyStore;
+  const ACipher: IJwtSecretCipher; ARequireSealed: Boolean);
+begin
+  inherited Create;
+  if (AInner = nil) or (ACipher = nil) then
+    raise EArgumentException.Create('TSealedJwtKeyStore: no store or no cipher');
+  FInner := AInner;
+  FCipher := ACipher;
+  FRequireSealed := ARequireSealed;
+end;
+
+class function TSealedJwtKeyStore.Context(const AScope: string; const AKey: TJwtKey): string;
+begin
+  Result := 'jwt-key|' + AScope + '|' + AKey.Kid + '|' + IntToStr(AKey.Generation);
+end;
+
+function TSealedJwtKeyStore.Load(const AScope: string): TJwtKeyArray;
+var
+  I: Integer;
+  LSecret: string;
+begin
+  Result := FInner.Load(AScope);
+  for I := 0 to High(Result) do
+    if FCipher.Open(Result[I].Secret, Context(AScope, Result[I]), LSecret) then
+      Result[I].Secret := LSecret
+    else if FRequireSealed then
+      raise EJwtKeyError.CreateFmt('JWT key store: key "%s" is not sealed', [Result[I].Kid]);
+end;
+
+function TSealedJwtKeyStore.TryAdd(const AScope: string; const AKey: TJwtKey): Boolean;
+var
+  LKey: TJwtKey;
+begin
+  LKey := AKey;
+  LKey.Secret := FCipher.Seal(AKey.Secret, Context(AScope, AKey));
+  Result := FInner.TryAdd(AScope, LKey);
+end;
+
+procedure TSealedJwtKeyStore.Delete(const AScope, AKid: string);
+begin
+  FInner.Delete(AScope, AKid);
 end;
 
 { TJwtKeys }

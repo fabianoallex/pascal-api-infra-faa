@@ -323,7 +323,7 @@ The database store runs your SQL by name, like the tenant catalog. Sample 03's
 
 ```sql
 CREATE TABLE JWT_KEYS (TENANT_ID VARCHAR(40) NOT NULL, GENERATION INTEGER NOT NULL,
-  KID VARCHAR(128) NOT NULL, SECRET VARCHAR(64) NOT NULL, CREATED_AT BIGINT NOT NULL,
+  KID VARCHAR(128) NOT NULL, SECRET VARCHAR(255) NOT NULL, CREATED_AT BIGINT NOT NULL,
   ACTIVE_FROM BIGINT NOT NULL, CONSTRAINT PK_JWT_KEYS PRIMARY KEY (TENANT_ID, GENERATION),
   CONSTRAINT UQ_JWT_KEYS_KID UNIQUE (KID));
 -- JWT_KEY.BY_TENANT
@@ -386,6 +386,40 @@ tried on a token claiming globex, a kid naming a tenant that doesn't exist, each
 key) and in `PascalApi.JwtRotationTests` (`TTenantJwtKeyRingTests`: no store or catalog query for
 50 unknown tenants' kids, a tenant added to the catalog later).
 
+### 11. Seal the secrets in the store
+
+Whoever can read the keys' table (or the Redis hash, or a backup) can sign tokens. Wrap the
+store in `TSealedJwtKeyStore`, and the secrets are kept sealed with AES-256-GCM under a master
+key that never goes to the store. From sample 03 (`OpenKeys`):
+
+```pascal
+LMaster := TAppConfig.Get('JWT_KEYS_MASTER_KEY', DEFAULT_MASTER_KEY);
+if LMaster <> '' then
+  LStore := TSealedJwtKeyStore.Create(LStore, TAesGcmSecretCipher.Create(LMaster),
+    TAppConfig.GetBool('JWT_KEYS_REQUIRE_SEALED', False));
+```
+
+- **The master key**: `JWT_KEYS_MASTER_KEY=m1:<base64 of 32 bytes>`; make one with
+  `openssl rand -base64 32`. Put it in the environment or your platform's secret store, never
+  next to the database it protects. Every instance needs the same list.
+- **Rotating the master key**: put the new one first (`m2:<new>,m1:<old>`). New keys are sealed
+  with m2; the ones sealed with m1 still open, and the ring's rotation replaces them. Drop m1
+  after `RotateEverySeconds` + `MaxTokenSeconds`.
+- **Secrets stored before sealing** (plain text) still load, and the rotation replaces them.
+  Once they are gone, pass `True` as the third argument (`JWT_KEYS_REQUIRE_SEALED=true` in the
+  sample) and a plain secret in the store is an error.
+- **A sealed secret is bound to its row** (tenant, kid, generation): copied to another tenant's
+  row it doesn't open, and the API reports it instead of using it.
+- **A sealed secret takes about 110 characters**: size the column for it (`VARCHAR(255)`).
+- **A wrong master key** stops the API at startup (`EJwtKeyError`, naming the master id, never a
+  key); later it is reported through `OnError` and the loaded keys stay in use.
+
+The AES is pascal-common-faa's (`PascalCommon.AesGcm`), checked against NIST's and OpenSSL's
+vectors. Its S-box is a table lookup, which a process sharing the CPU could time; that is fine
+here, where a secret is opened when the keys reload, not for what a client sends. Checked over
+HTTP by `tools/http_scenarios_jwt_rotation.sh`: every secret in sample 03's database is sealed,
+and acme's opens with OpenSSL (Python's cryptography).
+
 ## Choices
 
 ### JWT or your own tokens
@@ -407,9 +441,8 @@ revoked tokens and check it in your own middleware after `TJwtMiddleware`.
   handler or in a middleware of yours.
 - **One secret, unless you use a key ring.** With `New(ASecret)`, rotating the secret
   invalidates every token issued with the old one; a key ring keeps them (steps 8 and 9).
-- **The secrets are stored as they are**, in your database or your Redis: whoever reads that
-  table, or a backup of it, can sign tokens. Encrypting them needs AES, which the `*-faa`
-  libraries don't have yet.
+- **Sealed secrets or not**: without `TSealedJwtKeyStore` the secrets are stored as they are,
+  and whoever reads the table or the hash, or a backup of it, can sign tokens (step 11).
 - **No leeway for clock differences**: a token is expired from the second `exp` says
   (`Decode_ExpBoundary`). Between an issuer and a verifier on different machines, prefer short
   lifetimes to a tolerance.
@@ -490,6 +523,8 @@ script, as `tools/http_scenarios_tenants.sh` does with Python (`sign`).
 - `PascalApi.JwtKeys`: `TStaticJwtKeyRing` (`JWT_KEYS`), `TRotatingJwtKeyRing` and
   `TJwtRotationOptions`, the stores (`IJwtKeyStore`, `TDbJwtKeyStore`, `TMemoryJwtKeyStore`),
   `TJwtKeys` (sign and decode by `kid`).
+- `PascalApi.JwtKeys`: `IJwtSecretCipher`, `TAesGcmSecretCipher` (`JWT_KEYS_MASTER_KEY`),
+  `TSealedJwtKeyStore`.
 - `src/redis/PascalApi.Redis.JwtKeys`: `TRedisJwtKeyStore`.
 - `PascalApi.Crypto`: SHA-256, HMAC, Base64url (tested against FIPS 180, RFC 4231, RFC 4648).
 - `PascalApi.Http`: `ParseBearer`, `PathMatchesAny`, `BearerChallenge`.

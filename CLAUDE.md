@@ -88,7 +88,7 @@ all (measured, skill `references/rtti-gotchas.md`).
 
 ## Dependencies
 
-`external/` holds the dependencies as git submodules, pinned: pascal-common-faa `v1.15.0` (the library itself needs 1.15.0, for `PascalCommon.Random`; sample 02 uses 1.14.0's
+`external/` holds the dependencies as git submodules, pinned: pascal-common-faa `v1.16.0` (the library itself needs 1.16.0, for `PascalCommon.Random` and `PascalCommon.AesGcm`; sample 02 uses 1.14.0's
 normalizer factories, unit `PascalCommon.Normalizers`, `TNorm = class(TPcStringNormalizers)` in `DbApiSample.Normalizers`; the samples turn on 1.10.0's
 `PcSetSafeLogUtf8` and log only through `SafeWriteln`, never plain `Writeln`),
 pascal-jsonmapper-faa `v0.6.0` (refuses duplicate members; `EJsonInputError` = 400; exact
@@ -188,7 +188,10 @@ Redis store, done; 3: one ring per tenant, the tenant inside the `kid`, done).
 - The `kid` is read before the signature is checked: input, never trust. It is looked up only
   in memory (never a query per unknown kid), and an unknown or retired kid answers the same
   401 as a bad signature.
-- Error messages never contain a secret (`Parse_ErrorsNeverShowTheSecret`).
+- Error messages never contain a secret (`Parse_ErrorsNeverShowTheSecret`), nor a master key.
+- Sealed secrets: `TSealedJwtKeyStore` + `TAesGcmSecretCipher` (`JWT_KEYS_MASTER_KEY`). The
+  GCM's additional data is `jwt-key|<scope>|<kid>|<generation>`: keep it, or a sealed secret
+  could be moved to another tenant's row. The AES is pascal-common-faa's; don't write another.
 - Per tenant: `TTenantJwtKeyRing` (`PascalApi.Tenancy`). A key's `Scope` and the ring's
   `ScopeClaim` make `TJwtKeys.Decode` refuse a tenant's key on another tenant's claim. Rings
   only for the catalog's tenants and tenants that sign: never create one, or query anything,

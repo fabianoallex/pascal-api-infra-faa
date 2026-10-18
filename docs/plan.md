@@ -300,3 +300,8 @@ per tenant with the claim checked against the key's tenant; sample 03's `db`/`re
 it (29 and 25 checks). FPC on Windows and Linux and Delphi 12 Win32/Win64: 330 tests, 0 leaks.
 Three choices taken as consequences of the design ("Phase 3 as built" in
 `docs/jwt-keys-design.md`), shown to the user, no change asked. All three phases done.
+
+Sealed secrets on 2026-10-18 (unreleased; decision 6 revised with the user's four choices):
+pascal-common-faa 1.16.0 (`PascalCommon.AesGcm`, now the minimum), `TSealedJwtKeyStore` and
+`TAesGcmSecretCipher` here; sample 03 seals in both modes. FPC on Windows and Linux and Delphi
+12 Win32/Win64: 340 tests, 0 leaks; 186 + 93 + 107 + 31 + 25 checks.

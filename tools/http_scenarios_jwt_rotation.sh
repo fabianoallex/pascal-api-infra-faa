@@ -10,7 +10,10 @@
 # JWT_KEY_STORE=redis keeps the keys in Redis instead (REDIS_HOST,
 # REDIS_PORT, JWT_REDIS_PREFIX). One ring per tenant (phase 3): a kid is
 # "<tenant>/<16 hex>". CONTROL_DB, the sample's control.sqlite (db mode),
-# lets this script read acme's key and try it on a token claiming globex. With port2, a second instance of the
+# lets this script check that the stored secrets are sealed (AES-256-GCM,
+# under JWT_KEYS_MASTER_KEY, the sample's development key by default), open
+# acme's with Python's cryptography (OpenSSL), and try it on a token
+# claiming globex. With port2, a second instance of the
 # sample on the same store (started after the first, without --reset): the
 # two must sign with the same key and verify each other's tokens, also
 # after both raced for the next generation.
@@ -28,6 +31,7 @@ PORT="${1:-9351}"
 PORT2="${2:-}"
 BASE="http://127.0.0.1:$PORT"
 SECRET="${JWT_SECRET:-development-secret-change-me}"
+MASTER="${JWT_KEYS_MASTER_KEY:-dev:ZGV2ZWxvcG1lbnQtbWFzdGVyLWtleS1jaGFuZ2UtbWU=}"
 ROTATE="${JWT_ROTATE_SECONDS:-3}"
 PROPAGATION="${JWT_PROPAGATION_SECONDS:-2}"
 T="$(mktemp -d)"
@@ -95,10 +99,24 @@ tenant_kid globex "$KIDG" && ok || fail "globex has its own key (got '$KIDG')"
 
 # --- a tenant's key can't sign for another tenant (needs its secret: db mode)
 if [ -n "$CONTROL_DB" ]; then
-  ACME_SECRET="$($PY -c '
+  # Every stored secret sealed; acme's opened here, with OpenSSL.
+  UNSEALED="$($PY -c '
 import sqlite3, sys
 c = sqlite3.connect(sys.argv[1])
-print(c.execute("SELECT SECRET FROM JWT_KEYS WHERE KID = ?", (sys.argv[2],)).fetchone()[0])' "$CONTROL_DB" "$KID1")"
+print(c.execute("SELECT COUNT(*) FROM JWT_KEYS WHERE SECRET NOT LIKE ?", ("aesgcm:v1:%",)).fetchone()[0])' "$CONTROL_DB")"
+  [ "$UNSEALED" = "0" ] && ok || fail "every secret sealed in the store ($UNSEALED in plain text)"
+  ACME_SECRET="$($PY -c '
+import sqlite3, sys, base64
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+d = lambda t: base64.urlsafe_b64decode(t + "=" * (-len(t) % 4))
+c = sqlite3.connect(sys.argv[1])
+sealed, gen = c.execute("SELECT SECRET, GENERATION FROM JWT_KEYS WHERE KID = ?", (sys.argv[2],)).fetchone()
+_, version, master_id, nonce, data = sealed.split(":")
+keys = dict(e.strip().split(":", 1) for e in sys.argv[3].split(","))
+key = base64.b64decode(keys[master_id].replace("-", "+").replace("_", "/") + "=" * (-len(keys[master_id]) % 4))
+aad = ("jwt-key|acme|%s|%d" % (sys.argv[2], gen)).encode()
+print(AESGCM(key).decrypt(d(nonce), d(data), aad).decode())' "$CONTROL_DB" "$KID1" "$MASTER")"
+  [ -n "$ACME_SECRET" ] && ok || fail "acme's sealed secret opens with OpenSSL"
   req GET /tenant "" -H "Authorization: Bearer $(sign_header "{\"alg\":\"HS256\",\"typ\":\"JWT\",\"kid\":\"$KID1\"}" '{"sub":"ana","tenant_id":"acme"}' "$ACME_SECRET")"
   status_is 200 "acme's key, read from the store, signs acme's token"
   req GET /tenant "" -H "Authorization: Bearer $(sign_header "{\"alg\":\"HS256\",\"typ\":\"JWT\",\"kid\":\"$KID1\"}" '{"sub":"ana","tenant_id":"globex"}' "$ACME_SECRET")"

@@ -1,4 +1,4 @@
-unit PascalApi.JwtRotationTests;
+﻿unit PascalApi.JwtRotationTests;
 
 (* Tests for phase 2 of docs/jwt-keys-design.md in PascalApi.JwtKeys: the
   rotating key ring (the first key, a whole rotation with its pending,
@@ -11,7 +11,11 @@ unit PascalApi.JwtRotationTests;
   TTenantJwtKeyRing (a key per tenant, a tenant's key refused for another
   tenant's claim, a kid naming an unknown tenant answered without a query,
   a tenant added to the catalog later). TTestCatalog is a catalog the test
-  changes and counts.
+  changes and counts. Sealed secrets: TAesGcmSecretCipher (JWT_KEYS_MASTER_KEY,
+  master key rotation, a value sealed by OpenSSL through Python's
+  cryptography opened here) and TSealedJwtKeyStore (sealed in the store,
+  plain in the ring, plain rows accepted or refused, a sealed secret moved
+  to another row refused).
 
   Time is the test's: a fixed wall clock in TClock (TJwt.UnixNow, what the
   keys' dates use) and a manual TTicker (the reload interval), moved
@@ -116,6 +120,23 @@ type
     [Test] procedure TenantAddedLater;
     [Test] procedure LegacyAndMalformedKids;
     [Test] procedure Rotation_PerTenant;
+  end;
+
+  [TestFixture]
+  TSealedSecretTests = class
+  public
+    [Setup] procedure Setup;
+    [TearDown] procedure TearDown;
+    [Test] procedure MasterKeys_Parsed;
+    [Test] procedure MasterKeys_Invalid;
+    [Test] procedure Seal_ThenOpen;
+    [Test] procedure Open_OpenSslSealedValue;
+    [Test] procedure Open_RefusesAnotherContextOrKey;
+    [Test] procedure MasterKeyRotation;
+    [Test] procedure Store_SealsAndOpens;
+    [Test] procedure Store_PlainRows;
+    [Test] procedure Store_SecretMovedToAnotherRow;
+    [Test] procedure Ring_OnASealedStore;
   end;
 
   [TestFixture]
@@ -883,6 +904,249 @@ begin
   TAssert.AssertEquals('globex untouched', 1, Length(LStore.Load('globex')));
 end;
 
+{ TSealedSecretTests }
+
+const
+  // Master keys: 32 bytes 00..1f (standard Base64, as openssl rand -base64
+  // prints) and 32 bytes of 0xaa (Base64url, without padding).
+  MASTER_1 = 'm1:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=';
+  MASTER_2 = 'm2:qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqo';
+  // Sealed by Python's cryptography (OpenSSL) with MASTER_1's key, nonce
+  // 100..111, for the context below.
+  OPENSSL_SEALED = 'aesgcm:v1:m1:ZGVmZ2hpamtsbW5v:IXWqAwuGJrNNBzyavxFHiyOuc2-7ya7UMDpMTRNWJq0b2BnR';
+  OPENSSL_CONTEXT = 'jwt-key|acme|acme/0123456789abcdef|3';
+
+function CipherError(const AText: string): string;
+var
+  LCipher: IJwtSecretCipher;
+begin
+  Result := '';
+  try
+    LCipher := TAesGcmSecretCipher.Create(AText);
+  except
+    on E: Exception do
+      Result := E.ClassName + ': ' + E.Message;
+  end;
+end;
+
+function OpenError(const ACipher: IJwtSecretCipher; const AValue, AContext: string): string;
+var
+  LSecret: string;
+begin
+  Result := '';
+  try
+    if not ACipher.Open(AValue, AContext, LSecret) then
+      Result := 'plain';
+  except
+    on E: Exception do
+      Result := E.ClassName + ': ' + E.Message;
+  end;
+end;
+
+function Sealed(const AInner: IJwtKeyStore; const ACipher: IJwtSecretCipher;
+  ARequire: Boolean = False): IJwtKeyStore;
+begin
+  Result := TSealedJwtKeyStore.Create(AInner, ACipher, ARequire);
+end;
+
+function Cipher(const AText: string): IJwtSecretCipher;
+begin
+  Result := TAesGcmSecretCipher.Create(AText);
+end;
+
+function OpenText(const ACipher: IJwtSecretCipher; const AValue, AContext: string): string;
+begin
+  if not ACipher.Open(AValue, AContext, Result) then
+    Result := '<plain>';
+end;
+
+procedure TSealedSecretTests.Setup;
+begin
+  GNow := START;
+  GTickMs := 5000000;
+  TClock.SetClock(TRotationClock.Create);
+  TTicker.SetTicker(TRotationTicker.Create);
+end;
+
+procedure TSealedSecretTests.TearDown;
+begin
+  TClock.Reset;
+  TTicker.Reset;
+end;
+
+procedure TSealedSecretTests.MasterKeys_Parsed;
+var
+  LCipher: TAesGcmSecretCipher;
+  LRef: IJwtSecretCipher;
+begin
+  LCipher := TAesGcmSecretCipher.Create(' ' + MASTER_2 + ' , ' + MASTER_1 + ' ');
+  LRef := LCipher;
+  TAssert.AssertEquals('the first one seals', 'm2', LCipher.SealingId);
+  TAssert.AssertEquals('', CipherError(MASTER_1));
+  TAssert.AssertEquals('Base64url, no padding', '', CipherError(MASTER_2));
+end;
+
+procedure TSealedSecretTests.MasterKeys_Invalid;
+
+  procedure Refused(const AName, AText: string);
+  var
+    LError: string;
+  begin
+    LError := CipherError(AText);
+    TAssert.AssertTrue(AName + ': ' + LError, Copy(LError, 1, 12) = 'EJwtKeyError');
+    // Never the key itself in the message.
+    TAssert.AssertTrue(AName + ' shows no key: ' + LError,
+      Pos('AAECAwQFBgcICQoLDA0ODx', LError) + Pos('qqqqqqqq', LError) = 0);
+  end;
+
+begin
+  Refused('empty', '');
+  Refused('no id', 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=');
+  Refused('empty id', ':AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=');
+  Refused('invalid id', 'm/1:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=');
+  Refused('16 bytes', 'm1:AAECAwQFBgcICQoLDA0ODw==');
+  Refused('33 bytes', 'm1:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8g');
+  Refused('not Base64', 'm1:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh*=');
+  Refused('repeated id', MASTER_1 + ',m1:qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqo');
+  Refused('trailing comma', MASTER_1 + ',');
+end;
+
+procedure TSealedSecretTests.Seal_ThenOpen;
+var
+  LCipher: IJwtSecretCipher;
+  LSealed, LAgain: string;
+begin
+  LCipher := Cipher(MASTER_1);
+  LSealed := LCipher.Seal('the-secret-ção', 'jwt-key||k1|1');
+  TAssert.AssertEquals('aesgcm:v1:m1:', Copy(LSealed, 1, 13));
+  TAssert.AssertTrue('no secret in the sealed value', Pos('the-secret', LSealed) = 0);
+  TAssert.AssertEquals('the-secret-ção', OpenText(LCipher, LSealed, 'jwt-key||k1|1'));
+  // A new nonce every time: the same secret never seals the same twice.
+  LAgain := LCipher.Seal('the-secret-ção', 'jwt-key||k1|1');
+  TAssert.AssertTrue(LSealed <> LAgain);
+  // A plain value is not an error: it was stored before sealing.
+  TAssert.AssertEquals('plain', OpenError(LCipher, 'Zm9vYmFy', 'jwt-key||k1|1'));
+end;
+
+procedure TSealedSecretTests.Open_OpenSslSealedValue;
+begin
+  TAssert.AssertEquals('interop-secret-value',
+    OpenText(Cipher(MASTER_1), OPENSSL_SEALED, OPENSSL_CONTEXT));
+end;
+
+procedure TSealedSecretTests.Open_RefusesAnotherContextOrKey;
+var
+  LError: string;
+begin
+  LError := OpenError(Cipher(MASTER_1), OPENSSL_SEALED, 'jwt-key|globex|acme/0123456789abcdef|3');
+  TAssert.AssertTrue('another place: ' + LError, Copy(LError, 1, 12) = 'EJwtKeyError');
+  TAssert.AssertTrue('names the master id', Pos('"m1"', LError) > 0);
+  TAssert.AssertTrue('no secret', Pos('interop', LError) = 0);
+  TAssert.AssertTrue('another key under the id',
+    Copy(OpenError(Cipher('m1:qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqo'), OPENSSL_SEALED,
+      OPENSSL_CONTEXT), 1, 12) = 'EJwtKeyError');
+  TAssert.AssertTrue('an unknown master id',
+    Pos('doesn''t have', OpenError(Cipher(MASTER_2), OPENSSL_SEALED, OPENSSL_CONTEXT)) > 0);
+  TAssert.AssertTrue('an unknown version', Copy(OpenError(Cipher(MASTER_1),
+    'aesgcm:v9:m1:x:y', OPENSSL_CONTEXT), 1, 12) = 'EJwtKeyError');
+  TAssert.AssertTrue('a changed value', Copy(OpenError(Cipher(MASTER_1),
+    Copy(OPENSSL_SEALED, 1, Length(OPENSSL_SEALED) - 1) + 'S', OPENSSL_CONTEXT), 1, 12) = 'EJwtKeyError');
+  TAssert.AssertTrue('a cut value', Copy(OpenError(Cipher(MASTER_1),
+    'aesgcm:v1:m1:ZGVmZ2hpamtsbW5v:IXWq', OPENSSL_CONTEXT), 1, 12) = 'EJwtKeyError');
+  TAssert.AssertTrue('no parts', Copy(OpenError(Cipher(MASTER_1), 'aesgcm:v1:m1',
+    OPENSSL_CONTEXT), 1, 12) = 'EJwtKeyError');
+end;
+
+procedure TSealedSecretTests.MasterKeyRotation;
+var
+  LOld, LNew: IJwtSecretCipher;
+  LSealedOld: string;
+begin
+  LOld := Cipher(MASTER_1);
+  LSealedOld := LOld.Seal('old', 'c');
+  // The new master key first, the old one after it: old values still open,
+  // new ones are sealed with m2.
+  LNew := Cipher(MASTER_2 + ',' + MASTER_1);
+  TAssert.AssertEquals('old', OpenText(LNew, LSealedOld, 'c'));
+  TAssert.AssertEquals('aesgcm:v1:m2:', Copy(LNew.Seal('new', 'c'), 1, 13));
+  // Once m1 is dropped, what it sealed no longer opens.
+  TAssert.AssertTrue(Pos('doesn''t have', OpenError(Cipher(MASTER_2), LSealedOld, 'c')) > 0);
+end;
+
+procedure TSealedSecretTests.Store_SealsAndOpens;
+var
+  LInner, LStore: IJwtKeyStore;
+  LKey: TJwtKey;
+begin
+  LInner := TMemoryJwtKeyStore.Create;
+  LStore := Sealed(LInner, Cipher(MASTER_1));
+  TAssert.AssertTrue(LStore.TryAdd('acme', StoredKey(1, 'acme/0123456789abcdef', 's3cret', START)));
+  LKey := LInner.Load('acme')[0];
+  TAssert.AssertEquals('sealed in the store', 'aesgcm:v1:m1:', Copy(LKey.Secret, 1, 13));
+  TAssert.AssertEquals('plain to the ring', 's3cret', LStore.Load('acme')[0].Secret);
+  TAssert.AssertEquals('jwt-key|acme|acme/0123456789abcdef|1',
+    TSealedJwtKeyStore.Context('acme', LKey));
+  LStore.Delete('acme', 'acme/0123456789abcdef');
+  TAssert.AssertEquals('deleted', 0, Length(LInner.Load('acme')));
+end;
+
+function LoadError(const AStore: IJwtKeyStore; const AScope: string): string;
+begin
+  Result := '';
+  try
+    AStore.Load(AScope);
+  except
+    on E: Exception do
+      Result := E.ClassName + ': ' + E.Message;
+  end;
+end;
+
+procedure TSealedSecretTests.Store_PlainRows;
+var
+  LInner: IJwtKeyStore;
+begin
+  LInner := TMemoryJwtKeyStore.Create;
+  LInner.TryAdd('', StoredKey(1, 'k1', 'plain-from-before', START));
+  TAssert.AssertEquals('accepted by default', 'plain-from-before',
+    Sealed(LInner, Cipher(MASTER_1)).Load('')[0].Secret);
+  TAssert.AssertTrue('refused when sealing is required',
+    Pos('is not sealed', LoadError(Sealed(LInner, Cipher(MASTER_1), True), '')) > 0);
+end;
+
+procedure TSealedSecretTests.Store_SecretMovedToAnotherRow;
+var
+  LInner, LStore: IJwtKeyStore;
+  LAcme, LGlobex: TJwtKey;
+begin
+  LInner := TMemoryJwtKeyStore.Create;
+  LStore := Sealed(LInner, Cipher(MASTER_1));
+  LStore.TryAdd('acme', StoredKey(1, 'acme/0123456789abcdef', 'acme-secret', START));
+  // Someone with write access to the table copies acme's sealed secret into
+  // a row of globex's: it doesn't open there.
+  LAcme := LInner.Load('acme')[0];
+  LGlobex := StoredKey(1, 'globex/0123456789abcdef', LAcme.Secret, START);
+  LInner.TryAdd('globex', LGlobex);
+  TAssert.AssertTrue(Pos('doesn''t open', LoadError(LStore, 'globex')) > 0);
+end;
+
+procedure TSealedSecretTests.Ring_OnASealedStore;
+var
+  LInner, LStore: IJwtKeyStore;
+  LRing: IJwtKeyRing;
+  LToken: string;
+begin
+  LInner := TMemoryJwtKeyStore.Create;
+  LStore := Sealed(LInner, Cipher(MASTER_1));
+  LRing := NewRing(LStore, Options);
+  LToken := TJwtKeys.Sign(LRing, Claims(GNow + 60));
+  TAssert.AssertEquals(Ord(jrValid), Ord(DecodeWith(LRing, LToken)));
+  TAssert.AssertEquals('the store holds it sealed', 'aesgcm:v1:m1:',
+    Copy(LInner.Load('')[0].Secret, 1, 13));
+  // Another instance with the same master key verifies it.
+  TAssert.AssertEquals(Ord(jrValid), Ord(DecodeWith(NewRing(
+    Sealed(LInner, Cipher(MASTER_1)), Options), LToken)));
+end;
+
 { TDbJwtKeyStoreTests }
 
 function KeyRows: IQueryResult;
@@ -1015,6 +1279,7 @@ end;
 initialization
   TDUnitX.RegisterTestFixture(TJwtRotationTests);
   TDUnitX.RegisterTestFixture(TTenantJwtKeyRingTests);
+  TDUnitX.RegisterTestFixture(TSealedSecretTests);
   TDUnitX.RegisterTestFixture(TDbJwtKeyStoreTests);
 
 end.
