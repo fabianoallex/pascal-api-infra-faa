@@ -6,6 +6,12 @@ may change the API; each such change is listed here.
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-10-18
+
+The middlewares' marks on a request live in Horse's request scope instead of request headers,
+and CORS headers no longer come twice on a 404. Cryptography (SHA-256, HMAC, Base64url) moved
+to pascal-common-faa, which is now required at 1.17.0.
+
 ### Fixed
 
 - **`TCorsMiddleware` sent its headers twice on a path no route matches.** Horse 3.3.12 runs the

@@ -10,7 +10,7 @@ threading), [pascal-jsonmapper-faa](https://github.com/fabianoallex/pascal-jsonm
 paging). It is not a drop-in replacement for the Delphi library: DTOs map **published**
 properties, because FPC 3.2.2's RTTI sees nothing else.
 
-Version **0.15.0** (see the [changelog](CHANGELOG.md)): the core, the Horse middlewares, OpenAPI, an MCP
+Version **0.16.0** (see the [changelog](CHANGELOG.md)): the core, the Horse middlewares, OpenAPI, an MCP
 server (protocol 2026-07-28), W3C trace context, metrics (Prometheus), health endpoints,
 spans exported to an OpenTelemetry collector (OTLP), opt-in multi-tenancy
 ([docs/multitenancy-design.md](docs/multitenancy-design.md)), and JWT signing keys that rotate
@@ -111,7 +111,7 @@ process, spans, a server that is down): [docs/guide/messaging.md](docs/guide/mes
 
 | Sample | Shows | Checked by |
 |---|---|---|
-| [01-api](samples/01-api/ApiSample.dpr) | every middleware (errors, CORS, log, metrics, JWT, rate limit), health, paging and validation, in memory | `tools/http_scenarios.sh` (186 checks) |
+| [01-api](samples/01-api/ApiSample.dpr) | every middleware (errors, CORS, log, metrics, JWT, rate limit), health, paging and validation, in memory | `tools/http_scenarios.sh` (190 checks) |
 | [02-db](samples/02-db/DbApiSample.dpr) | SQLite through pascal-db-faa (SQLdb on FPC, FireDAC on Delphi): migrations, paging and ordering in SQL, filters, 409 from a unique key, NULL as `null` | `tools/http_scenarios_db.sh` (93 checks, including a PATCH with absent/null/value; also the pool metrics pascal-db-faa records) |
 | [03-tenants](samples/03-tenants/TenantApiSample.dpr) | multi-tenant with `PascalApi.Tenancy`: the tenant from a JWT claim, a database per tenant and a shared one with `TENANT_ID`, 401/403 for a removed or suspended tenant; JWT signing keys static (`JWT_KEYS`) or generated per tenant, sealed, in the control database or Redis (`JWT_KEY_STORE`) | `tools/http_scenarios_tenants.sh` (107 checks, most of them one tenant trying another's rows, also through a JOIN; also rate limit by plan, `tenant.id` in the log, the static keys); `tools/http_scenarios_jwt_rotation.sh` (two instances on one key store, rotating every 3 s: 31 checks on the database, 25 on Redis) |
 | [04-messaging](samples/04-messaging/MessagingSample.lpr) | Redis (a shared `TRedisClient`, cache-aside, a fallback when Redis is down) and RabbitMQ (JSON orders published with and without confirms, a consumer that rejects what it can't read) inside an API, with spans; [PipesJsonSample](samples/04-messaging/PipesJsonSample.lpr): JSON DTOs between processes over pascal-pipes-faa. FPC only, built by hand (`build_fpc.sh`) against your clones of the sibling libraries | not by CI: measured by hand for [docs/guide/messaging.md](docs/guide/messaging.md) and [docs/guide/dtos-json.md](docs/guide/dtos-json.md) |
