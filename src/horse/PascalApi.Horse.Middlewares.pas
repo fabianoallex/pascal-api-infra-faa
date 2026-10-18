@@ -69,6 +69,8 @@ type
     RequestId: string;
     /// TRateLimitMiddleware counted the request.
     RateLimited: Boolean;
+    /// TCorsMiddleware added its headers.
+    CorsSent: Boolean;
     /// TMetricsMiddleware measures the request.
     Metered: Boolean;
     /// TTenantMiddleware let the request through for TenantId.
@@ -424,8 +426,19 @@ end;
 procedure CorsHandler(AReq: THorseRequest; ARes: THorseResponse; ANext: TNextProc);
 var
   LHeaders: TArray<THttpHeader>;
+  LState: TPascalApiRequestState;
   I: Integer;
 begin
+  // Horse runs the router twice when no route matches (see LoggerHandler):
+  // the headers go on once. Measured before this mark, FPC and Delphi: a
+  // 404 carried Access-Control-Allow-Origin twice, which a browser refuses.
+  LState := TPascalApiRequestState.Get(AReq);
+  if LState.CorsSent then
+  begin
+    ANext();
+    Exit;
+  end;
+  LState.CorsSent := True;
   LHeaders := CorsHeaders(GCorsOptions, AReq.Headers['Origin']);
   for I := 0 to High(LHeaders) do
     ARes.AddHeader(LHeaders[I].Name, LHeaders[I].Value);

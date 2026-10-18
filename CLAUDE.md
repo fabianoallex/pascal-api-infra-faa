@@ -220,10 +220,16 @@ its own Horse `src` to the search path.
   already UTF-8). The unit tests can't see this: only the HTTP scenarios on Delphi do.
 - **When no route matches, Horse 3.3.12 runs the router twice** (the path, then `/*`:
   `Horse.Core.RouterTree`, `DoExecuteInternal`), so every global middleware runs twice for one
-  request. Seen in samples/02-db's log (two access lines for one `GET /`). `TLoggerMiddleware`
-  and `TRateLimitMiddleware` mark the request and run once (the limit counted it twice and sent
-  its headers twice, measured 2026-10-14; `tools/http_scenarios_tenants.sh` checks it); a new
-  global middleware with side effects must do the same. The others still run twice there.
+  request (only when every middleware called `Next`; one that answers, a 401 or a preflight,
+  ends it). Seen in samples/02-db's log (two access lines for one `GET /`). `TLoggerMiddleware`,
+  `TRateLimitMiddleware`, `TMetricsMiddleware` and `TCorsMiddleware` mark the request
+  (`TPascalApiRequestState`) and run once: the limit counted it twice and sent its headers twice
+  (measured 2026-10-14, `tools/http_scenarios_tenants.sh` checks it), and CORS sent
+  `Access-Control-Allow-Origin` twice on a 404, which a browser refuses (measured 2026-10-18 on
+  FPC and Delphi, `tools/http_scenarios.sh` checks it). A new global middleware that adds a
+  header or has a side effect must do the same. JWT and the tenant middleware still run twice
+  there (the same answer, only the cost). Horse's `THorse.AddOnRequest` hook runs once outside
+  both passes, but an application registers the middlewares with `THorse.Use`, so the marks stay.
 - **The client's address is `TClientAddress.Resolve`**, for the access log, the server span and
   the rate limit's default key: `TrustedClientIp` trusts `X-Forwarded-For` only from a loopback
   peer or the `TClientAddress.ProxyHops` proxies (one setting per process). Until 0.13.0 all three
@@ -329,7 +335,7 @@ keys). Non-ASCII test data used in an expression goes in a typed `string` consta
 | Delphi | open `PascalApi.groupproj`, build `PascalApi.UnitTests`, `ApiSample`, `DbApiSample` and `TenantApiSample` (Win32 and Win64); run the tests; start `ApiSample.exe` and run `sh tools/http_scenarios.sh 9310`; start `DbApiSample.exe 9330 --reset` and run `sh tools/http_scenarios_db.sh 9330`; start `TenantApiSample.exe 9350 --reset` and run `sh tools/http_scenarios_tenants.sh 9350` |
 
 The middlewares are tested in two layers: their decisions in `PascalApi.HttpTests` (no server),
-and over real HTTP by `tools/http_scenarios.sh` (curl, 186 checks) against `samples/01-api`,
+and over real HTTP by `tools/http_scenarios.sh` (curl, 190 checks) against `samples/01-api`,
 which uses every middleware. In-process servers aren't used: on FPC, Horse's `Listen` blocks in
 `THTTPApplication.Run` and there is no `StopListen`.
 

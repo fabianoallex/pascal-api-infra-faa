@@ -69,6 +69,17 @@ req OPTIONS /cities "" -H 'Origin: https://evil.example'
 no_header Access-Control-Allow-Origin "preflight from another origin"
 req GET /health "" -H 'Origin: https://app.example.com'
 header_is Access-Control-Allow-Origin 'https://app.example.com' "simple request"
+# A path no route matches (public, so it gets past JWT): Horse runs the
+# global middlewares twice, and the CORS headers came twice until 0.16.0
+# (measured on FPC and Delphi). A browser refuses an answer with two
+# Access-Control-Allow-Origin, so the 404 became a CORS error.
+header_count() { tr -d '\r' < "$T/headers" | grep -ci "^$1:"; }
+req GET /swagger/missing "" -H 'Origin: https://app.example.com'
+status_is 404 "no route, public path"
+[ "$(header_count Access-Control-Allow-Origin)" = 1 ] && ok \
+  || fail "no route: Access-Control-Allow-Origin $(header_count Access-Control-Allow-Origin) times"
+[ "$(header_count Vary)" = 1 ] && ok || fail "no route: Vary $(header_count Vary) times"
+[ "$(header_count X-Request-Id)" = 1 ] && ok || fail "no route: X-Request-Id $(header_count X-Request-Id) times"
 
 # --- JWT
 req GET /cities ""
@@ -360,8 +371,8 @@ body_lacks 'http_route="/cities",http_response_status_code="404"' "metrics: a pa
 body_has 'http_server_request_duration_seconds_count{http_request_method="GET",http_route="/health/ready",http_response_status_code="503"} 1' "metrics: exact count"
 body_has 'http_server_request_duration_seconds_count{http_request_method="GET",http_route="/fail/server",http_response_status_code="500"}' "metrics: status of an exception"
 body_has 'http_request_method="_OTHER"' "metrics: unknown method"
-# /no/such/route and /cities/1/extra, once each (Horse runs middlewares twice there).
-body_has 'http_server_request_duration_seconds_count{http_request_method="GET",http_route="",http_response_status_code="404"} 2' "metrics: unknown routes counted once"
+# /no/such/route, /cities/1/extra and /swagger/missing, once each (Horse runs middlewares twice there).
+body_has 'http_server_request_duration_seconds_count{http_request_method="GET",http_route="",http_response_status_code="404"} 3' "metrics: unknown routes counted once"
 # METRICS_OUT: also save it, for promtool (tools/test_http_docker.sh).
 [ -n "$METRICS_OUT" ] && cp "$T/body" "$METRICS_OUT"
 

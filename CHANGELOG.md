@@ -6,6 +6,15 @@ may change the API; each such change is listed here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`TCorsMiddleware` sent its headers twice on a path no route matches.** Horse 3.3.12 runs the
+  global middlewares twice there, and the second pass added `Access-Control-Allow-Origin`, `Vary`
+  and the rest again (measured on FPC and Delphi). A browser refuses an answer with two
+  `Access-Control-Allow-Origin`, so a 404 reached a front end as a CORS error. The middleware
+  now marks the request (`TPascalApiRequestState.CorsSent`) and adds them once;
+  `tools/http_scenarios.sh` checks it on `GET /swagger/missing`.
+
 ### Added
 
 - Sample 03's `--check-key-store`: stores one generation twice through `TDbJwtKeyStore` in the
