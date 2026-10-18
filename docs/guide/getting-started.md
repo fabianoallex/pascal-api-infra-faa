@@ -105,7 +105,7 @@ Then check out a tag in each one. The minimum versions are checked when you comp
 
 | Library | Minimum | Checked by |
 |---|---|---|
-| pascal-common-faa | 1.8.1 | `PascalApi.Dto` stops the build (`PASCALCOMMON_VERSION`) |
+| pascal-common-faa | 1.16.0 | `PascalApi.Dto` stops the build (`PASCALCOMMON_VERSION`) |
 | pascal-db-faa | 0.15.0 | `PascalApi.Http` stops the build (`PASCALDB_VERSION`) |
 | pascal-jsonmapper-faa | 0.6.0 | the Lazarus package (`MinVersion` in the `.lpk`); on Delphi, a version before 0.5.0 fails to compile `PascalApi.Http` (`EJsonInputError`), and 0.5.0 compiles but writes a large `Currency` inexactly on FPC |
 | Horse | 3.3.3 on FPC for Windows | 3.3.2 doesn't compile there (see [Pitfalls](#pitfalls)) |

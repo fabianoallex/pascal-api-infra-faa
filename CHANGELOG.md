@@ -6,6 +6,13 @@ may change the API; each such change is listed here.
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-10-18
+
+JWT signing keys that rotate without logging anyone out: named by `kid`, generated and rotated
+by the library in a database or Redis, one ring per tenant, sealed under a master key
+([guide](docs/guide/jwt-keys.md), [design](docs/jwt-keys-design.md)). All opt-in:
+`TJwtMiddleware.New(ASecret)` is unchanged. Requires pascal-common-faa 1.16.0.
+
 ### Added
 
 - **JWT signing keys named by `kid`** (`PascalApi.JwtKeys`, phase 1 of
@@ -56,10 +63,9 @@ may change the API; each such change is listed here.
   from `PascalCommon.Random` (1.15.0) and seals with `PascalCommon.AesGcm` (1.16.0). `PASCALCOMMON_VERSION` in `PascalApi.Dto` and the `.lpk` say so.
 - pascal-redis-faa 0.2.0 is a new submodule, only for the tests and sample 03 (Redis store).
 - The pascal-common-faa submodule (used by this repository's tests and samples) moved from
-  1.10.0 to 1.14.0. Sample 02 names its normalization rules in a factory
+  1.10.0 to 1.16.0. Sample 02 names its normalization rules in a factory
   (`DbApiSample.Normalizers`, `TNorm = class(TPcStringNormalizers)` from
-  `PascalCommon.Normalizers`), and the DTOs and JSON guide shows it. The library's own minimum
-  stays 1.8.1: `src` doesn't use normalizers.
+  `PascalCommon.Normalizers`, 1.14.0), and the DTOs and JSON guide shows it.
 
 ## [0.14.0] - 2026-10-16
 

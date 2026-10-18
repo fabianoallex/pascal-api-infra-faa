@@ -45,7 +45,7 @@ git submodule add https://github.com/fabianoallex/pascal-amqp-faa external/pasca
 - **Lazarus:** require the library's `.lpk`; point its `pascal_common_faa` requirement at the
   application's copy (the same one `pascal_api_infra_faa.lpk` uses).
 - Minimum pascal-common-faa: 1.8.0 for pascal-amqp-faa 0.2.0 and pascal-redis-faa 0.2.0 (their
-  spans, `PascalCommon.Tracing`), 1.0 for Pipes; this library requires 1.8.1 (since 0.13.0), which covers them all
+  spans, `PascalCommon.Tracing`), 1.0 for Pipes; this library requires 1.16.0 (since 0.15.0), which covers them all
   (pascal-db-faa 0.13.0 needs 1.8.0). Their spans join
   the API's trace on their own once `TPcTracing.Start` runs: a Redis command or a publish made in
   a handler is a child of the request's server span, and an AMQP consumer continues the
