@@ -40,7 +40,7 @@ and what was measured.
 | `PascalApi.Dto` | marker interfaces and base classes for DTOs, including paged search and paged response |
 | `PascalApi.Text` | UTF-8 bytes ⇄ string, MD5, UTF-8-safe prefix — the same on both compilers |
 | `PascalApi.Http` | HTTP exceptions (`EValidationException`, `ENotFoundException`...), exception → status mapping, CORS, Bearer, client IP, trace context, access log line (text or JSON), metric labels, health answer; replaceable client messages (English or Portuguese) |
-| `PascalApi.Crypto` | SHA-256, HMAC-SHA256, Base64url (FPC 3.2.2 has no SHA-256) |
+| `PascalApi.Crypto` | SHA-256, HMAC-SHA256, Base64url (FPC 3.2.2 has no SHA-256): wrappers of pascal-common-faa's `PascalCommon.Crypto` |
 | `PascalApi.Jwt` | HS256 JSON Web Tokens: sign, verify (alg, signature, exp, nbf), claims; a key id (`kid`) in the header |
 | `PascalApi.JwtKeys` | signing keys named by `kid` ([guide](docs/guide/jwt-keys.md)): a static ring (`JWT_KEYS`), a ring that generates and rotates its keys in a store every instance shares (`TDbJwtKeyStore`; Redis in `src/redis`), secrets sealed with AES-256-GCM under a master key (`TSealedJwtKeyStore`) |
 | `PascalApi.Redis.JwtKeys` (`src/redis`) | `TRedisJwtKeyStore`: the keys in Redis, on pascal-redis-faa (outside the package) |

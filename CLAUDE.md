@@ -88,7 +88,7 @@ all (measured, skill `references/rtti-gotchas.md`).
 
 ## Dependencies
 
-`external/` holds the dependencies as git submodules, pinned: pascal-common-faa `v1.16.0` (the library itself needs 1.16.0, for `PascalCommon.Random` and `PascalCommon.AesGcm`; sample 02 uses 1.14.0's
+`external/` holds the dependencies as git submodules, pinned: pascal-common-faa `v1.17.0` (the library itself needs 1.17.0, for `PascalCommon.Random`, `PascalCommon.AesGcm` and `PascalCommon.Crypto`, which `PascalApi.Crypto` wraps; sample 02 uses 1.14.0's
 normalizer factories, unit `PascalCommon.Normalizers`, `TNorm = class(TPcStringNormalizers)` in `DbApiSample.Normalizers`; the samples turn on 1.10.0's
 `PcSetSafeLogUtf8` and log only through `SafeWriteln`, never plain `Writeln`),
 pascal-jsonmapper-faa `v0.6.0` (refuses duplicate members; `EJsonInputError` = 400; exact
@@ -286,6 +286,8 @@ its own Horse `src` to the search path.
   (same as `PASCALDB_FUNCREFS`). Plain function pointers where no state is captured
   (`TEnvironmentReader`).
 - **No string helpers** (`.Split`, `.StartsWith`, `.Substring`): plain `Pos`/`Copy`/`Trim`.
+- **No `BoolToStr(B, 'a', 'b')`**: FPC has that overload, Delphi doesn't (`E2010`, sample 03
+  compiled on FPC and stopped the Delphi build). Use an `if`.
 - **Text that leaves the process is UTF-8, measured in bytes on both compilers** (`PascalApi.Text`).
   `Length` counts UTF-16 units on Delphi and bytes on FPC, so anything that cuts or sizes text
   for output (`TLogTruncate`) works on UTF-8 bytes and never splits a character.
@@ -310,7 +312,11 @@ its own Horse `src` to the search path.
 Masters are DUnitX (`tests/Unit/*Tests.pas`), written in FPCUnit's assertion dialect through
 `PascalApi.DUnitXCompat`. The FPCUnit mirrors in `tests/Unit/fpc` are **generated**: never edit
 them, run `python tools/gen_fpc_mirror.py`. No `Assert.WillRaise` (it takes a closure): catch the
-exception in a helper and assert on what it returned.
+exception in a helper and assert on what it returned. An interfaced object goes into an interface
+variable (or a helper that returns one) before use: `TX.Create(...).Method`, or one passed to a
+`const` parameter that doesn't keep it, is never freed (84 blocks in heaptrc, phase 2 of the JWT
+keys). Non-ASCII test data used in an expression goes in a typed `string` constant (FPC warns
+4104/4105 on a literal there).
 
 | Command | What |
 |---|---|

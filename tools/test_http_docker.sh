@@ -117,6 +117,9 @@ MSYS_NO_PATHCONV=1 docker run --rm --network "$NAME" -v "$NAME:/otel:ro" -v "$MO
       tail -20 /t/server-rotation2-$1.log; exit $RC; }
   }
   echo "-- samples/03-tenants, generated JWT keys in the database"
+  /t/TenantApiSample --check-key-store > /t/check-key-store.log 2>&1 ||
+    { cat /t/check-key-store.log; exit 1; }
+  tail -1 /t/check-key-store.log
   rotation db
   echo "-- samples/03-tenants, generated JWT keys in Redis"
   rotation redis

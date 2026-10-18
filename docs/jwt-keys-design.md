@@ -239,8 +239,8 @@ a generation). Nothing to store, but a leaked master signs for every tenant.
   instant isn't visible from there. So a probe (2026-10-18, FPC 3.2.2 Windows, SQLdb, sample
   03's schema) stored generation 1 twice through `TDbJwtKeyStore`: the second `TryAdd` was
   False, not an exception, and one row stayed; the same for a repeated kid (its own unique
-  key). FireDAC (Delphi) wasn't probed the same way; its HTTP runs (below) logged no reload
-  error either.
+  key). That probe became sample 03's `--check-key-store` (run by both HTTP runners); on Delphi
+  12 with FireDAC (Win32 and Win64) it answered the same: False, one row.
 - `TRedisJwtKeyStore` deletes by finding the kid's generation (`HGETALL`, then `HDEL`).
 - Rotation happens on a request, not on a timer: the HTTP check first expected a rotation
   during an idle wait and failed; the script now keeps both instances busy.

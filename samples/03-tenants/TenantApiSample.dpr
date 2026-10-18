@@ -6,6 +6,7 @@
   Lazarus/FPC (TenantApiSample.lpi).
 
     TenantApiSample [port] [--reset]       (default port 9350)
+    TenantApiSample --check-key-store      (checks the key store's race, exits)
 
   The tenants come from TENANTS (environment or .env), by default
 
@@ -43,6 +44,12 @@
   secret. With JWT_KEY_STORE=redis the same, kept in Redis instead
   (TRedisJwtKeyStore, src/redis; REDIS_HOST, default 127.0.0.1, REDIS_PORT,
   default 6379, and JWT_REDIS_PREFIX, default tenants-api:).
+  --check-key-store stores generation 1 of a scratch scope twice through
+  TDbJwtKeyStore in the control database and expects the second TryAdd to be
+  False with one row left (two instances racing on a rotation), then
+  removes it and exits 0, or 1 with the reason: the database adapter's
+  unique violation (SQLdb on FPC, FireDAC on Delphi) is what settles the
+  race, and the HTTP scenarios can't make two instances hit it at once.
   tools/http_scenarios_jwt_rotation.sh runs both with seconds. In both, the
   secrets are sealed in the store (TSealedJwtKeyStore, AES-256-GCM) under
   JWT_KEYS_MASTER_KEY, by default a development key (DEFAULT_MASTER_KEY);
@@ -489,6 +496,49 @@ begin
   Result := StrToInt64Def(TAppConfig.Get(AName, ''), ADefault);
 end;
 
+// --check-key-store: two instances storing the same generation at once, as
+// the database sees it. Exit code 0 when the store settles it.
+function CheckKeyStore(const AControl: IDBFactory): Integer;
+const
+  SCOPE = 'race-check';
+var
+  LStore: IJwtKeyStore;
+  LKey: TJwtKey;
+  LKeys: TJwtKeyArray;
+  LFirst, LSecond: Boolean;
+  I: Integer;
+begin
+  Result := 1;
+  try
+    LStore := TDbJwtKeyStore.Create(AControl);
+    LKeys := LStore.Load(SCOPE); // a check stopped halfway
+    for I := 0 to High(LKeys) do
+      LStore.Delete(SCOPE, LKeys[I].Kid);
+    LKey := TJwtKey.Create(SCOPE + '/aaaaaaaaaaaaaaaa', 'check-secret-a');
+    LKey.Generation := 1;
+    LKey.CreatedAt := TJwt.UnixNow;
+    LKey.ActiveFrom := LKey.CreatedAt;
+    LFirst := LStore.TryAdd(SCOPE, LKey);
+    LKey.Kid := SCOPE + '/bbbbbbbbbbbbbbbb';
+    LKey.Secret := 'check-secret-b';
+    LSecond := LStore.TryAdd(SCOPE, LKey);
+    LKeys := LStore.Load(SCOPE);
+    for I := 0 to High(LKeys) do
+      LStore.Delete(SCOPE, LKeys[I].Kid);
+    if LFirst and not LSecond and (Length(LKeys) = 1) and (LKeys[0].Secret = 'check-secret-a') then
+    begin
+      SafeWriteln('key store check: ok (the second TryAdd of generation 1 was False, one row)');
+      Result := 0;
+    end
+    else
+      SafeWriteln('key store check: FAILED (first %s, second %s, %d rows)',
+        [BoolToStr(LFirst, True), BoolToStr(LSecond, True), Length(LKeys)]);
+  except
+    on E: Exception do
+      SafeWriteln('key store check: FAILED, %s: %s', [E.ClassName, E.Message]);
+  end;
+end;
+
 // The signing keys: JWT_KEYS (static, the default), or generated and rotated
 // in the control database (JWT_KEY_STORE=db) or in Redis (redis).
 function OpenKeys(const AControl: IDBFactory; ALog: TSampleLog): IJwtKeyRing;
@@ -549,7 +599,7 @@ var
   GSpec: ITenantCatalog;
   GRateLimit: TRateLimitOptions;
   GPort, I: Integer;
-  GReset: Boolean;
+  GReset, GCheckKeyStore: Boolean;
 
 begin
   {$IFDEF FPC}
@@ -564,9 +614,12 @@ begin
   TJsonMapper.Shared.UnknownMembers := umError;
   GPort := 9350;
   GReset := False;
+  GCheckKeyStore := False;
   for I := 1 to ParamCount do
     if ParamStr(I) = '--reset' then
       GReset := True
+    else if ParamStr(I) = '--check-key-store' then
+      GCheckKeyStore := True
     else
       GPort := StrToIntDef(ParamStr(I), GPort);
   GDataDir := IncludeTrailingPathDelimiter(ExpandFileName(
@@ -581,6 +634,11 @@ begin
     if GReset then
       DeleteDatabases(GSpec);
     GCatalog := OpenCatalog(GSpec, GLog, GControl);
+    if GCheckKeyStore then
+    begin
+      ExitCode := CheckKeyStore(GControl);
+      Exit;
+    end;
     GKeys := OpenKeys(GControl, GLog);
     GResolver := TTenantDataResolver.Create(GHooks.NewFactory,
       StrToIntDef(TAppConfig.Get('DB_IDLE_SECONDS', '600'), 600));

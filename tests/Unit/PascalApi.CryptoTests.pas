@@ -1,7 +1,9 @@
 ﻿unit PascalApi.CryptoTests;
 
-{ Tests for PascalApi.Crypto (SHA-256, HMAC-SHA256, Base64url) and
-  PascalApi.Jwt (HS256 sign/verify, alg check, exp/nbf).
+{ Tests for PascalApi.Crypto (SHA-256, HMAC-SHA256, Base64url; since 0.16.0
+  wrappers of pascal-common-faa's PascalCommon.Crypto, whose own tests have
+  the same vectors: kept here to check the wrappers) and PascalApi.Jwt
+  (HS256 sign/verify, alg check, exp/nbf).
 
   Vectors: SHA-256 from FIPS 180-4's examples plus lengths around the
   64-byte block (computed with Python's hashlib); HMAC from RFC 4231 test

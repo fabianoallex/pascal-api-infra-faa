@@ -6,6 +6,20 @@ may change the API; each such change is listed here.
 
 ## [Unreleased]
 
+### Added
+
+- Sample 03's `--check-key-store`: stores one generation twice through `TDbJwtKeyStore` in the
+  control database and expects the second `TryAdd` to be False with one row (two instances racing
+  on a rotation, as the database adapter sees it), then exits 0 or 1. `tools/test_http.sh` and
+  `tools/test_http_docker.sh` run it before the rotation scenarios.
+
+### Changed
+
+- **`PascalApi.Crypto` is now wrappers of pascal-common-faa 1.17.0's `PascalCommon.Crypto`**
+  (SHA-256, HMAC-SHA256, Base64url, constant-time comparison moved there, next to its AES-GCM).
+  The `Pa*` functions and `TSha256Digest` (now an alias of `TPcSha256Digest`) stay. **Requires
+  pascal-common-faa 1.17.0** (`PASCALCOMMON_VERSION` in `PascalApi.Dto`, the `.lpk`).
+
 ## [0.15.0] - 2026-10-18
 
 JWT signing keys that rotate without logging anyone out: named by `kid`, generated and rotated

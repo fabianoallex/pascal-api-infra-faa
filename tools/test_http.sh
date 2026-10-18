@@ -82,6 +82,10 @@ rotation() {
 }
 
 echo "== samples/03-tenants, generated JWT keys in the database"
+# The race two instances run into, as the database adapter sees it.
+(cd samples/03-tenants && ./TenantApiSample.exe --check-key-store > check.log 2>&1) ||
+  { cat samples/03-tenants/check.log; exit 1; }
+tail -1 samples/03-tenants/check.log
 rotation db
 
 echo "== samples/03-tenants, generated JWT keys in Redis"
