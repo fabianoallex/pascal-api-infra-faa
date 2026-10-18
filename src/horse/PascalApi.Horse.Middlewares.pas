@@ -54,6 +54,31 @@ type
   TRateLimitLimitFunc = function(AReq: THorseRequest): Integer of object;
   {$ENDIF}
 
+  /// What the PascalApi.Horse.* middlewares note on one request: the passes
+  /// already done (Horse 3.3.12 runs the global middlewares twice when no
+  /// route matches) and the tenant let through. Kept in Horse's request
+  /// scope (THorseRequest.Services), freed with the request, out of a
+  /// client's reach. Until 0.16.0 these were request headers whose names
+  /// ended with a line feed (':pascalapi-logged'#10), because Indy kept a
+  /// raw ':pascalapi-logged: 1' line a client sent. For the library's
+  /// units; an application reads the tenant with TTenantMiddleware.Current.
+  TPascalApiRequestState = class
+  public
+    /// TLoggerMiddleware's first pass ran; RequestId is the trace id it set.
+    Logged: Boolean;
+    RequestId: string;
+    /// TRateLimitMiddleware counted the request.
+    RateLimited: Boolean;
+    /// TMetricsMiddleware measures the request.
+    Metered: Boolean;
+    /// TTenantMiddleware let the request through for TenantId.
+    TenantId: string;
+    /// The request's state, created on first use.
+    class function Get(AReq: THorseRequest): TPascalApiRequestState; static;
+    /// The request's state, nil when nothing was noted.
+    class function Find(AReq: THorseRequest): TPascalApiRequestState; static;
+  end;
+
   /// A value read from a request after its handler ran (TLoggerMiddleware.
   /// AddField). A plain function: it reads the request, it captures nothing.
   TRequestValueFunc = function(AReq: THorseRequest): string;
@@ -240,6 +265,7 @@ uses
   Generics.Collections,
   DateUtils,
   Horse.Core.Param,
+  Horse.Core.Context,
   PascalCommon.SafeLog,
   PascalCommon.SystemContext,
   PascalCommon.Threading,
@@ -316,17 +342,24 @@ begin
   TJsonSend.Send(ARes, ErrorJson(AMessage), AStatus);
 end;
 
-// Set on the request by the first pass of the logger. It used to be
-// ':pascalapi-logged', on the belief that no client can send a name
-// starting with ':'. Measured (2026-10-13): fpWeb cuts the name at the first
-// ':' and ignores such a line, but Indy (Delphi 12 Win32/Win64) kept it, so
-// a raw ':pascalapi-logged: 1' line made the logger skip the request (no
-// access line, no span). A line feed ends a header line in every parser, so
-// a name with one can only come from this code.
-const
-  LOGGED_KEY = ':pascalapi-logged'#10;
-  // Set by the rate limit's first pass; same reasoning as LOGGED_KEY.
-  RATE_LIMITED_KEY = ':pascalapi-ratelimit'#10;
+{ TPascalApiRequestState }
+
+// Horse keys a service by its class name, hence a name no application
+// would pick for its own.
+class function TPascalApiRequestState.Find(AReq: THorseRequest): TPascalApiRequestState;
+begin
+  Result := TPascalApiRequestState(AReq.Services.Resolve(TPascalApiRequestState));
+end;
+
+class function TPascalApiRequestState.Get(AReq: THorseRequest): TPascalApiRequestState;
+begin
+  Result := Find(AReq);
+  if Result = nil then
+  begin
+    Result := TPascalApiRequestState.Create;
+    AReq.Services.Add(TPascalApiRequestState, Result, True);
+  end;
+end;
 
 { Error handler }
 
@@ -334,9 +367,12 @@ const
 // Without the logger, X-Request-Id is whatever the client sent, and client
 // text must not reach the log or be echoed in the body.
 function LoggedRequestId(const ARequest: THorseRequest): string;
+var
+  LState: TPascalApiRequestState;
 begin
-  if ARequest.Headers.Dictionary.ContainsKey(LOGGED_KEY) then
-    Result := ARequest.Headers['X-Request-Id']
+  LState := TPascalApiRequestState.Find(ARequest);
+  if (LState <> nil) and LState.Logged then
+    Result := LState.RequestId
   else
     Result := '';
 end;
@@ -506,21 +542,24 @@ var
   LHeaders: THorseList;
   LSpan: IPcSpan;
   LFields: TLogFields;
+  LState: TPascalApiRequestState;
   I: Integer;
 begin
   // When no route matches, Horse 3.3.12 runs the router again with '/*'
   // (Horse.Core.RouterTree, DoExecuteInternal), so global middlewares run
   // twice for one request. Seen in samples/02-db's log: two lines for one
   // GET /, the second a child span of the first. The first pass logs it.
-  LHeaders := AReq.Headers.Dictionary;
-  if LHeaders.ContainsKey(LOGGED_KEY) then
+  LState := TPascalApiRequestState.Get(AReq);
+  if LState.Logged then
   begin
     NextOrAnswer(AReq, ARes, ANext);
     Exit;
   end;
-  LHeaders.Add(LOGGED_KEY, '1');
+  LState.Logged := True;
+  LHeaders := AReq.Headers.Dictionary;
   LTrace := ResolveRequestTrace(AReq.Headers['traceparent'], AReq.Headers['tracestate'],
     AReq.Headers['X-Request-Id']);
+  LState.RequestId := LTrace.TraceId;
   // A new trace: the ratio decides (a parent's flag is kept as it came).
   if (LTrace.ParentSpanId = '') and TPcTracing.Enabled then
     LTrace.Sampled := TPcTracing.ShouldSample(LTrace.TraceId);
@@ -773,17 +812,19 @@ var
   LLimit, LRemaining: Integer;
   LResetUnix, LRetryAfter: Int64;
   LExceeded: Boolean;
+  LState: TPascalApiRequestState;
 begin
   // Horse runs the router twice when no route matches (see LoggerHandler):
   // the first pass counts the request, the second only goes on. Measured
   // before this mark: two slots per request and the X-RateLimit headers
   // twice (FPC 3.2.2/Windows, 2026-10-14).
-  if AReq.Headers.Dictionary.ContainsKey(RATE_LIMITED_KEY) then
+  LState := TPascalApiRequestState.Get(AReq);
+  if LState.RateLimited then
   begin
     ANext();
     Exit;
   end;
-  AReq.Headers.Dictionary.Add(RATE_LIMITED_KEY, '1');
+  LState.RateLimited := True;
   if Assigned(GRateLimit.KeyExtractor) then
     LKey := GRateLimit.KeyExtractor(AReq)
   else

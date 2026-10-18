@@ -15,6 +15,14 @@ may change the API; each such change is listed here.
 
 ### Changed
 
+- **The middlewares' marks on a request moved from request headers to Horse's request scope.**
+  `TPascalApiRequestState` (`PascalApi.Horse.Middlewares`), kept in `THorseRequest.Services` and
+  freed with the request, holds what the logger, the rate limit, the metrics and the tenant
+  middleware note on a request (a pass already done when Horse runs the global middlewares
+  twice, the trace id, the tenant). They were headers named `':pascalapi-logged'#10` and so on:
+  a name chosen so no client could send it, after Indy let a client's `:pascalapi-logged: 1`
+  hide a request. The request scope is out of a client's reach whatever the parser does. No
+  change to the public calls (`TTenantMiddleware.Current`, `TenantIdOf`).
 - **`PascalApi.Crypto` is now wrappers of pascal-common-faa 1.17.0's `PascalCommon.Crypto`**
   (SHA-256, HMAC-SHA256, Base64url, constant-time comparison moved there, next to its AES-GCM).
   The `Pa*` functions and `TSha256Digest` (now an alias of `TPcSha256Digest`) stay. **Requires

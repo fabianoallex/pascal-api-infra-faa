@@ -220,6 +220,8 @@ In the sample (SQLite), provisioning is opening the file.
 - On a request it travels on the request, marked like the logger's mark (`:pascalapi-tenant`);
   `TTenantMiddleware.Current(AReq)` returns it, as `TJwtMiddleware.Claims` does. Horse's
   `Sessions` is the alternative (to measure on both compilers before choosing).
+  **Since 0.16.0** the mark is `TPascalApiRequestState.TenantId`, in Horse's request scope
+  (`THorseRequest.Services`), not a header; the two points below are the history.
 - The mark's name ends with a line feed (`':pascalapi-tenant'#10`), which no HTTP parser puts
   in a header name, and the middleware removes the name from every request before deciding.
   (First written as "safe because the middleware overwrites it"; that missed a request the

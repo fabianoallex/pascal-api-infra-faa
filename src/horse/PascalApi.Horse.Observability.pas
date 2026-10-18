@@ -89,7 +89,6 @@ implementation
 
 uses
   Generics.Collections,
-  Horse.Core.Param,
   PascalCommon.Threading,
   PascalApi.Text,
   PascalApi.Horse.Middlewares;
@@ -99,16 +98,6 @@ type
     Name: string;
     Check: THealthCheck;
   end;
-
-const
-  // Set on the request by the first pass (see TLoggerMiddleware: Horse runs
-  // global middlewares twice when no route matches). It ends with a line
-  // feed, as the logger's mark: "no header name starts with ':'" was false
-  // for Indy, which kept a raw ':pascalapi-logged: 1' line. A raw
-  // ':pascalapi-metered: 1' line didn't hide a request from the metrics on
-  // either compiler (measured, 2026-10-14), but the reason given here was
-  // that same false belief.
-  METERED_KEY = ':pascalapi-metered'#10;
 
 var
   GDuration: TPcHistogram;
@@ -140,18 +129,21 @@ end;
 
 procedure MetricsHandler(AReq: THorseRequest; ARes: THorseResponse; ANext: TNextProc);
 var
-  LHeaders: THorseList;
+  LState: TPascalApiRequestState;
   LMethod: string;
   LActive: TPcUpDownCounterSeries;
   LStart: Int64;
 begin
-  LHeaders := AReq.Headers.Dictionary;
-  if LHeaders.ContainsKey(METERED_KEY) then
+  // Measured once, also when Horse runs the global middlewares twice (see
+  // TLoggerMiddleware). The mark is in the request's scope
+  // (TPascalApiRequestState), out of a client's reach.
+  LState := TPascalApiRequestState.Get(AReq);
+  if LState.Metered then
   begin
     ANext();
     Exit;
   end;
-  LHeaders.Add(METERED_KEY, '1');
+  LState.Metered := True;
   LMethod := MetricMethod(AReq.Method);
   LActive := GActive.Labels([LMethod]);
   LActive.Inc;

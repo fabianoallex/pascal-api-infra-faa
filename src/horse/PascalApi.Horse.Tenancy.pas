@@ -14,12 +14,12 @@
   (health, metrics, the application's login route), so TJwtMiddleware must
   be configured first.
 
-  The mark is a request header named ':pascalapi-tenant' plus a line feed,
-  a name no HTTP parser yields (a raw ':name: x' line is cut at the first
-  ':' by fpWeb but was kept by Indy, measured on the logger's mark). The
-  middleware also removes the name from every request before deciding, and
-  sets it only on those it lets through. TenantIdOf reads it for the access
-  log and the server span (TLoggerMiddleware.AddField).
+  The mark is TPascalApiRequestState.TenantId, in the request's scope
+  (THorseRequest.Services), which no client can write. Until 0.16.0 it was
+  a request header named ':pascalapi-tenant' plus a line feed. The
+  middleware clears it before deciding and sets it only on the requests it
+  lets through. TenantIdOf reads it for the access log and the server span
+  (TLoggerMiddleware.AddField).
 
   Horse's FPC callbacks are plain procedures, so the settings live in this
   unit: one tenant configuration per process (as the other middlewares). }
@@ -63,11 +63,6 @@ uses
   PascalApi.Http,
   PascalApi.Horse.Middlewares;
 
-const
-  // The line feed: no parser yields a header name with one (see LOGGED_KEY
-  // in PascalApi.Horse.Middlewares: Indy kept a raw ':name' line).
-  TENANT_KEY = ':pascalapi-tenant'#10;
-
 var
   GCatalog: ITenantCatalog;
   GClaim: string;
@@ -89,11 +84,12 @@ var
   LInfo: TTenantInfo;
   LCheck: TTenantCheck;
   LStatus: Integer;
+  LState: TPascalApiRequestState;
 begin
-  // Whatever came in under the mark's name goes: only this middleware sets
-  // it, so TenantIdOf (the access log) never shows a client's value on an
+  // Cleared first, so TenantIdOf (the access log) shows no tenant on an
   // excluded path or a refused request.
-  AReq.Headers.Dictionary.Remove(TENANT_KEY);
+  LState := TPascalApiRequestState.Get(AReq);
+  LState.TenantId := '';
   if TJwtMiddleware.Excludes(AReq.PathInfo) then
   begin
     ANext();
@@ -115,7 +111,7 @@ begin
     TJsonSend.Send(ARes, LBody, LStatus);
     Exit;
   end;
-  AReq.Headers.Dictionary.AddOrSetValue(TENANT_KEY, LInfo.Id);
+  LState.TenantId := LInfo.Id;
   ANext();
 end;
 
@@ -138,8 +134,8 @@ end;
 
 class function TTenantMiddleware.TryCurrent(AReq: THorseRequest; out AInfo: TTenantInfo): Boolean;
 begin
-  Result := (GCatalog <> nil) and AReq.Headers.Dictionary.ContainsKey(TENANT_KEY) and
-    GCatalog.Find(AReq.Headers[TENANT_KEY], AInfo);
+  Result := (GCatalog <> nil) and (TenantIdOf(AReq) <> '') and
+    GCatalog.Find(TenantIdOf(AReq), AInfo);
   if not Result then
     AInfo := Default(TTenantInfo);
 end;
@@ -152,8 +148,13 @@ begin
 end;
 
 function TenantIdOf(AReq: THorseRequest): string;
+var
+  LState: TPascalApiRequestState;
 begin
-  if not AReq.Headers.Dictionary.TryGetValue(TENANT_KEY, Result) then
+  LState := TPascalApiRequestState.Find(AReq);
+  if LState <> nil then
+    Result := LState.TenantId
+  else
     Result := '';
 end;
 

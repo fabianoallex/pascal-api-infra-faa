@@ -236,13 +236,14 @@ its own Horse `src` to the search path.
   stack addresses (measured 2026-10-14). `TLoggerMiddleware` catches it (`NextOrAnswer`) and
   answers through `HandleError`, so it must stay first; `/fail/middleware` in sample 01 is the
   check. A handler's exception goes to `OnError` on both compilers.
-- **An internal mark on the request ends with a line feed** (`':pascalapi-logged'#10`,
-  `':pascalapi-tenant'#10`). "No client can send a name starting with ':'" was false: Indy
-  (Delphi) kept a raw `:pascalapi-logged: 1` line and the logger skipped the request (no access
-  line, no span; measured on Delphi 12 Win32/Win64, fixed after 0.12.0). fpWeb cuts the name
-  at the first ':'. A line feed ends a header line in every parser. `tools/http_scenarios.sh`
-  and `tools/http_scenarios_tenants.sh` send such lines with a socket (curl won't) when the
-  runner gives `SERVER_LOG`.
+- **An internal mark on the request lives in `TPascalApiRequestState`**, which is kept in Horse's
+  request scope (`THorseRequest.Services`, freed with the request): the logged/rate-limited/
+  metered passes, the trace id, the tenant. Never in a request header: until 0.16.0 the marks
+  were headers (`':pascalapi-logged'#10`), and "no client can send a name starting with ':'"
+  was false: Indy (Delphi) kept a raw `:pascalapi-logged: 1` line and the logger skipped the
+  request (measured on Delphi 12 Win32/Win64). `Services` keys by class name, so the class name
+  stays unique. `tools/http_scenarios.sh` and `tools/http_scenarios_tenants.sh` still send such
+  raw lines with a socket (curl won't) when the runner gives `SERVER_LOG`.
 - **Observability** (`docs/observability-design.md`): the request id is the W3C trace id
   (`ResolveRequestTrace`, from pascal-common-faa's `PascalCommon.TraceContext`); metrics are
   pascal-common-faa's `PascalCommon.Metrics` (`PcMetrics`), named as OpenTelemetry names them;
