@@ -273,3 +273,14 @@ a 150-character name written straight into sample 02's file now reads back with 
 `CHECK (length(NAME) <= 100)`: the insert then raises `EConstraintViolationException` (`cvCheck`,
 measured on pascal-db-faa's three adapters), a 422 here. Whether the API's insert answered 500
 because the handler reads the row back was never verified, and no longer matters.
+
+### 9. JWT signing keys with rotation — designed (2026-10-18)
+
+One secret today: rotating it invalidates every token. Opt-in key ring named by `kid`, keys that
+go pending, signing, verifying and gone, so a rotation keeps the tokens already issued;
+automatic generation and rotation with keys in a database table (pascal-db-faa) or, as an
+option, in Redis (pascal-redis-faa; several instances race on a unique generation, `HSETNX` in
+Redis); one ring per tenant, the tenant inside the `kid` and checked against the verified
+claim. Three decisions taken with the user (database store with Redis as an option, plain-text
+secrets for now, per-tenant rings); where the Redis store lives is still open. Random bytes need pascal-common-faa to
+make its system source public first (phase 2). Design and phases: `docs/jwt-keys-design.md`.
