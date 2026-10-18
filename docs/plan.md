@@ -308,3 +308,24 @@ Sealed secrets on 2026-10-18 (unreleased; decision 6 revised with the user's fou
 pascal-common-faa 1.16.0 (`PascalCommon.AesGcm`, now the minimum), `TSealedJwtKeyStore` and
 `TAesGcmSecretCipher` here; sample 03 seals in both modes. FPC on Windows and Linux and Delphi
 12 Win32/Win64: 340 tests, 0 leaks; 186 + 93 + 107 + 31 + 25 checks.
+
+### 10. Candidates from pascal-agenda-faa — proposed (2026-10-18)
+
+The first real application on this library: pascal-agenda-faa (multi-tenant scheduling for
+clinics and salons, a sibling repository; scope and milestones in its `docs/design.md`). Each
+candidate is built there first, in its own unit under this repository's code rules, and comes
+here (opt-in) only after it works there and turns out generic, by the user's decision.
+
+| Candidate | Would live in | Status |
+|---|---|---|
+| Password hashing (PBKDF2-HMAC-SHA256) | pascal-common-faa | proposed |
+| Refresh tokens (rotation, reuse detection) | `PascalApi.RefreshTokens` | proposed; reopens "an application's flow" in `docs/jwt-keys-design.md` |
+| `Idempotency-Key` middleware | `PascalApi.Idempotency` | proposed |
+| `ETag`/`If-Match` (412/428) | `PascalApi.Http` | proposed |
+| Tenant from the path or host | `PascalApi.Tenancy` | **reopened**: multi-tenancy decision 5 (the real case: public booking routes by slug, user 2026-10-18) |
+| Signed links (HMAC + expiry, JWT key ring) | `PascalApi.SignedUrl` | proposed |
+| IANA time zones on both compilers | pascal-common-faa | proposed; own design phase (user, 2026-10-18) |
+| Outbox + relay to AMQP | a bridge (`src/amqp` or pascal-amqp-faa) | needs a second case |
+| Scheduler with a lease | pascal-common-faa | needs a second case |
+| RFC 9457 errors | `TErrorHandlerMiddleware` option | needs a second case |
+| Typed HTTP client (refresh, retry, trace) | to be decided | needs a second case |
