@@ -1,8 +1,19 @@
 # Design: JWT signing keys with rotation
 
-Status: **designed (2026-10-18), not implemented.** Three decisions taken with the user
-(decisions 5, 6 and 8); the others are proposals that the implementation may change, and what
-it measures goes back here, as in the other design records.
+Status: **phase 1 done (2026-10-18)**; phases 2 and 3 designed. Three decisions taken with the
+user (decisions 5, 6 and 8); the others are proposals that the implementation may change, and
+what it measures goes back here, as in the other design records.
+
+Phase 1 as built: `PascalApi.JwtKeys` (`TJwtKey` with `Kid`, `Secret`, `NotAfter`;
+`IJwtKeyRing`; `TStaticJwtKeyRing` and `JWT_KEYS`; `TJwtKeys.Sign`/`Decode`/`CheckLifetime`),
+`TJwt.SignHS256` with a kid and `TJwt.ReadKid`, `TJwtMiddleware.New(ARing, ...)` and
+`TJwtMiddleware.Sign`. A static kid has no `/` (reserved for decision 8). `CreatedAt` and
+`ActiveFrom` join `TJwtKey` in phase 2. Sample 01 keeps `New(ASecret)` (the opt-in check:
+186 checks unchanged); sample 03 uses a ring with three keys, one past its `NotAfter`, and
+JWT_SECRET as the legacy secret, so the tokens the scenario script signs without kid still
+pass; its "signing keys" checks are the HTTP proof (107 checks). Verified with FPC on Windows
+and Linux and Delphi 12 Win32/Win64 (304 tests, 0 leaks; samples 01, 02 and 03: 186, 93 and
+107 checks).
 
 ## Goal
 
@@ -129,12 +140,12 @@ pascal-redis-faa doesn't repeat a command in flight after a reconnect (`HSETNX` 
 idempotent): a `TryAdd` that fails that way raises, and the next `SigningKey` reloads and
 retries.
 
-**Where the Redis store lives: to decide with the user.** This library has no Redis code on
-purpose (CLAUDE.md, `docs/related-libraries.md`). Proposed: a unit outside the `.lpk`,
-`src/redis/PascalApi.Redis.JwtKeys`, as `src/horse` is for Horse; a consumer adds it and its own
-pascal-redis-faa to the search path. Its tests would need pascal-redis-faa as a test-only
-submodule and a Redis server in CI (a container next to the Collector). The alternative: no unit
-here, and the guide shows the store an application writes (about 60 lines, from a sample).
+**Where the Redis store lives (user, 2026-10-18): `src/redis/PascalApi.Redis.JwtKeys`**,
+outside the `.lpk`, as `src/horse` is for Horse; a consumer adds it and its own
+pascal-redis-faa to the search path. The core (`src/`) still has no Redis code, so an API
+without Redis builds as before. Its tests need pascal-redis-faa as a test-only submodule and a
+Redis server in CI (a container next to the Collector). Rejected: no unit here, the guide
+showing a store the application writes.
 
 A ring may also be **static**, from `JWT_KEYS` (`kid:secret[@notAfter],...`, the first entry
 signs): manual rotation for an API without a database, and the first step of the
@@ -181,10 +192,10 @@ a generation). Nothing to store, but a leaked master signs for every tenant.
 
 | Piece | Unit |
 |---|---|
-| `TJwt.SignHS256(AClaimsJson, ASecret, AKid)`, `TJwt.PeekKid(AToken, out AKid)` | `PascalApi.Jwt` |
+| `TJwt.SignHS256(AClaimsJson, ASecret, AKid)`, `TJwt.ReadKid(AToken, out AKid)` | `PascalApi.Jwt` |
 | `TJwtKey`, `IJwtKeyRing`, `IJwtKeyResolver`, the static ring, `JWT_KEYS`, the life rules of decision 3 | new `PascalApi.JwtKeys` |
 | `IJwtKeyStore`, `TDbJwtKeyStore`, the rotating ring | `PascalApi.JwtKeys` (the core already uses pascal-db-faa) |
-| `TRedisJwtKeyStore` | `src/redis/PascalApi.Redis.JwtKeys`, outside the `.lpk` (to confirm, decision 5) |
+| `TRedisJwtKeyStore` | `src/redis/PascalApi.Redis.JwtKeys`, outside the `.lpk` (decision 5) |
 | The per-tenant resolver | `PascalApi.Tenancy` |
 | `TJwtMiddleware.New(AResolver, ...)`, `TJwtMiddleware.Sign`, `Claims` with the resolver | `src/horse/PascalApi.Horse.Middlewares` |
 
@@ -193,8 +204,9 @@ the MCP executor forwards the caller's `Authorization` header as it is.
 
 ## Phases
 
-1. `kid` in `TJwt`, the static ring, `JWT_KEYS`, the legacy secret, the middleware overloads
-   and `Sign`. Unit tests; sample 01 keeps `New(secret)` and its 186 checks pass unchanged.
+1. **Done (2026-10-18).** `kid` in `TJwt`, the static ring, `JWT_KEYS`, the legacy secret,
+   the middleware overloads and `Sign`. Unit tests; sample 01 keeps `New(secret)` and its 186
+   checks pass unchanged; sample 03 uses the ring.
 2. `PcRandomBytes` in pascal-common-faa (release there first), `TDbJwtKeyStore` and automatic
    rotation, tested with `TMockDBFactory` and a manual clock and ticker; then
    `TRedisJwtKeyStore`, against a real Redis.

@@ -32,6 +32,10 @@
   the caller frees what Decode returns. The secret and the payload are
   UTF-8.
 
+  A key id: SignHS256(AClaimsJson, ASecret, AKid) adds "kid" to the header,
+  and ReadKid reads it back before anything is verified, so that a key ring
+  (PascalApi.JwtKeys) can pick the secret. Decode doesn't look at "kid".
+
   Ported from TJwtHelper in Horse.Middleware.Jwt (delphi-api-infra-faa),
   which used System.Hash/System.NetEncoding/System.JSON (Delphi only) and
   only verified tokens. New here: SignHS256, the alg check, nbf, the result
@@ -46,11 +50,28 @@ uses
 type
   TJwtResult = (jrValid, jrMalformed, jrUnsupportedAlg, jrBadSignature, jrExpired, jrNotYetValid);
 
+const
+  /// The longest "kid" accepted, in UTF-8 bytes.
+  JWT_MAX_KID_BYTES = 128;
+
+type
+
   TJwt = class
   public
     /// The token for AClaimsJson (a JSON object, written as given), signed
     /// with ASecret. Header: {"alg":"HS256","typ":"JWT"}.
-    class function SignHS256(const AClaimsJson, ASecret: string): string; static;
+    class function SignHS256(const AClaimsJson, ASecret: string): string; overload; static;
+
+    /// The same, with the key id AKid in the header:
+    /// {"alg":"HS256","typ":"JWT","kid":"<AKid>"}. EArgumentException when
+    /// AKid is empty or longer than JWT_MAX_KID_BYTES.
+    class function SignHS256(const AClaimsJson, ASecret, AKid: string): string; overload; static;
+
+    /// The header's "kid", read WITHOUT verifying anything: input to choose a
+    /// secret with, never to trust. jrValid with AKid '' when the header has
+    /// none; jrMalformed when the token has no readable header, or "kid" is
+    /// not a string, is empty or longer than JWT_MAX_KID_BYTES.
+    class function ReadKid(const AToken: string; out AKid: string): TJwtResult; static;
 
     /// Verifies AToken. On jrValid, AClaims is the payload (the caller
     /// frees it); on any other result, AClaims is nil.
@@ -121,6 +142,64 @@ begin
   LInput := PaBase64UrlEncode(PaStringToUtf8Bytes(HEADER_HS256)) + '.' +
     PaBase64UrlEncode(PaStringToUtf8Bytes(AClaimsJson));
   Result := LInput + '.' + PaBase64UrlEncode(Signature(LInput, ASecret));
+end;
+
+function KidFits(const AKid: string): Boolean;
+begin
+  Result := (AKid <> '') and (Length(PaStringToUtf8Bytes(AKid)) <= JWT_MAX_KID_BYTES);
+end;
+
+class function TJwt.SignHS256(const AClaimsJson, ASecret, AKid: string): string;
+var
+  LWriter: TJsonWriter;
+  LHeader, LInput: string;
+begin
+  if not KidFits(AKid) then
+    raise EArgumentException.CreateFmt(
+      'TJwt.SignHS256: the kid must have 1 to %d bytes', [JWT_MAX_KID_BYTES]);
+  // TJsonWriter, not concatenation: the kid is escaped.
+  LWriter := TJsonWriter.Create;
+  try
+    LWriter.BeginObject;
+    LWriter.Name('alg');
+    LWriter.WriteString('HS256');
+    LWriter.Name('typ');
+    LWriter.WriteString('JWT');
+    LWriter.Name('kid');
+    LWriter.WriteString(AKid);
+    LWriter.EndObject;
+    LHeader := LWriter.ToString;
+  finally
+    LWriter.Free;
+  end;
+  LInput := PaBase64UrlEncode(PaStringToUtf8Bytes(LHeader)) + '.' +
+    PaBase64UrlEncode(PaStringToUtf8Bytes(AClaimsJson));
+  Result := LInput + '.' + PaBase64UrlEncode(Signature(LInput, ASecret));
+end;
+
+class function TJwt.ReadKid(const AToken: string; out AKid: string): TJwtResult;
+var
+  LDot: Integer;
+  LHeader, LKid: TJsonValue;
+begin
+  AKid := '';
+  LDot := Pos('.', AToken);
+  if LDot <= 1 then
+    Exit(jrMalformed);
+  LHeader := DecodeJsonPart(Copy(AToken, 1, LDot - 1));
+  if LHeader = nil then
+    Exit(jrMalformed);
+  try
+    LKid := LHeader.Find('kid');
+    if LKid = nil then
+      Exit(jrValid);
+    if (LKid.Kind <> jkString) or not KidFits(LKid.AsString) then
+      Exit(jrMalformed);
+    AKid := LKid.AsString;
+    Result := jrValid;
+  finally
+    LHeader.Free;
+  end;
 end;
 
 class function TJwt.Decode(const AToken, ASecret: string; out AClaims: TJsonValue): TJwtResult;

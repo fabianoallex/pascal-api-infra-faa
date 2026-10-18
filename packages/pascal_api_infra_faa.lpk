@@ -62,6 +62,10 @@
         <UnitName Value="PascalApi.Jwt"/>
       </Item>
       <Item>
+        <Filename Value="..\src\PascalApi.JwtKeys.pas"/>
+        <UnitName Value="PascalApi.JwtKeys"/>
+      </Item>
+      <Item>
         <Filename Value="..\src\PascalApi.Http.pas"/>
         <UnitName Value="PascalApi.Http"/>
       </Item>

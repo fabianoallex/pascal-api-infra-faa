@@ -8,6 +8,16 @@ may change the API; each such change is listed here.
 
 ### Added
 
+- **JWT signing keys named by `kid`** (`PascalApi.JwtKeys`, phase 1 of
+  [docs/jwt-keys-design.md](docs/jwt-keys-design.md)): rotate the HS256 secret without
+  invalidating the tokens already issued. `TStaticJwtKeyRing` (keys from `JWT_KEYS`,
+  `kid:secret[@notAfter],...`, the first one signs) with an optional legacy secret for tokens
+  without `kid`; `TJwtKeys.Sign`/`Decode`; `TJwtMiddleware.New(ARing, ...)` and
+  `TJwtMiddleware.Sign` (refuses claims without an integer `exp`, or one that would outlive the
+  signing key); `TJwt.SignHS256(AClaimsJson, ASecret, AKid)` and `TJwt.ReadKid`. An unknown
+  `kid`, or one past its `notAfter`, is the same 401 as a bad signature. Opt-in:
+  `TJwtMiddleware.New(ASecret)` is unchanged (sample 01's 186 checks). Sample 03 uses a ring;
+  `tools/http_scenarios_tenants.sh` checks it (107 checks). Guide: Authentication, step 8.
 - Guide [Your project on both compilers](docs/guide/dual-compiler.md): the layout, project
   files, code rules, mirrored tests and CI for an application of your own on Delphi and
   Lazarus/FPC, and the Claude Code skills that carry the rules (pascal-skills-faa).

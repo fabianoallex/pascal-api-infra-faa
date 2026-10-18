@@ -168,6 +168,20 @@ with the user: `docs/multitenancy-design.md`.
 - The cross-tenant checks of `tools/http_scenarios_tenants.sh` are the safety net: a change to
   the tenancy or to sample 03 runs them (`tools/test_http.sh`, CI).
 
+### JWT signing keys
+
+`PascalApi.JwtKeys` (pure, tested in `PascalApi.JwtKeysTests`): keys named by `kid`, so the
+secret rotates without invalidating tokens. Design, phases and the user's decisions:
+`docs/jwt-keys-design.md` (phase 1 done: the static ring; 2: generated keys in a database or
+Redis store; 3: one ring per tenant, the tenant inside the `kid`).
+
+- **Opt-in**: `TJwtMiddleware.New(ASecret)` and `TJwt.SignHS256(claims, secret)` don't change;
+  sample 01 stays on them (its scenarios are the check). Sample 03 uses the ring.
+- The `kid` is read before the signature is checked: input, never trust. It is looked up only
+  in memory (never a query per unknown kid), and an unknown or retired kid answers the same
+  401 as a bad signature.
+- Error messages never contain a secret (`Parse_ErrorsNeverShowTheSecret`).
+
 ### Horse
 
 The core package (`src/`) doesn't use Horse; only `src/horse/PascalApi.Horse.Middlewares` does,

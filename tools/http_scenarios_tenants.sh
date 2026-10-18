@@ -10,17 +10,22 @@
 #
 #   sh tools/http_scenarios_tenants.sh [port]   (default 9350; TenantApiSample
 #                                               must be running, started with
-#                                               --reset, default TENANTS and
-#                                               JWT_SECRET)
+#                                               --reset, default TENANTS,
+#                                               JWT_SECRET and JWT_KEYS)
 #   SERVER_LOG=path/server.log sh tools/http_scenarios_tenants.sh [port]
 #
 # Tokens the sample would never issue (a removed tenant, no tenant, a
 # suspended one) are signed here with Python's hmac, with the sample's
-# default secret. Same script for every build of the sample (FPC
+# default secret (no kid: the key ring's legacy secret) or one of its
+# default keys (JWT_KEYS, phase 1 of docs/jwt-keys-design.md). Same script for every build of the sample (FPC
 # Windows/Linux, Delphi Win32/Win64). Exit code 0 only if every check passed.
 PORT="${1:-9350}"
 BASE="http://127.0.0.1:$PORT"
 SECRET="${JWT_SECRET:-development-secret-change-me}"
+# The sample's DEFAULT_JWT_KEYS: k2 signs, k1 verifies, k0 is past its NotAfter.
+KEY2=development-key-2-change-me
+KEY1=development-key-1-change-me
+KEY0=development-key-0-change-me
 T="$(mktemp -d)"
 FAILS=0
 CHECKS=0
@@ -54,17 +59,21 @@ login() {
   req POST /auth/login "{\"tenant\":\"$1\",\"user\":\"$2\"}"
   sed -n 's/.*"token":"\([^"]*\)".*/\1/p' "$T/body"
 }
-# sign CLAIMS_JSON -> an HS256 token for those claims, exp one hour ahead
-sign() {
+# sign_header HEADER_JSON CLAIMS_JSON SECRET -> an HS256 token, exp one hour ahead
+sign_header() {
   $PY -c '
 import sys, hmac, hashlib, base64, json, time
 b = lambda d: base64.urlsafe_b64encode(d).rstrip(b"=").decode()
-claims = json.loads(sys.argv[1]); claims["exp"] = int(time.time()) + 3600
-h = b(json.dumps({"alg": "HS256", "typ": "JWT"}).encode())
+claims = json.loads(sys.argv[2]); claims["exp"] = int(time.time()) + 3600
+h = b(sys.argv[1].encode())
 p = b(json.dumps(claims).encode())
-s = b(hmac.new(sys.argv[2].encode(), (h + "." + p).encode(), hashlib.sha256).digest())
-print(h + "." + p + "." + s)' "$1" "$SECRET"
+s = b(hmac.new(sys.argv[3].encode(), (h + "." + p).encode(), hashlib.sha256).digest())
+print(h + "." + p + "." + s)' "$1" "$2" "$3"
 }
+# sign CLAIMS_JSON -> a token without kid, with the legacy secret
+sign() { sign_header '{"alg":"HS256","typ":"JWT"}' "$1" "$SECRET"; }
+# sign_kid KID SECRET CLAIMS_JSON -> a token with that kid in the header
+sign_kid() { sign_header "{\"alg\":\"HS256\",\"typ\":\"JWT\",\"kid\":\"$1\"}" "$3" "$2"; }
 
 # raw METHOD PATH TOKEN LINE -> the whole response in $T/body; LINE is one
 # more header line, sent as it is (curl won't send a name starting with ':').
@@ -143,6 +152,42 @@ TOKEN="$(sign '{"sub":"ana","tenant_id":"soylent"}')"
 req GET /cities "" -H "Authorization: Bearer $TOKEN"
 status_is 403 "token of a suspended tenant"
 body_is '{"error":"This tenant is suspended.","code":"tenant_suspended"}' "token of a suspended tenant"
+
+# --- signing keys (JWT_KEYS): the login signs with k2, k1 still verifies
+# (a rotation), k0 is past its NotAfter; tokens without kid verify with the
+# legacy secret (every token sign() makes, above)
+case "$ACME" in
+  eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6ImsyIn0.*) ok ;;
+  *) fail "the login's token names kid k2 (token: $ACME)" ;;
+esac
+TOKEN="$(sign_kid k1 "$KEY1" '{"sub":"ana","tenant_id":"acme"}')"
+req GET /tenant "" -H "Authorization: Bearer $TOKEN"
+status_is 200 "a token of the previous key (k1) still verifies"
+body_is '{"tenant":"acme","mode":"dedicated"}' "a token of the previous key (k1)"
+TOKEN="$(sign_kid k2 "$KEY2" '{"sub":"ana","tenant_id":"acme"}')"
+req GET /tenant "" -H "Authorization: Bearer $TOKEN"
+status_is 200 "a token of the signing key (k2), from another signer"
+TOKEN="$(sign_kid k0 "$KEY0" '{"sub":"ana","tenant_id":"acme"}')"
+req GET /tenant "" -H "Authorization: Bearer $TOKEN"
+status_is 401 "a key past its NotAfter (k0) verifies nothing"
+body_is '{"error":"Invalid or expired token."}' "a key past its NotAfter (k0)"
+header_is WWW-Authenticate 'Bearer error="invalid_token"' "a key past its NotAfter (k0)"
+TOKEN="$(sign_kid k9 "$KEY1" '{"sub":"ana","tenant_id":"acme"}')"
+req GET /tenant "" -H "Authorization: Bearer $TOKEN"
+status_is 401 "an unknown kid"
+body_is '{"error":"Invalid or expired token."}' "an unknown kid: the same answer as a bad signature"
+TOKEN="$(sign_kid k1 "$KEY2" '{"sub":"ana","tenant_id":"acme"}')"
+req GET /tenant "" -H "Authorization: Bearer $TOKEN"
+status_is 401 "kid k1 signed with k2's secret"
+TOKEN="$(sign_kid k1 "$SECRET" '{"sub":"ana","tenant_id":"acme"}')"
+req GET /tenant "" -H "Authorization: Bearer $TOKEN"
+status_is 401 "kid k1 signed with the legacy secret"
+TOKEN="$(sign_header '{"alg":"HS256","typ":"JWT"}' '{"sub":"ana","tenant_id":"acme"}' "$KEY2")"
+req GET /tenant "" -H "Authorization: Bearer $TOKEN"
+status_is 401 "no kid, signed with a key's secret (only the legacy secret has no kid)"
+TOKEN="$(sign_header '{"alg":"HS256","typ":"JWT","kid":7}' '{"sub":"ana","tenant_id":"acme"}' "$KEY1")"
+req GET /tenant "" -H "Authorization: Bearer $TOKEN"
+status_is 401 "a kid that is not a string"
 
 # --- each tenant's rows; the same code in every tenant, no conflict
 # (dedicated: other databases; shared: TENANT_ID in the primary key).

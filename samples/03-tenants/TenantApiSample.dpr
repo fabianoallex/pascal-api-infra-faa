@@ -24,6 +24,14 @@
   no request asked for in DB_IDLE_SECONDS (default 600) is closed, and
   opened again when needed. --reset deletes the files first.
 
+  Signing keys: a key ring from JWT_KEYS (PascalApi.JwtKeys, phase 1 of
+  docs/jwt-keys-design.md), by default three keys with development secrets
+  (DEFAULT_JWT_KEYS): k2, k1, and k0 until 2026-01-01. k2 signs the login's tokens (its kid in the header); k1 still verifies,
+  as after a rotation; k0 is past its NotAfter and verifies nothing. A token
+  without kid verifies with JWT_SECRET (the legacy secret): the tokens the
+  scenario script signs itself. A token lives at most one hour (the ring's
+  MaxTokenSeconds).
+
   Rate limit: one window per tenant, 1000 requests a minute, 5 for the plan
   "free" (hooli). Each access line and server span carries tenant.id
   (TLoggerMiddleware.AddField); spans go to an OpenTelemetry collector when
@@ -85,6 +93,7 @@ uses
   {$ENDIF}
   PascalApi.Config,
   PascalApi.Jwt,
+  PascalApi.JwtKeys,
   PascalApi.Http,
   PascalApi.Horse.Middlewares,
   PascalApi.Horse.OpenApi,
@@ -104,9 +113,14 @@ const
   // Requests per minute: the plan "free", and everyone else.
   FREE_LIMIT = 5;
   DEFAULT_LIMIT = 1000;
+  // Development keys: never in production. k0's NotAfter is 2026-01-01.
+  DEFAULT_JWT_KEYS = 'k2:development-key-2-change-me,k1:development-key-1-change-me,' +
+    'k0:development-key-0-change-me@1767225600';
+  TOKEN_SECONDS = 3600;
 
 var
   GSecret, GClaim, GDataDir: string;
+  GKeys: IJwtKeyRing;
   GCatalog: ITenantCatalog;
   GResolver: ITenantDataResolver;
 
@@ -238,7 +252,7 @@ begin
     LWriter.Name(GClaim);
     LWriter.WriteString(LInfo.Id);
     LWriter.Name('exp');
-    LWriter.WriteInt64(TJwt.UnixNow + 3600);
+    LWriter.WriteInt64(TJwt.UnixNow + TOKEN_SECONDS);
     LWriter.EndObject;
     LClaims := LWriter.ToString;
   finally
@@ -248,7 +262,8 @@ begin
   try
     LWriter.BeginObject;
     LWriter.Name('token');
-    LWriter.WriteString(TJwt.SignHS256(LClaims, GSecret));
+    // Signed as the middleware verifies: the ring's signing key, its kid.
+    LWriter.WriteString(TJwtMiddleware.Sign(LClaims));
     LWriter.EndObject;
     TJsonSend.Send(ARes, LWriter.ToString);
   finally
@@ -473,6 +488,8 @@ begin
   GDataDir := IncludeTrailingPathDelimiter(ExpandFileName(
     TAppConfig.Get('DATA_DIR', ExtractFilePath(ParamStr(0)))));
   GSecret := TAppConfig.Get('JWT_SECRET', 'development-secret-change-me');
+  GKeys := TStaticJwtKeyRing.Parse(TAppConfig.Get('JWT_KEYS', DEFAULT_JWT_KEYS), GSecret,
+    TOKEN_SECONDS);
   GClaim := TAppConfig.Get('TENANT_CLAIM', TENANT_DEFAULT_CLAIM);
 
   GLog := TSampleLog.Create;
@@ -494,7 +511,7 @@ begin
     TLoggerMiddleware.AddField('tenant.id', TenantIdOf);
     THorse.Use(TLoggerMiddleware.New(nil, alfJson));
     THorse.Use(TMetricsMiddleware.New);
-    THorse.Use(TJwtMiddleware.New(GSecret, ['/health', '/metrics', '/auth/login', '/swagger']));
+    THorse.Use(TJwtMiddleware.New(GKeys, ['/health', '/metrics', '/auth/login', '/swagger']));
     THorse.Use(TTenantMiddleware.New(GCatalog, GClaim));
     // After the tenant: one window per tenant, its limit by plan.
     GRateLimit := TRateLimitOptions.Default;

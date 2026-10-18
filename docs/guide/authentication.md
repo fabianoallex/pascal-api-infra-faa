@@ -2,7 +2,7 @@
 
 Who may call which route: a token in the `Authorization` header, checked before the handler
 runs. The code comes from `samples/01-api` and `samples/03-tenants`. `PascalApi.CryptoTests`
-(`TJwtTests`) covers signing and verifying, `PascalApi.HttpTests` the header parsing and the
+(`TJwtTests`) covers signing and verifying, `PascalApi.JwtKeysTests` the key ring, `PascalApi.HttpTests` the header parsing and the
 excluded paths, and `tools/http_scenarios.sh` the answers over HTTP. A few behaviours below were
 measured for this guide (2026-10-14), and each one says where.
 
@@ -234,6 +234,56 @@ function runs on every request, on Horse's threads: keep it fast, and thread-saf
   refuses a token without a usable tenant with 401 and `Bearer error="invalid_token"` (checked
   by `tools/http_scenarios_tenants.sh`).
 
+### 8. Rotate the secret: a key ring
+
+With one secret, changing it logs every user out. A key ring (`PascalApi.JwtKeys`) names each
+secret with a key id, the `kid` in the token's header: the newest key signs, the older ones
+still verify until a date you give, so a rotation keeps the tokens already issued. From
+`samples/03-tenants/TenantApiSample.dpr`:
+
+```pascal
+GSecret := TAppConfig.Get('JWT_SECRET', 'development-secret-change-me');
+GKeys := TStaticJwtKeyRing.Parse(TAppConfig.Get('JWT_KEYS', DEFAULT_JWT_KEYS), GSecret,
+  TOKEN_SECONDS);
+...
+THorse.Use(TJwtMiddleware.New(GKeys, ['/health', '/metrics', '/auth/login', '/swagger']));
+```
+
+And the login signs through the middleware, so it signs with the key the middleware verifies:
+
+```pascal
+LWriter.WriteString(TJwtMiddleware.Sign(LClaims));
+```
+
+`JWT_KEYS` lists the keys, separated by commas; the first one signs:
+
+```
+JWT_KEYS=k2:<new secret>,k1:<old secret>@1767225600
+```
+
+- **`kid:secret`**, and **`@notAfter`** (Unix seconds) to stop a key from verifying. A `kid` is
+  1 to 128 of `A-Z a-z 0-9 . _ -`; a secret has no `,` and no `@`. Anything else stops the
+  program at startup (`EJwtKeyError`, whose message never contains a secret).
+- **To rotate**: put the new key first, give the old one a `notAfter` at least one token
+  lifetime ahead, restart. Remove the old entry after that date.
+- **The legacy secret** (the second argument of `Parse`): a token without `kid` verifies with
+  it, so the tokens issued before the ring existed stay valid. Pass `''` to refuse them.
+- **The third argument** is the longest lifetime `Sign` accepts, in seconds (0: no limit).
+  `Sign` refuses claims without an integer `exp`, or with one later than that or than the
+  signing key's `notAfter` (`EArgumentException`): such a token would stop verifying before it
+  expires. `TJwtMiddleware.Sign` checks `exp` with a plain secret too.
+- **Revoking a key**: remove it. Every token it signed is refused at once.
+
+A `kid` the ring doesn't know, or one past its `notAfter`, gets the same 401 as a bad
+signature: the client isn't told which keys exist. Checked over HTTP by
+`tools/http_scenarios_tenants.sh` ("signing keys": a token of the previous key, an unknown
+`kid`, a key past its date, a `kid` signed with another key's secret), and in
+`PascalApi.JwtKeysTests`.
+
+The keys are fixed at startup. Generating and rotating them automatically, with the keys in a
+database or in Redis, and one ring per tenant, are the next phases of
+`docs/jwt-keys-design.md`.
+
 ## Choices
 
 ### JWT or your own tokens
@@ -253,7 +303,9 @@ revoked tokens and check it in your own middleware after `TJwtMiddleware`.
   `TAuthMiddleware` with your own check for those.
 - **No `iss` or `aud` check.** If several systems share the secret, check those claims in the
   handler or in a middleware of yours.
-- **One secret.** Rotating it invalidates every token issued with the old one.
+- **One secret, unless you use a key ring.** With `New(ASecret)`, rotating the secret
+  invalidates every token issued with the old one; a key ring keeps them (step 8). Its keys
+  don't rotate by themselves yet.
 - **No leeway for clock differences**: a token is expired from the second `exp` says
   (`Decode_ExpBoundary`). Between an issuer and a verifier on different machines, prefer short
   lifetimes to a tolerance.
@@ -264,7 +316,10 @@ revoked tokens and check it in your own middleware after `TJwtMiddleware`.
 ## Pitfalls
 
 - **A token without `exp` never expires.** `exp` is optional in the standard, and `Decode`
-  accepts a token without it (jwt.io's example has none, tested). Always write it when you sign.
+  accepts a token without it (jwt.io's example has none, tested). Always write it when you sign;
+  `TJwtMiddleware.Sign` refuses claims without it.
+- **Removing an old key too early.** Its tokens are refused from that moment: keep it until
+  the last token it signed has expired.
 - **The development secret in production.** Anyone who read the sample can sign tokens for your
   API (step 1).
 - **Forgetting to free `Claims`**, or reading a claim without checking for nil (step 4).
@@ -319,10 +374,12 @@ script, as `tools/http_scenarios_tenants.sh` does with Python (`sign`).
 
 ## Reference
 
-- `PascalApi.Jwt`: `TJwt` (sign, decode, the checks and their order in the comment at the top).
+- `PascalApi.Jwt`: `TJwt` (sign, decode, the checks and their order in the comment at the top;
+  `ReadKid`).
+- `PascalApi.JwtKeys`: `TStaticJwtKeyRing` (`JWT_KEYS`), `TJwtKeys` (sign and decode by `kid`).
 - `PascalApi.Crypto`: SHA-256, HMAC, Base64url (tested against FIPS 180, RFC 4231, RFC 4648).
 - `PascalApi.Http`: `ParseBearer`, `PathMatchesAny`, `BearerChallenge`.
 - `PascalApi.Horse.Middlewares`: `TJwtMiddleware`, `TAuthMiddleware`.
-- `samples/01-api` (login, `/me`) and `samples/03-tenants` (a tenant claim);
+- `samples/01-api` (login, `/me`) and `samples/03-tenants` (a tenant claim, a key ring);
   `tools/http_scenarios.sh`, `tools/http_scenarios_tenants.sh`.
 - [Errors and validation](errors.md), [Multi-tenancy](multitenancy.md).

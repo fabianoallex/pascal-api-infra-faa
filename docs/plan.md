@@ -281,6 +281,10 @@ go pending, signing, verifying and gone, so a rotation keeps the tokens already 
 automatic generation and rotation with keys in a database table (pascal-db-faa) or, as an
 option, in Redis (pascal-redis-faa; several instances race on a unique generation, `HSETNX` in
 Redis); one ring per tenant, the tenant inside the `kid` and checked against the verified
-claim. Three decisions taken with the user (database store with Redis as an option, plain-text
-secrets for now, per-tenant rings); where the Redis store lives is still open. Random bytes need pascal-common-faa to
+claim. Decisions taken with the user: database store with Redis as an option (in
+`src/redis`, outside the `.lpk`), plain-text secrets for now, per-tenant rings. Random bytes need pascal-common-faa to
 make its system source public first (phase 2). Design and phases: `docs/jwt-keys-design.md`.
+
+Phase 1 done on 2026-10-18 (unreleased): `PascalApi.JwtKeys` with the static ring (`JWT_KEYS`)
+and a legacy secret, `TJwtMiddleware.New(ARing)` and `Sign`; sample 03 uses it. FPC on Windows
+and Linux and Delphi 12 Win32/Win64 (304 tests, 0 leaks; 186 + 93 + 107 checks).

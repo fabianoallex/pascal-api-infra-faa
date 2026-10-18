@@ -32,6 +32,7 @@ uses
   PascalApi.FileLogTests,
   PascalApi.DtoTests,
   PascalApi.CryptoTests,
+  PascalApi.JwtKeysTests,
   PascalApi.HttpTests,
   PascalApi.OpenApiTests,
   PascalApi.McpTests,

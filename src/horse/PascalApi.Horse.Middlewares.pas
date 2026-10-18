@@ -35,7 +35,8 @@ uses
   Horse,
   Horse.Callback,
   PascalJsonMapper.Json,
-  PascalApi.Http;
+  PascalApi.Http,
+  PascalApi.JwtKeys;
 
 type
   {$IFDEF PASCALAPI_FUNCREFS}
@@ -164,14 +165,26 @@ type
 
   /// Bearer authentication with an HS256 JWT (PascalApi.Jwt): signature,
   /// exp and nbf. Independent of TAuthMiddleware (each has its settings).
+  /// With one secret (New(ASecret)), or with a key ring (New(ARing),
+  /// PascalApi.JwtKeys: the token's kid picks the key, so the secret can
+  /// rotate without invalidating the tokens already issued). The last New
+  /// wins: a ring replaces the secret and the other way round.
   TJwtMiddleware = class
   public
     class function New(const ASecret: string): THorseCallback; overload; static;
     class function New(const ASecret: string;
       const AExcludedPrefixes: array of string): THorseCallback; overload; static;
+    class function New(const ARing: IJwtKeyRing): THorseCallback; overload; static;
+    class function New(const ARing: IJwtKeyRing;
+      const AExcludedPrefixes: array of string): THorseCallback; overload; static;
+    /// AClaimsJson signed as the middleware verifies it: with the ring's
+    /// signing key (TJwtKeys.Sign), or with the secret, without kid. Both
+    /// refuse claims without an integer "exp" (TJwtKeys.CheckLifetime,
+    /// EArgumentException); EJwtKeyError when New wasn't called.
+    class function Sign(const AClaimsJson: string): string; static;
     /// The claims of the request's token, verified again with the configured
-    /// secret; nil when absent or invalid, and nil when New wasn't called
-    /// (TAuthMiddleware alone). The caller frees the result.
+    /// secret or ring; nil when absent or invalid, and nil when New wasn't
+    /// called (TAuthMiddleware alone). The caller frees the result.
     class function Claims(AReq: THorseRequest): TJsonValue; static;
     /// New was called (for TRouteDoc.Serve, which documents the scheme).
     class function Configured: Boolean; static;
@@ -248,6 +261,7 @@ var
   GAuthValidator: TTokenValidator;
   GAuthExcluded: TStringArray;
   GJwtSecret: string;
+  GJwtRing: IJwtKeyRing; // set by New(ARing); then GJwtSecret is ''
   GJwtExcluded: TStringArray;
   GRateLimit: TRateLimitOptions;
   GRateLimitState: IRateLimitState;
@@ -624,7 +638,9 @@ begin
         Exit(False);
       end;
   end;
-  if AUseJwt then
+  if AUseJwt and Assigned(GJwtRing) then
+    LValid := TJwtKeys.Validate(GJwtRing, LToken)
+  else if AUseJwt then
     LValid := TJwt.Validate(LToken, GJwtSecret)
   else
     LValid := Assigned(GAuthValidator) and GAuthValidator(LToken);
@@ -673,7 +689,7 @@ end;
 
 class function TJwtMiddleware.Configured: Boolean;
 begin
-  Result := GJwtSecret <> ''; // New refuses an empty secret
+  Result := (GJwtSecret <> '') or Assigned(GJwtRing); // New refuses an empty secret
 end;
 
 class function TJwtMiddleware.Excludes(const APath: string): Boolean;
@@ -692,8 +708,38 @@ begin
   if ASecret = '' then
     raise EArgumentException.Create('TJwtMiddleware.New: the secret is empty');
   GJwtSecret := ASecret;
+  GJwtRing := nil;
   GJwtExcluded := CopyPrefixes(AExcludedPrefixes);
   Result := AsCallback(JwtHandler);
+end;
+
+class function TJwtMiddleware.New(const ARing: IJwtKeyRing): THorseCallback;
+begin
+  Result := New(ARing, []);
+end;
+
+class function TJwtMiddleware.New(const ARing: IJwtKeyRing;
+  const AExcludedPrefixes: array of string): THorseCallback;
+begin
+  if ARing = nil then
+    raise EArgumentException.Create('TJwtMiddleware.New: the key ring is nil');
+  GJwtRing := ARing;
+  GJwtSecret := '';
+  GJwtExcluded := CopyPrefixes(AExcludedPrefixes);
+  Result := AsCallback(JwtHandler);
+end;
+
+class function TJwtMiddleware.Sign(const AClaimsJson: string): string;
+begin
+  if Assigned(GJwtRing) then
+    Result := TJwtKeys.Sign(GJwtRing, AClaimsJson)
+  else if GJwtSecret <> '' then
+  begin
+    TJwtKeys.CheckLifetime(AClaimsJson, 0, 0);
+    Result := TJwt.SignHS256(AClaimsJson, GJwtSecret);
+  end
+  else
+    raise EJwtKeyError.Create('TJwtMiddleware.Sign: New was not called');
 end;
 
 class function TJwtMiddleware.Claims(AReq: THorseRequest): TJsonValue;
@@ -701,9 +747,13 @@ var
   LToken: string;
 begin
   Result := nil;
+  if ParseBearer(AReq.Headers['Authorization'], LToken) <> brOk then
+    Exit;
+  if Assigned(GJwtRing) then
+    TJwtKeys.Decode(GJwtRing, LToken, Result)
   // Without New there is no secret, and TJwt.Decode refuses an empty one: a
   // token signed with an empty key must not read as valid here.
-  if (GJwtSecret <> '') and (ParseBearer(AReq.Headers['Authorization'], LToken) = brOk) then
+  else if GJwtSecret <> '' then
     TJwt.Decode(LToken, GJwtSecret, Result);
 end;
 
