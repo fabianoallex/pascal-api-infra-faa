@@ -3,7 +3,7 @@ unit PascalApi.JwtKeys;
 {$I pascalapi.inc}
 
 (* JWT signing keys named by "kid": rotate the HS256 secret without
-  invalidating the tokens already issued (docs/jwt-keys-design.md, phase 1).
+  invalidating the tokens already issued (docs/jwt-keys-design.md).
   Opt-in: TJwt and TJwtMiddleware.New(ASecret) don't use this unit.
 
     LRing := TStaticJwtKeyRing.Parse(TAppConfig.Get('JWT_KEYS'),
@@ -12,34 +12,61 @@ unit PascalApi.JwtKeys;
     if TJwtKeys.Decode(LRing, LToken, LClaims) = jrValid then ...
 
   A ring holds keys (kid, secret, NotAfter) and optionally a legacy secret.
-  The first key signs; every key verifies until its NotAfter (Unix seconds,
-  TJwt.UnixNow, 0 for no end). A token without "kid" verifies with the
-  legacy secret, so moving from one secret to a ring logs nobody out; with
-  no legacy secret it is refused. An unknown kid, or one past its NotAfter,
-  is jrBadSignature: the caller isn't told which keys exist. The kid is read
-  before the signature is checked and only looked up in memory.
+  Every key verifies until its NotAfter (Unix seconds, TJwt.UnixNow, 0 for
+  no end). A token without "kid" verifies with the legacy secret, so moving
+  from one secret to a ring logs nobody out; with no legacy secret it is
+  refused. An unknown kid, or one past its NotAfter, is jrBadSignature: the
+  caller isn't told which keys exist. The kid is read before the signature
+  is checked and only looked up in memory.
 
   Sign refuses claims without an integer "exp", or with one later than the
   ring's MaxTokenSeconds from now or than the signing key's NotAfter: such
   a token would stop verifying before its own expiry.
 
-  JWT_KEYS, read by TStaticJwtKeyRing.Parse: entries separated by ",",
-  each "kid:secret" or "kid:secret@notAfter"; the first entry signs.
+  Two rings:
 
-    JWT_KEYS=k2:<new secret>,k1:<old secret>@1767225600
+  - TStaticJwtKeyRing (phase 1): keys fixed at creation, from JWT_KEYS,
+    entries separated by ",", each "kid:secret" or "kid:secret@notAfter";
+    the first entry signs.
 
-  A kid is 1 to 128 of A-Z a-z 0-9 . _ - ; a secret is not empty and has no
-  "," and no "@". EJwtKeyError for anything else, a repeated kid, or no key
-  and no legacy secret; its messages never contain a secret.
+      JWT_KEYS=k2:<new secret>,k1:<old secret>@1767225600
 
-  The static ring never changes after it is created, so request threads read
-  it without a lock. The rotating ring with a store comes in phase 2. *)
+    A kid is 1 to 128 of A-Z a-z 0-9 . _ - ; a secret is not empty and has
+    no "," and no "@". EJwtKeyError for anything else, a repeated kid, or
+    no key and no legacy secret; its messages never contain a secret. It
+    never changes, so request threads read it without a lock.
+
+  - TRotatingJwtKeyRing (phase 2): keys generated (32 random bytes from
+    pascal-common-faa's PcRandomBytes) and kept in an IJwtKeyStore that
+    every instance of the API shares. A key is pending (verifies, doesn't
+    sign) until its ActiveFrom, signs while it is the newest active one, and
+    verifies until NotAfter = the next key's ActiveFrom + MaxTokenSeconds,
+    a value computed when the keys load, never stored: a store only adds
+    and deletes. Every ReloadSeconds (TTicker) the first request that asks
+    reloads the keys; when the newest key is RotateEverySeconds old it adds
+    generation n+1 with ActiveFrom = now + PropagationSeconds, so that every
+    instance has loaded it before a token signed with it arrives (hence
+    PropagationSeconds >= ReloadSeconds, checked). Instances racing on
+    generation n+1 are settled by the store: TryAdd lets one win and the
+    others reload its key. Gone keys are deleted. The store is asked
+    outside the lock; while it is down the loaded keys keep working and
+    OnError hears about it.
+
+  Stores: TMemoryJwtKeyStore (one process; the keys die with it, so a
+  restart logs everyone out) and TDbJwtKeyStore (pascal-db-faa, the
+  application's SQL by name). The Redis store is in src/redis
+  (PascalApi.Redis.JwtKeys), outside the package. A scope names whose keys
+  they are: '' for an API without tenants; a scope's kids start with
+  "<scope>/" (phase 3, one ring per tenant). *)
 
 interface
 
 uses
   SysUtils,
+  SyncObjs,
   PascalJsonMapper.Json,
+  PascalDb.Interfaces,
+  PascalCommon.Tracing,
   PascalApi.Jwt;
 
 type
@@ -50,6 +77,13 @@ type
     Secret: string;
     /// Unix seconds: the key verifies while TJwt.UnixNow < NotAfter. 0: no end.
     NotAfter: Int64;
+    /// A generated key's place in its scope: 1, 2, 3... 0 for a static key.
+    Generation: Integer;
+    /// Unix seconds; 0 for a static key.
+    CreatedAt: Int64;
+    /// Unix seconds: the key signs from then on (until a newer key does).
+    /// 0 for a static key.
+    ActiveFrom: Int64;
     class function Create(const AKid, ASecret: string; ANotAfter: Int64 = 0): TJwtKey; static;
   end;
 
@@ -67,6 +101,20 @@ type
     /// The longest lifetime Sign accepts, in seconds; 0: no limit but the
     /// signing key's NotAfter.
     function MaxTokenSeconds: Int64;
+  end;
+
+  /// Where generated keys live, shared by every instance of the API. Only
+  /// adds and deletes: a key never changes once stored.
+  IJwtKeyStore = interface
+    ['{DFF8250D-EAAD-44C1-9AD7-3C909338A232}']
+    /// AScope's keys (Kid, Secret, Generation, CreatedAt, ActiveFrom; NotAfter
+    /// is the ring's), in any order.
+    function Load(const AScope: string): TJwtKeyArray;
+    /// Stores AKey; False when AScope already has AKey.Generation (another
+    /// instance won the rotation). Any other failure raises.
+    function TryAdd(const AScope: string; const AKey: TJwtKey): Boolean;
+    /// Removes AScope's key AKid; nothing when it isn't there.
+    procedure Delete(const AScope, AKid: string);
   end;
 
   /// Keys fixed at creation (JWT_KEYS): manual rotation.
@@ -89,6 +137,97 @@ type
     function MaxTokenSeconds: Int64;
   end;
 
+  TJwtRotationOptions = record
+    /// A new key when the newest one is this old. Default: 30 days.
+    RotateEverySeconds: Int64;
+    /// A new key signs this long after it is stored; at least ReloadSeconds.
+    /// Default: 120.
+    PropagationSeconds: Int64;
+    /// The longest token lifetime Sign accepts; an old key verifies this
+    /// long after the next one starts signing. Must be > 0. Default: 3600.
+    MaxTokenSeconds: Int64;
+    /// How often the keys are read again from the store. Default: 60.
+    ReloadSeconds: Int64;
+    /// The secret of tokens without kid ('' refuses them). Default: ''.
+    LegacySecret: string;
+    class function Default: TJwtRotationOptions; static;
+  end;
+
+  /// Keys generated and rotated by the ring, kept in AStore (the unit's
+  /// comment). Thread-safe.
+  TRotatingJwtKeyRing = class(TInterfacedObject, IJwtKeyRing)
+  private
+    FStore: IJwtKeyStore;
+    FOptions: TJwtRotationOptions;
+    FScope: string;
+    FLock: TCriticalSection;
+    FKeys: TJwtKeyArray;    // by Generation, ascending; NotAfter computed
+    FLoadedAtMs: UInt64;
+    FBusy: Boolean;
+    FOnError: TPcLogProc;
+    procedure Maintain;
+    procedure Refresh(ARaise: Boolean);
+    function NewKid: string;
+  public
+    /// Loads AScope's keys from AStore, adding the first one when there is
+    /// none: the store's errors raise here (at startup), not later.
+    /// EArgumentException for a nil store or options out of range.
+    constructor Create(const AStore: IJwtKeyStore; const AOptions: TJwtRotationOptions;
+      const AScope: string = '');
+    destructor Destroy; override;
+    /// Reloads and rotates now, whatever ReloadSeconds says; raises the
+    /// store's error.
+    procedure Reload;
+    function SigningKey(out AKey: TJwtKey): Boolean;
+    function FindKey(const AKid: string; out AKey: TJwtKey): Boolean;
+    function LegacySecret: string;
+    function MaxTokenSeconds: Int64;
+    /// The keys as loaded (NotAfter computed), oldest first.
+    function Keys: TJwtKeyArray;
+    /// A reload that failed after startup (the loaded keys stay in use).
+    /// Set it before the ring is shared.
+    property OnError: TPcLogProc read FOnError write FOnError;
+  end;
+
+  /// Keys in this process only, for tests and a single instance that
+  /// accepts losing them on restart (every token is then refused).
+  /// Thread-safe.
+  TMemoryJwtKeyStore = class(TInterfacedObject, IJwtKeyStore)
+  private type
+    TEntry = record
+      Scope: string;
+      Key: TJwtKey;
+    end;
+  private
+    FLock: TCriticalSection;
+    FEntries: array of TEntry;
+  public
+    constructor Create;
+    destructor Destroy; override;
+    function Load(const AScope: string): TJwtKeyArray;
+    function TryAdd(const AScope: string; const AKey: TJwtKey): Boolean;
+    procedure Delete(const AScope, AKid: string);
+  end;
+
+  /// Keys in a database, through the application's SQL named in the
+  /// factory's SqlLoader. ALoadSql takes :TENANT_ID and returns the columns
+  /// KID, SECRET, GENERATION, CREATED_AT, ACTIVE_FROM; AAddSql takes
+  /// :TENANT_ID, :GENERATION, :KID, :SECRET, :CREATED_AT, :ACTIVE_FROM and
+  /// needs a unique key on (TENANT_ID, GENERATION): its
+  /// EConstraintViolationException (cvUnique) is TryAdd's False; ADeleteSql
+  /// takes :TENANT_ID and :KID. TENANT_ID is the scope ('' without tenants).
+  TDbJwtKeyStore = class(TInterfacedObject, IJwtKeyStore)
+  private
+    FFactory: IDBFactory;
+    FLoadSql, FAddSql, FDeleteSql: string;
+  public
+    constructor Create(const AFactory: IDBFactory; const ALoadSql: string = 'JWT_KEY.BY_TENANT';
+      const AAddSql: string = 'JWT_KEY.INSERT'; const ADeleteSql: string = 'JWT_KEY.DELETE');
+    function Load(const AScope: string): TJwtKeyArray;
+    function TryAdd(const AScope: string; const AKey: TJwtKey): Boolean;
+    procedure Delete(const AScope, AKid: string);
+  end;
+
   TJwtKeys = class
   public
     /// AClaimsJson signed with the ring's signing key, its kid in the header.
@@ -109,6 +248,16 @@ type
   end;
 
 implementation
+
+uses
+  PascalCommon.SystemContext,
+  PascalCommon.Random,
+  PascalApi.Text,
+  PascalApi.Crypto;
+
+const
+  SECRET_BYTES = 32;
+  KID_BYTES = 8;  // 16 hex digits
 
 function KidIsValid(const AKid: string): Boolean;
 var
@@ -136,6 +285,11 @@ begin
   Result := (AKey.NotAfter <= 0) or (TJwt.UnixNow < AKey.NotAfter);
 end;
 
+function NoKey: TJwtKey;
+begin
+  Result := TJwtKey.Create('', '');
+end;
+
 { TJwtKey }
 
 class function TJwtKey.Create(const AKid, ASecret: string; ANotAfter: Int64): TJwtKey;
@@ -143,6 +297,9 @@ begin
   Result.Kid := AKid;
   Result.Secret := ASecret;
   Result.NotAfter := ANotAfter;
+  Result.Generation := 0;
+  Result.CreatedAt := 0;
+  Result.ActiveFrom := 0;
 end;
 
 { TStaticJwtKeyRing }
@@ -232,7 +389,7 @@ begin
   if Result then
     AKey := FKeys[0]
   else
-    AKey := TJwtKey.Create('', '');
+    AKey := NoKey;
 end;
 
 function TStaticJwtKeyRing.FindKey(const AKid: string; out AKey: TJwtKey): Boolean;
@@ -245,7 +402,7 @@ begin
       AKey := FKeys[I];
       Exit(True);
     end;
-  AKey := TJwtKey.Create('', '');
+  AKey := NoKey;
   Result := False;
 end;
 
@@ -257,6 +414,450 @@ end;
 function TStaticJwtKeyRing.MaxTokenSeconds: Int64;
 begin
   Result := FMaxTokenSeconds;
+end;
+
+{ TJwtRotationOptions }
+
+class function TJwtRotationOptions.Default: TJwtRotationOptions;
+begin
+  Result.RotateEverySeconds := 30 * 86400;
+  Result.PropagationSeconds := 120;
+  Result.MaxTokenSeconds := 3600;
+  Result.ReloadSeconds := 60;
+  Result.LegacySecret := '';
+end;
+
+{ TRotatingJwtKeyRing }
+
+// The keys ordered by Generation, NotAfter from the next key, the gone ones
+// left out (and named in AGone, for the store). Raises on a key the store
+// can't have written: such a ring would sign or verify wrongly.
+function PrepareKeys(const ALoaded: TJwtKeyArray; AMaxTokenSeconds: Int64;
+  out AGone: TJwtKeyArray): TJwtKeyArray;
+var
+  LSorted: TJwtKeyArray;
+  LKey: TJwtKey;
+  I, J, LCount, LGoneCount: Integer;
+begin
+  LSorted := Copy(ALoaded);
+  for I := 0 to High(LSorted) do
+  begin
+    if (LSorted[I].Kid = '') or (Length(PaStringToUtf8Bytes(LSorted[I].Kid)) > JWT_MAX_KID_BYTES) then
+      raise EJwtKeyError.CreateFmt('JWT key store: generation %d has an invalid kid',
+        [LSorted[I].Generation]);
+    if LSorted[I].Secret = '' then
+      raise EJwtKeyError.CreateFmt('JWT key store: key "%s" has an empty secret', [LSorted[I].Kid]);
+    if LSorted[I].Generation < 1 then
+      raise EJwtKeyError.CreateFmt('JWT key store: key "%s" has generation %d',
+        [LSorted[I].Kid, LSorted[I].Generation]);
+  end;
+  // Insertion sort: a scope has a handful of keys.
+  for I := 1 to High(LSorted) do
+  begin
+    LKey := LSorted[I];
+    J := I - 1;
+    while (J >= 0) and (LSorted[J].Generation > LKey.Generation) do
+    begin
+      LSorted[J + 1] := LSorted[J];
+      Dec(J);
+    end;
+    LSorted[J + 1] := LKey;
+  end;
+  for I := 1 to High(LSorted) do
+    if LSorted[I].Generation = LSorted[I - 1].Generation then
+      raise EJwtKeyError.CreateFmt('JWT key store: generation %d appears twice',
+        [LSorted[I].Generation]);
+
+  Result := nil;
+  AGone := nil;
+  SetLength(Result, Length(LSorted));
+  SetLength(AGone, Length(LSorted));
+  LCount := 0;
+  LGoneCount := 0;
+  for I := 0 to High(LSorted) do
+  begin
+    LKey := LSorted[I];
+    if I < High(LSorted) then
+      LKey.NotAfter := LSorted[I + 1].ActiveFrom + AMaxTokenSeconds
+    else
+      LKey.NotAfter := 0;
+    if Alive(LKey) then
+    begin
+      Result[LCount] := LKey;
+      Inc(LCount);
+    end
+    else
+    begin
+      AGone[LGoneCount] := LKey;
+      Inc(LGoneCount);
+    end;
+  end;
+  SetLength(Result, LCount);
+  SetLength(AGone, LGoneCount);
+end;
+
+constructor TRotatingJwtKeyRing.Create(const AStore: IJwtKeyStore;
+  const AOptions: TJwtRotationOptions; const AScope: string);
+begin
+  inherited Create;
+  if AStore = nil then
+    raise EArgumentException.Create('TRotatingJwtKeyRing: no store');
+  if (AOptions.RotateEverySeconds <= 0) or (AOptions.MaxTokenSeconds <= 0) or
+    (AOptions.ReloadSeconds <= 0) or (AOptions.PropagationSeconds < AOptions.ReloadSeconds) then
+    raise EArgumentException.Create('TRotatingJwtKeyRing: RotateEverySeconds, MaxTokenSeconds ' +
+      'and ReloadSeconds must be > 0, and PropagationSeconds >= ReloadSeconds');
+  // The kid is "<scope>/<16 hex>": it must fit JWT_MAX_KID_BYTES.
+  if (Pos('/', AScope) > 0) or
+    (Length(PaStringToUtf8Bytes(AScope)) > JWT_MAX_KID_BYTES - 2 * KID_BYTES - 1) then
+    raise EArgumentException.Create('TRotatingJwtKeyRing: the scope has a "/" or is too long');
+  FStore := AStore;
+  FOptions := AOptions;
+  FScope := AScope;
+  FLock := TCriticalSection.Create;
+  Refresh(True);
+  FLoadedAtMs := TTicker.NowMs;
+end;
+
+destructor TRotatingJwtKeyRing.Destroy;
+begin
+  FLock.Free;
+  inherited Destroy;
+end;
+
+function TRotatingJwtKeyRing.NewKid: string;
+begin
+  Result := PaBytesToHex(PcRandomBytes(KID_BYTES)); // lowercase hex
+  if FScope <> '' then
+    Result := FScope + '/' + Result;
+end;
+
+procedure TRotatingJwtKeyRing.Refresh(ARaise: Boolean);
+var
+  LLoaded, LKeys, LGone: TJwtKeyArray;
+  LNewest, LNew: TJwtKey;
+  LNow: Int64;
+  I: Integer;
+begin
+  try
+    LLoaded := FStore.Load(FScope);
+    LKeys := PrepareKeys(LLoaded, FOptions.MaxTokenSeconds, LGone);
+    LNow := TJwt.UnixNow;
+    // Rotation: no key yet, or the newest one is old enough. The first key
+    // signs at once (no instance holds an older one to wait for).
+    if Length(LLoaded) = 0 then
+      LNewest := NoKey
+    else
+      LNewest := LKeys[High(LKeys)]; // the newest is never gone (NotAfter 0)
+    if (Length(LLoaded) = 0) or (LNewest.ActiveFrom + FOptions.RotateEverySeconds <= LNow) then
+    begin
+      LNew := TJwtKey.Create(NewKid, PaBase64UrlEncode(PcRandomBytes(SECRET_BYTES)));
+      LNew.Generation := LNewest.Generation + 1;
+      LNew.CreatedAt := LNow;
+      if Length(LLoaded) = 0 then
+        LNew.ActiveFrom := LNow
+      else
+        LNew.ActiveFrom := LNow + FOptions.PropagationSeconds;
+      // Lost or won, the store now has generation n+1: read it back.
+      FStore.TryAdd(FScope, LNew);
+      LLoaded := FStore.Load(FScope);
+      LKeys := PrepareKeys(LLoaded, FOptions.MaxTokenSeconds, LGone);
+    end;
+    for I := 0 to High(LGone) do
+      FStore.Delete(FScope, LGone[I].Kid);
+    if Length(LKeys) = 0 then
+      raise EJwtKeyError.Create('JWT key store: no key after a rotation');
+    FLock.Acquire;
+    try
+      FKeys := LKeys;
+    finally
+      FLock.Release;
+    end;
+  except
+    on E: Exception do
+    begin
+      if ARaise then
+        raise;
+      if Assigned(FOnError) then
+        FOnError(Format('JWT key ring "%s": reload failed, the loaded keys stay in use: %s: %s',
+          [FScope, E.ClassName, E.Message]));
+    end;
+  end;
+end;
+
+procedure TRotatingJwtKeyRing.Maintain;
+var
+  LDue: Boolean;
+begin
+  FLock.Acquire;
+  try
+    LDue := not FBusy and (TTicker.ElapsedMs(FLoadedAtMs) >= UInt64(FOptions.ReloadSeconds) * 1000);
+    if LDue then
+      FBusy := True;
+  finally
+    FLock.Release;
+  end;
+  if not LDue then
+    Exit;
+  // One thread reloads, outside the lock; the others keep the loaded keys.
+  try
+    Refresh(False);
+  finally
+    FLock.Acquire;
+    try
+      FBusy := False;
+      FLoadedAtMs := TTicker.NowMs; // also after a failure: retried after ReloadSeconds
+    finally
+      FLock.Release;
+    end;
+  end;
+end;
+
+procedure TRotatingJwtKeyRing.Reload;
+begin
+  Refresh(True);
+  FLock.Acquire;
+  try
+    FLoadedAtMs := TTicker.NowMs;
+  finally
+    FLock.Release;
+  end;
+end;
+
+function TRotatingJwtKeyRing.SigningKey(out AKey: TJwtKey): Boolean;
+var
+  I: Integer;
+  LNow: Int64;
+begin
+  Maintain;
+  AKey := NoKey;
+  Result := False;
+  LNow := TJwt.UnixNow;
+  FLock.Acquire;
+  try
+    for I := High(FKeys) downto 0 do
+      if (FKeys[I].ActiveFrom <= LNow) and Alive(FKeys[I]) then
+      begin
+        AKey := FKeys[I];
+        Exit(True);
+      end;
+  finally
+    FLock.Release;
+  end;
+end;
+
+function TRotatingJwtKeyRing.FindKey(const AKid: string; out AKey: TJwtKey): Boolean;
+var
+  I: Integer;
+begin
+  Maintain;
+  AKey := NoKey;
+  Result := False;
+  FLock.Acquire;
+  try
+    for I := 0 to High(FKeys) do
+      if FKeys[I].Kid = AKid then
+      begin
+        AKey := FKeys[I];
+        Exit(True);
+      end;
+  finally
+    FLock.Release;
+  end;
+end;
+
+function TRotatingJwtKeyRing.LegacySecret: string;
+begin
+  Result := FOptions.LegacySecret;
+end;
+
+function TRotatingJwtKeyRing.MaxTokenSeconds: Int64;
+begin
+  Result := FOptions.MaxTokenSeconds;
+end;
+
+function TRotatingJwtKeyRing.Keys: TJwtKeyArray;
+begin
+  FLock.Acquire;
+  try
+    Result := Copy(FKeys);
+  finally
+    FLock.Release;
+  end;
+end;
+
+{ TMemoryJwtKeyStore }
+
+constructor TMemoryJwtKeyStore.Create;
+begin
+  inherited Create;
+  FLock := TCriticalSection.Create;
+end;
+
+destructor TMemoryJwtKeyStore.Destroy;
+begin
+  FLock.Free;
+  inherited Destroy;
+end;
+
+function TMemoryJwtKeyStore.Load(const AScope: string): TJwtKeyArray;
+var
+  I, LCount: Integer;
+begin
+  Result := nil;
+  FLock.Acquire;
+  try
+    SetLength(Result, Length(FEntries));
+    LCount := 0;
+    for I := 0 to High(FEntries) do
+      if FEntries[I].Scope = AScope then
+      begin
+        Result[LCount] := FEntries[I].Key;
+        Result[LCount].NotAfter := 0;
+        Inc(LCount);
+      end;
+    SetLength(Result, LCount);
+  finally
+    FLock.Release;
+  end;
+end;
+
+function TMemoryJwtKeyStore.TryAdd(const AScope: string; const AKey: TJwtKey): Boolean;
+var
+  I: Integer;
+begin
+  FLock.Acquire;
+  try
+    for I := 0 to High(FEntries) do
+      if (FEntries[I].Scope = AScope) and
+        ((FEntries[I].Key.Generation = AKey.Generation) or (FEntries[I].Key.Kid = AKey.Kid)) then
+        Exit(False);
+    SetLength(FEntries, Length(FEntries) + 1);
+    FEntries[High(FEntries)].Scope := AScope;
+    FEntries[High(FEntries)].Key := AKey;
+    Result := True;
+  finally
+    FLock.Release;
+  end;
+end;
+
+procedure TMemoryJwtKeyStore.Delete(const AScope, AKid: string);
+var
+  I, J: Integer;
+begin
+  FLock.Acquire;
+  try
+    for I := 0 to High(FEntries) do
+      if (FEntries[I].Scope = AScope) and (FEntries[I].Key.Kid = AKid) then
+      begin
+        for J := I to High(FEntries) - 1 do
+          FEntries[J] := FEntries[J + 1];
+        SetLength(FEntries, Length(FEntries) - 1);
+        Exit;
+      end;
+  finally
+    FLock.Release;
+  end;
+end;
+
+{ TDbJwtKeyStore }
+
+constructor TDbJwtKeyStore.Create(const AFactory: IDBFactory; const ALoadSql, AAddSql,
+  ADeleteSql: string);
+begin
+  inherited Create;
+  if AFactory = nil then
+    raise EArgumentException.Create('TDbJwtKeyStore: no factory');
+  FFactory := AFactory;
+  FLoadSql := ALoadSql;
+  FAddSql := AAddSql;
+  FDeleteSql := ADeleteSql;
+end;
+
+function TDbJwtKeyStore.Load(const AScope: string): TJwtKeyArray;
+var
+  LQuery: IQuery;
+  LScope: IScopeTransaction;
+  LResult: IQueryResult;
+  LCount: Integer;
+begin
+  Result := nil;
+  LScope := FFactory.GetPool.AcquireQuery(LQuery);
+  LScope.StartTransaction;
+  try
+    LQuery.Sql := FFactory.SqlLoader[FLoadSql].SQL;
+    LQuery.Params.Strings['TENANT_ID'] := AScope;
+    LResult := LQuery.Open;
+    LCount := 0;
+    while not LResult.Eof do
+    begin
+      SetLength(Result, LCount + 1);
+      Result[LCount] := TJwtKey.Create(LResult.Strings['KID'], LResult.Strings['SECRET']);
+      Result[LCount].Generation := LResult.Integers['GENERATION'];
+      Result[LCount].CreatedAt := LResult.Int64s['CREATED_AT'];
+      Result[LCount].ActiveFrom := LResult.Int64s['ACTIVE_FROM'];
+      Inc(LCount);
+      LResult.Next;
+    end;
+    LScope.Commit;
+  except
+    LScope.Rollback;
+    raise;
+  end;
+end;
+
+function TDbJwtKeyStore.TryAdd(const AScope: string; const AKey: TJwtKey): Boolean;
+var
+  LQuery: IQuery;
+  LScope: IScopeTransaction;
+begin
+  LScope := FFactory.GetPool.AcquireQuery(LQuery);
+  LScope.StartTransaction;
+  try
+    LQuery.Sql := FFactory.SqlLoader[FAddSql].SQL;
+    LQuery.Params.Strings['TENANT_ID'] := AScope;
+    LQuery.Params.Integers['GENERATION'] := AKey.Generation;
+    LQuery.Params.Strings['KID'] := AKey.Kid;
+    LQuery.Params.Strings['SECRET'] := AKey.Secret;
+    LQuery.Params.Int64s['CREATED_AT'] := AKey.CreatedAt;
+    LQuery.Params.Int64s['ACTIVE_FROM'] := AKey.ActiveFrom;
+    LQuery.ExecSql;
+    LScope.Commit;
+    Result := True;
+  except
+    on E: EConstraintViolationException do
+    begin
+      LScope.Rollback;
+      // Another instance stored this generation first. Anything else (a
+      // NOT NULL, a check) is the application's schema at fault: raise.
+      if E.Kind <> cvUnique then
+        raise;
+      Result := False;
+    end;
+    on Exception do
+    begin
+      LScope.Rollback;
+      raise;
+    end;
+  end;
+end;
+
+procedure TDbJwtKeyStore.Delete(const AScope, AKid: string);
+var
+  LQuery: IQuery;
+  LScope: IScopeTransaction;
+begin
+  LScope := FFactory.GetPool.AcquireQuery(LQuery);
+  LScope.StartTransaction;
+  try
+    LQuery.Sql := FFactory.SqlLoader[FDeleteSql].SQL;
+    LQuery.Params.Strings['TENANT_ID'] := AScope;
+    LQuery.Params.Strings['KID'] := AKid;
+    LQuery.ExecSql;
+    LScope.Commit;
+  except
+    LScope.Rollback;
+    raise;
+  end;
 end;
 
 { TJwtKeys }

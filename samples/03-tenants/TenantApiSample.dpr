@@ -32,6 +32,17 @@
   scenario script signs itself. A token lives at most one hour (the ring's
   MaxTokenSeconds).
 
+  With JWT_KEY_STORE=db the keys are generated instead, kept in the control
+  database (TDbJwtKeyStore, table JWT_KEYS) and rotated by the ring itself
+  (TRotatingJwtKeyRing, phase 2): every JWT_ROTATE_SECONDS (default 30 days)
+  a new key, signing JWT_PROPAGATION_SECONDS later (default 120), the keys
+  read again every JWT_RELOAD_SECONDS (default 60); an old key verifies one
+  token lifetime after the next one signs. JWT_SECRET stays the legacy
+  secret. With JWT_KEY_STORE=redis the same, kept in Redis instead
+  (TRedisJwtKeyStore, src/redis; REDIS_HOST, default 127.0.0.1, REDIS_PORT,
+  default 6379, and JWT_REDIS_PREFIX, default tenants-api:).
+  tools/http_scenarios_jwt_rotation.sh runs both with seconds.
+
   Rate limit: one window per tenant, 1000 requests a minute, 5 for the plan
   "free" (hooli). Each access line and server span carries tenant.id
   (TLoggerMiddleware.AddField); spans go to an OpenTelemetry collector when
@@ -94,6 +105,9 @@ uses
   PascalApi.Config,
   PascalApi.Jwt,
   PascalApi.JwtKeys,
+  Redis.Types,
+  Redis.Client,
+  PascalApi.Redis.JwtKeys,
   PascalApi.Http,
   PascalApi.Horse.Middlewares,
   PascalApi.Horse.OpenApi,
@@ -121,6 +135,7 @@ const
 var
   GSecret, GClaim, GDataDir: string;
   GKeys: IJwtKeyRing;
+  GControl: IDBFactory;
   GCatalog: ITenantCatalog;
   GResolver: ITenantDataResolver;
 
@@ -441,7 +456,8 @@ end;
 // The catalog: control.sqlite, seeded from TENANTS (the sample's stand-in
 // for provisioning), read through the library's TDbTenantCatalog and kept
 // CATALOG_TTL seconds by TCachedTenantCatalog.
-function OpenCatalog(const ASpec: ITenantCatalog; ALog: TSampleLog): ITenantCatalog;
+function OpenCatalog(const ASpec: ITenantCatalog; ALog: TSampleLog;
+  out AControl: IDBFactory): ITenantCatalog;
 var
   LControl: IDBFactory;
   LEngine: TDBMigrationEngine;
@@ -457,6 +473,55 @@ begin
   SeedTenants(LControl, ASpec);
   Result := TCachedTenantCatalog.Create(TDbTenantCatalog.Create(LControl),
     StrToIntDef(TAppConfig.Get('CATALOG_TTL', '30'), 30));
+  AControl := LControl;
+end;
+
+function SecondsSetting(const AName: string; ADefault: Int64): Int64;
+begin
+  Result := StrToInt64Def(TAppConfig.Get(AName, ''), ADefault);
+end;
+
+// The signing keys: JWT_KEYS (static, the default), or generated and rotated
+// in the control database (JWT_KEY_STORE=db) or in Redis (redis).
+function OpenKeys(const AControl: IDBFactory; ALog: TSampleLog): IJwtKeyRing;
+var
+  LMode: string;
+  LOptions: TJwtRotationOptions;
+  LStore: IJwtKeyStore;
+  LRing: TRotatingJwtKeyRing;
+  LParams: TRedisParams;
+begin
+  LMode := LowerCase(TAppConfig.Get('JWT_KEY_STORE', 'static'));
+  if LMode = 'static' then
+    Exit(TStaticJwtKeyRing.Parse(TAppConfig.Get('JWT_KEYS', DEFAULT_JWT_KEYS), GSecret,
+      TOKEN_SECONDS));
+  if (LMode <> 'db') and (LMode <> 'redis') then
+    raise EArgumentException.CreateFmt('JWT_KEY_STORE: "%s" is not static, db or redis', [LMode]);
+  LOptions := TJwtRotationOptions.Default;
+  LOptions.MaxTokenSeconds := TOKEN_SECONDS;
+  LOptions.LegacySecret := GSecret;
+  LOptions.RotateEverySeconds := SecondsSetting('JWT_ROTATE_SECONDS', LOptions.RotateEverySeconds);
+  LOptions.PropagationSeconds := SecondsSetting('JWT_PROPAGATION_SECONDS',
+    LOptions.PropagationSeconds);
+  LOptions.ReloadSeconds := SecondsSetting('JWT_RELOAD_SECONDS', LOptions.ReloadSeconds);
+  if LMode = 'db' then
+    LStore := TDbJwtKeyStore.Create(AControl)
+  else
+  begin
+    LParams := RedisDefaultParams;
+    LParams.Host := TAppConfig.Get('REDIS_HOST', '127.0.0.1');
+    LParams.Port := StrToIntDef(TAppConfig.Get('REDIS_PORT', '6379'), 6379);
+    LParams.ClientName := 'tenants-api';
+    // The store owns this client: the sample uses Redis for nothing else.
+    // An API that does keeps one client and passes it here too.
+    LStore := TRedisJwtKeyStore.Create(TRedisClient.Create(LParams),
+      TAppConfig.Get('JWT_REDIS_PREFIX', 'tenants-api:'), True);
+  end;
+  LRing := TRotatingJwtKeyRing.Create(LStore, LOptions);
+  Result := LRing;
+  // A reload that fails later keeps the loaded keys; the log says so.
+  LRing.OnError := ALog.Error;
+  SafeWriteln('JWT keys: generated, in %s (%d loaded)', [LMode, Length(LRing.Keys)]);
 end;
 
 var
@@ -488,8 +553,6 @@ begin
   GDataDir := IncludeTrailingPathDelimiter(ExpandFileName(
     TAppConfig.Get('DATA_DIR', ExtractFilePath(ParamStr(0)))));
   GSecret := TAppConfig.Get('JWT_SECRET', 'development-secret-change-me');
-  GKeys := TStaticJwtKeyRing.Parse(TAppConfig.Get('JWT_KEYS', DEFAULT_JWT_KEYS), GSecret,
-    TOKEN_SECONDS);
   GClaim := TAppConfig.Get('TENANT_CLAIM', TENANT_DEFAULT_CLAIM);
 
   GLog := TSampleLog.Create;
@@ -498,7 +561,8 @@ begin
     GSpec := TConfigTenantCatalog.Create(TAppConfig.Get('TENANTS', DEFAULT_TENANTS));
     if GReset then
       DeleteDatabases(GSpec);
-    GCatalog := OpenCatalog(GSpec, GLog);
+    GCatalog := OpenCatalog(GSpec, GLog, GControl);
+    GKeys := OpenKeys(GControl, GLog);
     GResolver := TTenantDataResolver.Create(GHooks.NewFactory,
       StrToIntDef(TAppConfig.Get('DB_IDLE_SECONDS', '600'), 600));
     MigrateAll(GLog);

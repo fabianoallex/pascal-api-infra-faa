@@ -30,6 +30,10 @@
         <DefaultFilename Value="..\..\external\pascal-common-faa\packages\pascal_common_faa.lpk" Prefer="True"/>
       </Item>
       <Item>
+        <PackageName Value="pascal_redis_faa"/>
+        <DefaultFilename Value="..\..\external\pascal-redis-faa\packages\pascal_redis_faa.lpk" Prefer="True"/>
+      </Item>
+      <Item>
         <PackageName Value="pascal_db_faa"/>
         <DefaultFilename Value="..\..\external\pascal-db-faa\packages\pascal_db_faa.lpk" Prefer="True"/>
       </Item>
@@ -76,7 +80,7 @@
     </Target>
     <SearchPaths>
       <IncludeFiles Value="..\..\src;..\..\external\horse\src"/>
-      <OtherUnitFiles Value="..\..\src\horse;..\..\external\horse\src"/>
+      <OtherUnitFiles Value="..\..\src\redis;..\..\src\horse;..\..\external\horse\src"/>
       <UnitOutputDirectory Value="lib\$(TargetCPU)-$(TargetOS)"/>
     </SearchPaths>
     <Parsing>

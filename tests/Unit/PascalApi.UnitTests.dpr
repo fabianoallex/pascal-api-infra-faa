@@ -42,6 +42,7 @@ uses
   PascalApi.DtoTests in 'PascalApi.DtoTests.pas',
   PascalApi.CryptoTests in 'PascalApi.CryptoTests.pas',
   PascalApi.JwtKeysTests in 'PascalApi.JwtKeysTests.pas',
+  PascalApi.JwtRotationTests in 'PascalApi.JwtRotationTests.pas',
   PascalApi.HttpTests in 'PascalApi.HttpTests.pas',
   PascalApi.OpenApiTests in 'PascalApi.OpenApiTests.pas',
   PascalApi.McpTests in 'PascalApi.McpTests.pas',

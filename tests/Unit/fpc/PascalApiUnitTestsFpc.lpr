@@ -33,6 +33,7 @@ uses
   PascalApi.DtoTests,
   PascalApi.CryptoTests,
   PascalApi.JwtKeysTests,
+  PascalApi.JwtRotationTests,
   PascalApi.HttpTests,
   PascalApi.OpenApiTests,
   PascalApi.McpTests,

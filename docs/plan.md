@@ -288,3 +288,9 @@ make its system source public first (phase 2). Design and phases: `docs/jwt-keys
 Phase 1 done on 2026-10-18 (unreleased): `PascalApi.JwtKeys` with the static ring (`JWT_KEYS`)
 and a legacy secret, `TJwtMiddleware.New(ARing)` and `Sign`; sample 03 uses it. FPC on Windows
 and Linux and Delphi 12 Win32/Win64 (304 tests, 0 leaks; 186 + 93 + 107 checks).
+
+Phase 2 done on 2026-10-18 (unreleased): pascal-common-faa 1.15.0 (`PascalCommon.Random`, now the
+minimum), `TRotatingJwtKeyRing` with the database, memory and Redis stores (`src/redis`,
+pascal-redis-faa 0.2.0 as a test-only submodule); sample 03's `JWT_KEY_STORE=db|redis`, checked
+by `tools/http_scenarios_jwt_rotation.sh` with two instances (22 checks each). FPC on Windows
+and Linux and Delphi 12 Win32/Win64: 323 tests, 0 leaks; 186 + 93 + 107 + 22 + 22 checks.

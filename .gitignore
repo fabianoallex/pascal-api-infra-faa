@@ -35,6 +35,7 @@ run.log
 
 samples/01-api/ApiSample
 server.log
+server2.log
 
 # scratch builds and logs of local runs
 .ci/

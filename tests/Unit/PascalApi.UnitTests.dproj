@@ -139,6 +139,7 @@
         <DCCReference Include="PascalApi.DtoTests.pas"/>
         <DCCReference Include="PascalApi.CryptoTests.pas"/>
         <DCCReference Include="PascalApi.JwtKeysTests.pas"/>
+        <DCCReference Include="PascalApi.JwtRotationTests.pas"/>
         <DCCReference Include="PascalApi.HttpTests.pas"/>
         <DCCReference Include="PascalApi.OpenApiTests.pas"/>
         <DCCReference Include="PascalApi.McpTests.pas"/>

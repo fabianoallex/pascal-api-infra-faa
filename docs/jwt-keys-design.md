@@ -1,6 +1,6 @@
 # Design: JWT signing keys with rotation
 
-Status: **phase 1 done (2026-10-18)**; phases 2 and 3 designed. Three decisions taken with the
+Status: **phases 1 and 2 done (2026-10-18)**; phase 3 designed. Three decisions taken with the
 user (decisions 5, 6 and 8); the others are proposals that the implementation may change, and
 what it measures goes back here, as in the other design records.
 
@@ -188,6 +188,34 @@ resolver with the single scope `''`.
 Rejected: deriving each tenant's key from one master secret (HMAC of the master, the tenant and
 a generation). Nothing to store, but a leaked master signs for every tenant.
 
+## Phase 2 as built (2026-10-18)
+
+- `TJwtKey` gained `Generation`, `CreatedAt`, `ActiveFrom`. `TJwtRotationOptions.Default`:
+  rotate 30 days, propagation 120 s, token 3600 s, reload 60 s; the constructor refuses
+  `PropagationSeconds < ReloadSeconds`, a `MaxTokenSeconds` of 0 and a scope with `/`.
+- The constructor loads (and adds the first key, signing at once) and raises on the store's
+  error; later reloads keep the loaded keys and report through `OnError` (a `TPcLogProc`). One
+  thread reloads at a time, outside the lock; a failed reload waits `ReloadSeconds` too.
+- The first test found a reload on the first request after startup: the constructor didn't
+  record when it loaded. Fixed before the commit.
+- A kid is 16 lowercase hex digits (8 random bytes), `<scope>/<hex>` with a scope; a secret is
+  32 random bytes in Base64url (43 characters).
+- `TDbJwtKeyStore`'s SQL names: `JWT_KEY.BY_TENANT`, `JWT_KEY.INSERT`, `JWT_KEY.DELETE`. A
+  lost race is `TryAdd`'s False through the adapter's `cvUnique` (tested with the mock's
+  `AddConstraintViolation`). Over HTTP, two instances rotated on one SQLite file and one Redis
+  with no reload error in either log; whether they ever hit the same generation at the same
+  instant isn't visible from there. So a probe (2026-10-18, FPC 3.2.2 Windows, SQLdb, sample
+  03's schema) stored generation 1 twice through `TDbJwtKeyStore`: the second `TryAdd` was
+  False, not an exception, and one row stayed; the same for a repeated kid (its own unique
+  key). FireDAC (Delphi) wasn't probed the same way; its HTTP runs (below) logged no reload
+  error either.
+- `TRedisJwtKeyStore` deletes by finding the kid's generation (`HGETALL`, then `HDEL`).
+- Rotation happens on a request, not on a timer: the HTTP check first expected a rotation
+  during an idle wait and failed; the script now keeps both instances busy.
+- Measured with `tools/http_scenarios_jwt_rotation.sh` (two instances of sample 03, keys every
+  3 s): 22 checks on the database and on Redis 7.2, on FPC Windows and Linux and on Delphi 12
+  Win32/Win64 (FireDAC); 323 unit tests, 0 leaks, on all four.
+
 ## Where each piece lives (proposal)
 
 | Piece | Unit |
@@ -207,9 +235,9 @@ the MCP executor forwards the caller's `Authorization` header as it is.
 1. **Done (2026-10-18).** `kid` in `TJwt`, the static ring, `JWT_KEYS`, the legacy secret,
    the middleware overloads and `Sign`. Unit tests; sample 01 keeps `New(secret)` and its 186
    checks pass unchanged; sample 03 uses the ring.
-2. `PcRandomBytes` in pascal-common-faa (release there first), `TDbJwtKeyStore` and automatic
-   rotation, tested with `TMockDBFactory` and a manual clock and ticker; then
-   `TRedisJwtKeyStore`, against a real Redis.
+2. **Done (2026-10-18).** `PcRandomBytes` in pascal-common-faa 1.15.0 (`PascalCommon.Random`),
+   `TRotatingJwtKeyRing`, `TDbJwtKeyStore`, `TMemoryJwtKeyStore` and `TRedisJwtKeyStore`. As
+   built: see "Phase 2 as built".
 3. The per-tenant resolver and the claim check, in sample 03.
 
 Then the guide: `docs/guide/authentication.md` (rotation, its settings, the pitfall above

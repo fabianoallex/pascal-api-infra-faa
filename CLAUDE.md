@@ -88,18 +88,21 @@ all (measured, skill `references/rtti-gotchas.md`).
 
 ## Dependencies
 
-`external/` holds the dependencies as git submodules, pinned: pascal-common-faa `v1.14.0` (the library itself needs 1.8.1; sample 02 uses 1.14.0's
+`external/` holds the dependencies as git submodules, pinned: pascal-common-faa `v1.15.0` (the library itself needs 1.15.0, for `PascalCommon.Random`; sample 02 uses 1.14.0's
 normalizer factories, unit `PascalCommon.Normalizers`, `TNorm = class(TPcStringNormalizers)` in `DbApiSample.Normalizers`; the samples turn on 1.10.0's
 `PcSetSafeLogUtf8` and log only through `SafeWriteln`, never plain `Writeln`),
 pascal-jsonmapper-faa `v0.6.0` (refuses duplicate members; `EJsonInputError` = 400; exact
 `Currency` on FPC), pascal-db-faa `v0.15.0` (`TSQLResult`'s operations
-return a copy), Horse `3.3.12` (`fda6fed`; until 0.4.0
+return a copy), pascal-redis-faa `v0.2.0` (only `src/redis` and sample 03's Redis key store
+use it), Horse `3.3.12` (`fda6fed`; until 0.4.0
 this repository used 3.3.2, `72cc45f`; pascal-dfe-broker moved to 3.3.12 on 2026-10-09, delphi-api-starter is still on 3.3.2). They are **only for this
 repository's tests**: a consumer provides its own single copy of each (submodule + search path),
 never `pascal-api-infra-faa/external/...`. Clone with `git submodule update --init` (no
 `--recursive`: pascal-db-faa's own `external/` is not needed).
 
 - Minimum pascal-common-faa version checked in `PascalApi.Dto` (`PASCALCOMMON_VERSION`).
+- Sample 03 also has `src/redis` and `external/pascal-redis-faa/src` (Delphi) or the
+  `pascal_redis_faa` package (Lazarus): its Redis key store.
 - Delphi search path of a test project: `src`, `external/pascal-common-faa/src`,
   `external/pascal-common-faa/bridges/jsonmapper`, `external/pascal-jsonmapper-faa/src`,
   `external/pascal-db-faa/src`.
@@ -173,7 +176,12 @@ with the user: `docs/multitenancy-design.md`.
 `PascalApi.JwtKeys` (pure, tested in `PascalApi.JwtKeysTests`): keys named by `kid`, so the
 secret rotates without invalidating tokens. Design, phases and the user's decisions:
 `docs/jwt-keys-design.md` (phase 1 done: the static ring; 2: generated keys in a database or
-Redis store; 3: one ring per tenant, the tenant inside the `kid`).
+Redis store, done; 3: one ring per tenant, the tenant inside the `kid`).
+
+- `src/redis` is outside the `.lpk`, as `src/horse` is: the core has no Redis code.
+- The rotation runs on a request (no thread): a check that waits idle sees no rotation.
+  `tools/http_scenarios_jwt_rotation.sh` runs sample 03 twice on one store (db, then Redis;
+  `tools/test_http.sh` starts a throwaway Redis container when Docker is there).
 
 - **Opt-in**: `TJwtMiddleware.New(ASecret)` and `TJwt.SignHS256(claims, secret)` don't change;
   sample 01 stays on them (its scenarios are the check). Sample 03 uses the ring.

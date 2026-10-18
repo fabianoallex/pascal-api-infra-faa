@@ -18,12 +18,24 @@ may change the API; each such change is listed here.
   `kid`, or one past its `notAfter`, is the same 401 as a bad signature. Opt-in:
   `TJwtMiddleware.New(ASecret)` is unchanged (sample 01's 186 checks). Sample 03 uses a ring;
   `tools/http_scenarios_tenants.sh` checks it (107 checks). Guide: Authentication, step 8.
+- **Generated JWT signing keys that rotate by themselves** (phase 2 of
+  [docs/jwt-keys-design.md](docs/jwt-keys-design.md)): `TRotatingJwtKeyRing` with
+  `TJwtRotationOptions` (rotate every 30 days, a new key signs 120 s after it is stored, an
+  old key verifies one token lifetime more, reload every 60 s), on a store every instance
+  shares: `IJwtKeyStore`, `TDbJwtKeyStore` (the application's SQL by name; a unique key on
+  `TENANT_ID` and `GENERATION` settles two instances rotating at once), `TMemoryJwtKeyStore`
+  (tests), and `TRedisJwtKeyStore` in `src/redis/PascalApi.Redis.JwtKeys` (pascal-redis-faa,
+  outside the package). Sample 03: `JWT_KEY_STORE=db` or `redis`;
+  `tools/http_scenarios_jwt_rotation.sh` checks both with two instances (22 checks each).
 - Guide [Your project on both compilers](docs/guide/dual-compiler.md): the layout, project
   files, code rules, mirrored tests and CI for an application of your own on Delphi and
   Lazarus/FPC, and the Claude Code skills that carry the rules (pascal-skills-faa).
 
 ### Changed
 
+- **Requires pascal-common-faa 1.15.0** (was 1.8.1): `PascalApi.JwtKeys` takes its random bytes
+  from `PascalCommon.Random`. `PASCALCOMMON_VERSION` in `PascalApi.Dto` and the `.lpk` say so.
+- pascal-redis-faa 0.2.0 is a new submodule, only for the tests and sample 03 (Redis store).
 - The pascal-common-faa submodule (used by this repository's tests and samples) moved from
   1.10.0 to 1.14.0. Sample 02 names its normalization rules in a factory
   (`DbApiSample.Normalizers`, `TNorm = class(TPcStringNormalizers)` from

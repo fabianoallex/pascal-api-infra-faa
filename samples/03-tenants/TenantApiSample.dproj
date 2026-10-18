@@ -38,7 +38,7 @@
         <DCC_DcuOutput>.\$(Platform)\$(Config)</DCC_DcuOutput>
         <DCC_ExeOutput>.\$(Platform)\$(Config)</DCC_ExeOutput>
         <DCC_Namespace>System;Xml;Data;Datasnap;Web;Soap;$(DCC_Namespace)</DCC_Namespace>
-        <DCC_UnitSearchPath>..\..\src;..\..\src\horse;..\..\external\horse\src;..\..\external\pascal-common-faa\src;..\..\external\pascal-common-faa\bridges\jsonmapper;..\..\external\pascal-jsonmapper-faa\src;..\..\external\pascal-db-faa\src;..\..\external\pascal-db-faa\adapters\firedac;$(DCC_UnitSearchPath)</DCC_UnitSearchPath>
+        <DCC_UnitSearchPath>..\..\src;..\..\src\horse;..\..\src\redis;..\..\external\pascal-redis-faa\src;..\..\external\horse\src;..\..\external\pascal-common-faa\src;..\..\external\pascal-common-faa\bridges\jsonmapper;..\..\external\pascal-jsonmapper-faa\src;..\..\external\pascal-db-faa\src;..\..\external\pascal-db-faa\adapters\firedac;$(DCC_UnitSearchPath)</DCC_UnitSearchPath>
         <SanitizedProjectName>TenantApiSample</SanitizedProjectName>
         <UsingDelphiRTL>true</UsingDelphiRTL>
     </PropertyGroup>
