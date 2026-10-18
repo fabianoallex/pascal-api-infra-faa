@@ -276,8 +276,8 @@ TJwtMiddleware.Sign(LClaims)   // signed as the JWT middleware verifies
 **A signing key per tenant** (optional): with `TTenantJwtKeyRing` each tenant has its own
 rotating keys, and a token verifies only when its `tenant_id` names the tenant whose key signed
 it, so a key that leaks signs for one tenant, not for all. The login above doesn't change:
-`TJwtMiddleware.Sign` picks the key from the claim. See [Authentication](authentication.md),
-step 10.
+`TJwtMiddleware.Sign` picks the key from the claim. See
+[JWT signing keys and rotation](jwt-keys.md), step 5.
 
 The sample has no password check (it's a sample). Yours will, and will usually find the tenant
 from the user rather than from the request body.

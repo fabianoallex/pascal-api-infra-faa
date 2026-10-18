@@ -1,5 +1,8 @@
 # Design: JWT signing keys with rotation
 
+Building an application with it: [the guide](guide/jwt-keys.md). This document records the
+decisions and what was measured.
+
 Status: **phases 1, 2 and 3 done (2026-10-18).** Three decisions taken with the
 user (decisions 5, 6 and 8); the others are proposals that the implementation may change, and
 what it measures goes back here, as in the other design records.

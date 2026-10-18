@@ -13,6 +13,7 @@ way it does.
 | [Getting started](getting-started.md) | you start an API: the dependencies, the program file, JSON out, errors, a DTO, paging, the middleware order, the samples |
 | [Configuration](configuration.md) | settings from the environment, a `.env` file or a default; the variables the library reads |
 | [Authentication](authentication.md) | routes need a token: JWT (HS256) or your own check, the open paths, issuing and reading a token |
+| [JWT signing keys and rotation](jwt-keys.md) | one secret is no longer enough: keys named by `kid`, rotating by themselves in a database or Redis, one per tenant, sealed under a master key; what to do when one leaks |
 | [Rate limiting](rate-limiting.md) | a client may make so many requests a minute: the window, the key (behind a proxy too), a limit per client, the headers and the 429 |
 | [Database access](database.md) | handlers over a real database: the factory, migrations, SQL by key, paging and ordering in SQL, transactions, what the database's errors become |
 | [Logging and observability](observability.md) | the request id, the access line, the client's address, files, metrics, health, spans to OpenTelemetry |
@@ -33,6 +34,8 @@ has nothing to say is left out):
 2. **The smallest working program**: the few lines that turn it on.
 3. **Step by step**: building a real application, one piece at a time.
 4. **Choices**: the options, and when to pick each one.
+   **Procedures** (only where the topic has operations to run on a live API, as rotating or
+   revoking keys): each one as numbered steps, with what is tested.
 5. **Pitfalls**: what goes wrong silently, and how to avoid it.
 6. **Testing your application**: what to check and how.
 7. **Reference**: the units, the sample, the design document.

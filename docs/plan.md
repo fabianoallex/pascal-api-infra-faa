@@ -206,6 +206,9 @@ testing, reference), with code taken from the samples. Done: multi-tenancy
 (`docs/guide/openapi.md`), MCP (`docs/guide/mcp.md`), messaging, Redis and IPC (`docs/guide/messaging.md`): every topic
 the index planned. Added on 2026-10-15, at the user's request: DTOs and JSON
 (`docs/guide/dtos-json.md`), which also brought `ParseQueryInt`'s 400 and `umError` in the samples.
+Added on 2026-10-18, at the user's request: JWT signing keys and rotation (`docs/guide/jwt-keys.md`),
+steps 8-11 of the authentication guide plus procedures for a live API; the guide template got an
+optional "Procedures" part for it.
 
 `TSQLResult`'s methods (`ProcessTag`, `ReplaceLiteral`, `ApplyOperator`, `ApplyFilter`) changed
 `Self` and returned it. Called on a `const TSQLResult` parameter, that leaked the new string on

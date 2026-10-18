@@ -41,6 +41,11 @@ may change the API; each such change is listed here.
   seals, all open). A sealed secret is bound to its tenant, kid and generation; plain secrets
   stored before still load unless sealing is required. `IJwtSecretCipher` leaves room for a
   KMS. Sample 03 seals in both its `db` and `redis` modes (`SECRET` column now `VARCHAR(255)`).
+- Guide [JWT signing keys and rotation](docs/guide/jwt-keys.md): the key rings, the stores, a
+  key per tenant, sealed secrets, and procedures (from one secret to a ring, revoking a leaked
+  key, rotating the master key, turning sealing on). Steps 8-11 of the authentication guide
+  moved there. Two tests back its revocation steps (`Revoke_WipeTheScope`,
+  `Revoke_OnlyTheSigningKey_ThePreviousSignsAgain`).
 - Guide [Your project on both compilers](docs/guide/dual-compiler.md): the layout, project
   files, code rules, mirrored tests and CI for an application of your own on Delphi and
   Lazarus/FPC, and the Claude Code skills that carry the rules (pascal-skills-faa).

@@ -106,6 +106,8 @@ type
     [Test] procedure Sign_HonoursMaxTokenSeconds;
     [Test] procedure LegacySecret_ForTokensWithoutKid;
     [Test] procedure MemoryStore_Rules;
+    [Test] procedure Revoke_WipeTheScope;
+    [Test] procedure Revoke_OnlyTheSigningKey_ThePreviousSignsAgain;
   end;
 
   [TestFixture]
@@ -314,6 +316,58 @@ end;
 function TTestStore.Inner: IJwtKeyStore;
 begin
   Result := FInner;
+end;
+
+procedure TJwtRotationTests.Revoke_WipeTheScope;
+var
+  LStore: IJwtKeyStore;
+  LRing: IJwtKeyRing;
+  LKeys: TJwtKeyArray;
+  LOld: string;
+  I: Integer;
+begin
+  // The emergency procedure of docs/guide/jwt-keys.md: delete every key of
+  // the scope; at the next reload the ring makes a new one, signing at once,
+  // and every token signed before is refused.
+  LStore := TMemoryJwtKeyStore.Create;
+  LRing := NewRing(LStore, Options);
+  Advance(1000);
+  SigningKid(LRing);  // rotates: two keys
+  Advance(60);
+  LOld := TJwtKeys.Sign(LRing, Claims(GNow + 600));
+  LKeys := LStore.Load('');
+  TAssert.AssertEquals(2, Length(LKeys));
+  for I := 0 to High(LKeys) do
+    LStore.Delete('', LKeys[I].Kid);
+  TAssert.AssertEquals('within ReloadSeconds the loaded keys still verify', Ord(jrValid),
+    Ord(DecodeWith(LRing, LOld)));
+  Advance(10);
+  TAssert.AssertEquals('after a reload, refused', Ord(jrBadSignature), Ord(DecodeWith(LRing, LOld)));
+  LKeys := LStore.Load('');
+  TAssert.AssertEquals('one new key', 1, Length(LKeys));
+  TAssert.AssertEquals('signing at once', LKeys[0].Kid, SigningKid(LRing));
+  TAssert.AssertTrue('not an old kid', LKeys[0].Kid <> KidOf(LOld));
+end;
+
+procedure TJwtRotationTests.Revoke_OnlyTheSigningKey_ThePreviousSignsAgain;
+var
+  LStore: IJwtKeyStore;
+  LRing: IJwtKeyRing;
+  LKid1: string;
+begin
+  // A pitfall of docs/guide/jwt-keys.md: deleting only the signing key makes
+  // the one before it the newest again, and it signs until the ring's next
+  // key does (here the rotation is due at once: a new key, pending).
+  LStore := TMemoryJwtKeyStore.Create;
+  LRing := NewRing(LStore, Options);
+  LKid1 := SigningKid(LRing);
+  Advance(1000);
+  SigningKid(LRing);
+  Advance(60);
+  TAssert.AssertTrue('k2 signs', SigningKid(LRing) <> LKid1);
+  LStore.Delete('', SigningKid(LRing));
+  Advance(10);
+  TAssert.AssertEquals('k1 signs again', LKid1, SigningKid(LRing));
 end;
 
 { TTestCatalog }

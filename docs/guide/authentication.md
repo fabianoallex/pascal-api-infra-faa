@@ -2,7 +2,7 @@
 
 Who may call which route: a token in the `Authorization` header, checked before the handler
 runs. The code comes from `samples/01-api` and `samples/03-tenants`. `PascalApi.CryptoTests`
-(`TJwtTests`) covers signing and verifying, `PascalApi.JwtKeysTests` and `PascalApi.JwtRotationTests` the key rings, `PascalApi.HttpTests` the header parsing and the
+(`TJwtTests`) covers signing and verifying, `PascalApi.HttpTests` the header parsing and the
 excluded paths, and `tools/http_scenarios.sh` the answers over HTTP. A few behaviours below were
 measured for this guide (2026-10-14), and each one says where.
 
@@ -234,191 +234,22 @@ function runs on every request, on Horse's threads: keep it fast, and thread-saf
   refuses a token without a usable tenant with 401 and `Bearer error="invalid_token"` (checked
   by `tools/http_scenarios_tenants.sh`).
 
-### 8. Rotate the secret: a key ring
+### 8. More than one secret: keys that rotate
 
-With one secret, changing it logs every user out. A key ring (`PascalApi.JwtKeys`) names each
-secret with a key id, the `kid` in the token's header: the newest key signs, the older ones
-still verify until a date you give, so a rotation keeps the tokens already issued. From
-`samples/03-tenants/TenantApiSample.dpr`:
+One secret can't change without logging every user out. A key ring names each key in the
+token's header (`kid`), so the newest signs while the older ones keep verifying; the keys can
+be fixed in the configuration (`JWT_KEYS`) or generated and rotated by the library in a
+database or Redis, one ring per tenant, sealed under a master key. The middleware takes the ring
+instead of the secret, and the login signs through it:
 
 ```pascal
-GSecret := TAppConfig.Get('JWT_SECRET', 'development-secret-change-me');
-GKeys := TStaticJwtKeyRing.Parse(TAppConfig.Get('JWT_KEYS', DEFAULT_JWT_KEYS), GSecret,
-  TOKEN_SECONDS);
-...
 THorse.Use(TJwtMiddleware.New(GKeys, ['/health', '/metrics', '/auth/login', '/swagger']));
-```
-
-And the login signs through the middleware, so it signs with the key the middleware verifies:
-
-```pascal
+...
 LWriter.WriteString(TJwtMiddleware.Sign(LClaims));
 ```
 
-`JWT_KEYS` lists the keys, separated by commas; the first one signs:
-
-```
-JWT_KEYS=k2:<new secret>,k1:<old secret>@1767225600
-```
-
-- **`kid:secret`**, and **`@notAfter`** (Unix seconds) to stop a key from verifying. A `kid` is
-  1 to 128 of `A-Z a-z 0-9 . _ -`; a secret has no `,` and no `@`. Anything else stops the
-  program at startup (`EJwtKeyError`, whose message never contains a secret).
-- **To rotate**: put the new key first, give the old one a `notAfter` at least one token
-  lifetime ahead, restart. Remove the old entry after that date.
-- **The legacy secret** (the second argument of `Parse`): a token without `kid` verifies with
-  it, so the tokens issued before the ring existed stay valid. Pass `''` to refuse them.
-- **The third argument** is the longest lifetime `Sign` accepts, in seconds (0: no limit).
-  `Sign` refuses claims without an integer `exp`, or with one later than that or than the
-  signing key's `notAfter` (`EArgumentException`): such a token would stop verifying before it
-  expires. `TJwtMiddleware.Sign` checks `exp` with a plain secret too.
-- **Revoking a key**: remove it. Every token it signed is refused at once.
-
-A `kid` the ring doesn't know, or one past its `notAfter`, gets the same 401 as a bad
-signature: the client isn't told which keys exist. Checked over HTTP by
-`tools/http_scenarios_tenants.sh` ("signing keys": a token of the previous key, an unknown
-`kid`, a key past its date, a `kid` signed with another key's secret), and in
-`PascalApi.JwtKeysTests`.
-
-The keys are fixed at startup; step 9 rotates them by itself.
-
-### 9. Rotate by itself: generated keys in a database or in Redis
-
-`TRotatingJwtKeyRing` generates its keys (32 random bytes from the operating system) and keeps
-them in a store every instance of the API shares. From `samples/03-tenants/TenantApiSample.dpr`
-(`OpenKeys`, with `JWT_KEY_STORE=db`):
-
-```pascal
-LOptions := TJwtRotationOptions.Default;   // 30 days, 120 s, 3600 s, 60 s
-LOptions.MaxTokenSeconds := TOKEN_SECONDS;
-LOptions.LegacySecret := GSecret;           // tokens without kid, as in step 8
-LOptions.RotateEverySeconds := SecondsSetting('JWT_ROTATE_SECONDS', LOptions.RotateEverySeconds);
-...
-LStore := TDbJwtKeyStore.Create(AControl);
-LRing := TRotatingJwtKeyRing.Create(LStore, LOptions);
-Result := LRing;
-LRing.OnError := ALog.Error;
-```
-
-`TJwtMiddleware.New(GKeys, ...)` and `TJwtMiddleware.Sign` are the same as in step 8.
-
-- **A key's life**: generated, it is *pending* for `PropagationSeconds` (it verifies, it doesn't
-  sign yet), then it *signs*; when the next key starts signing it *verifies* for
-  `MaxTokenSeconds` more, then it is *gone* and deleted. A new key comes when the newest is
-  `RotateEverySeconds` old.
-- **On a request, not on a timer**: every `ReloadSeconds` the first request that needs a key
-  reads the store again and, when the time has come, adds the next key. No thread. An idle API
-  rotates at its next request.
-- **Several instances**: each reloads on its own and may try to add the same next key; the
-  store keeps one (a unique key on `TENANT_ID` and `GENERATION`, or `HSETNX` in Redis), the
-  others read it. `PropagationSeconds` must be at least `ReloadSeconds` (checked): every
-  instance has the key before a token signed with it arrives.
-- **The store down**: at startup the constructor raises (the API doesn't start without keys);
-  later the loaded keys keep working and `OnError` gets the error.
-- **`MaxTokenSeconds` is a setting every instance must share**: an old key's end is computed
-  from it, never stored.
-
-The database store runs your SQL by name, like the tenant catalog. Sample 03's
-(`TenantApiSample.Control`):
-
-```sql
-CREATE TABLE JWT_KEYS (TENANT_ID VARCHAR(40) NOT NULL, GENERATION INTEGER NOT NULL,
-  KID VARCHAR(128) NOT NULL, SECRET VARCHAR(255) NOT NULL, CREATED_AT BIGINT NOT NULL,
-  ACTIVE_FROM BIGINT NOT NULL, CONSTRAINT PK_JWT_KEYS PRIMARY KEY (TENANT_ID, GENERATION),
-  CONSTRAINT UQ_JWT_KEYS_KID UNIQUE (KID));
--- JWT_KEY.BY_TENANT
-SELECT KID, SECRET, GENERATION, CREATED_AT, ACTIVE_FROM FROM JWT_KEYS WHERE TENANT_ID = :TENANT_ID
--- JWT_KEY.INSERT
-INSERT INTO JWT_KEYS (TENANT_ID, GENERATION, KID, SECRET, CREATED_AT, ACTIVE_FROM)
-  VALUES (:TENANT_ID, :GENERATION, :KID, :SECRET, :CREATED_AT, :ACTIVE_FROM)
--- JWT_KEY.DELETE
-DELETE FROM JWT_KEYS WHERE TENANT_ID = :TENANT_ID AND KID = :KID
-```
-
-`TENANT_ID` is `''` for an API without tenants. The primary key is what settles two instances
-rotating at once: without it both keys are stored and the ring refuses the store
-(`EJwtKeyError`, "generation appears twice").
-
-**Redis instead** (`JWT_KEY_STORE=redis` in sample 03): `TRedisJwtKeyStore`, in `src/redis`,
-outside the package as `src/horse` is. Add `src/redis` and your pascal-redis-faa to the search
-path:
-
-```pascal
-LStore := TRedisJwtKeyStore.Create(GRedis, 'cities-api:');   // your one TRedisClient
-```
-
-One hash per scope (`cities-api:jwt-keys:`), field = the generation, value = the key as JSON.
-
-Checked over HTTP by `tools/http_scenarios_jwt_rotation.sh`, which runs sample 03 twice on one
-store (the database, then Redis) with keys rotated in seconds: a login's kid changes, a token
-of an older key keeps verifying, and the two instances sign with one key and verify each
-other's tokens, also after racing for the next key. The life of a key second by second,
-the race, a store that fails, in `PascalApi.JwtRotationTests` (a test clock).
-
-### 10. A key per tenant
-
-In a multi-tenant API one key for everyone means that a key that leaks signs tokens for every
-tenant. `TTenantJwtKeyRing` (`PascalApi.Tenancy`) keeps one rotating ring per tenant, on one
-store. From sample 03 (`OpenKeys`, `JWT_KEY_STORE=db` or `redis`):
-
-```pascal
-LRing := TTenantJwtKeyRing.Create(GCatalog, LStore, LOptions, GClaim, ALog.Error);
-```
-
-- **The tenant is in the kid**: `acme/1f0c...`. A token verifies only with its tenant's key,
-  **and** only when its tenant claim (`tenant_id`, or the name you pass) names that tenant:
-  acme's key on a token claiming globex is the same 401 as a bad signature.
-- **Signing**: `TJwtMiddleware.Sign(LClaims)` reads the tenant from the claims and signs with
-  that tenant's key; claims without a tenant, or naming one the catalog doesn't have, raise
-  `EJwtKeyError` (a 500: the login must check the tenant first, as step 5 of
-  [Multi-tenancy](multitenancy.md) does).
-- **Which tenants have keys**: the catalog's, read when the ring is created and again every
-  `ReloadSeconds` (on a request), plus a tenant that signs (its login found it in the catalog).
-  A kid naming any other tenant is refused without asking the store or the catalog, so a client
-  can't make the API query anything with made-up kids. A tenant provisioned after an instance
-  started is known there at its next catalog read.
-- **Each tenant rotates on its own requests**: a quiet tenant keeps its key until its next one.
-- **The legacy secret** is one for all tenants (the tokens from before the rings carry no tenant
-  to check). Remove it once those tokens have expired.
-
-Checked over HTTP by `tools/http_scenarios_jwt_rotation.sh` (acme's key read from the store and
-tried on a token claiming globex, a kid naming a tenant that doesn't exist, each tenant's own
-key) and in `PascalApi.JwtRotationTests` (`TTenantJwtKeyRingTests`: no store or catalog query for
-50 unknown tenants' kids, a tenant added to the catalog later).
-
-### 11. Seal the secrets in the store
-
-Whoever can read the keys' table (or the Redis hash, or a backup) can sign tokens. Wrap the
-store in `TSealedJwtKeyStore`, and the secrets are kept sealed with AES-256-GCM under a master
-key that never goes to the store. From sample 03 (`OpenKeys`):
-
-```pascal
-LMaster := TAppConfig.Get('JWT_KEYS_MASTER_KEY', DEFAULT_MASTER_KEY);
-if LMaster <> '' then
-  LStore := TSealedJwtKeyStore.Create(LStore, TAesGcmSecretCipher.Create(LMaster),
-    TAppConfig.GetBool('JWT_KEYS_REQUIRE_SEALED', False));
-```
-
-- **The master key**: `JWT_KEYS_MASTER_KEY=m1:<base64 of 32 bytes>`; make one with
-  `openssl rand -base64 32`. Put it in the environment or your platform's secret store, never
-  next to the database it protects. Every instance needs the same list.
-- **Rotating the master key**: put the new one first (`m2:<new>,m1:<old>`). New keys are sealed
-  with m2; the ones sealed with m1 still open, and the ring's rotation replaces them. Drop m1
-  after `RotateEverySeconds` + `MaxTokenSeconds`.
-- **Secrets stored before sealing** (plain text) still load, and the rotation replaces them.
-  Once they are gone, pass `True` as the third argument (`JWT_KEYS_REQUIRE_SEALED=true` in the
-  sample) and a plain secret in the store is an error.
-- **A sealed secret is bound to its row** (tenant, kid, generation): copied to another tenant's
-  row it doesn't open, and the API reports it instead of using it.
-- **A sealed secret takes about 110 characters**: size the column for it (`VARCHAR(255)`).
-- **A wrong master key** stops the API at startup (`EJwtKeyError`, naming the master id, never a
-  key); later it is reported through `OnError` and the loaded keys stay in use.
-
-The AES is pascal-common-faa's (`PascalCommon.AesGcm`), checked against NIST's and OpenSSL's
-vectors. Its S-box is a table lookup, which a process sharing the CPU could time; that is fine
-here, where a secret is opened when the keys reload, not for what a client sends. Checked over
-HTTP by `tools/http_scenarios_jwt_rotation.sh`: every secret in sample 03's database is sealed,
-and acme's opens with OpenSSL (Python's cryptography).
+All of it, with the procedures for a key that leaked or a master key to change:
+[JWT signing keys and rotation](jwt-keys.md).
 
 ## Choices
 
@@ -440,9 +271,7 @@ revoked tokens and check it in your own middleware after `TJwtMiddleware`.
 - **No `iss` or `aud` check.** If several systems share the secret, check those claims in the
   handler or in a middleware of yours.
 - **One secret, unless you use a key ring.** With `New(ASecret)`, rotating the secret
-  invalidates every token issued with the old one; a key ring keeps them (steps 8 and 9).
-- **Sealed secrets or not**: without `TSealedJwtKeyStore` the secrets are stored as they are,
-  and whoever reads the table or the hash, or a backup of it, can sign tokens (step 11).
+  invalidates every token issued with the old one; a key ring keeps them (step 8).
 - **No leeway for clock differences**: a token is expired from the second `exp` says
   (`Decode_ExpBoundary`). Between an issuer and a verifier on different machines, prefer short
   lifetimes to a tolerance.
@@ -455,15 +284,6 @@ revoked tokens and check it in your own middleware after `TJwtMiddleware`.
 - **A token without `exp` never expires.** `exp` is optional in the standard, and `Decode`
   accepts a token without it (jwt.io's example has none, tested). Always write it when you sign;
   `TJwtMiddleware.Sign` refuses claims without it.
-- **A Redis that forgets.** Without persistence (RDB or AOF) a restart of Redis loses the
-  keys, and an eviction policy other than `noeviction` (or a `volatile-*` one) can evict them:
-  either way every token is refused and new keys are made.
-- **A tenant ring's legacy secret kept forever.** It signs for every tenant, which is what the
-  rings are there to prevent: drop it when the old tokens have expired.
-- **A memory store with several instances.** `TMemoryJwtKeyStore` is one process's: each
-  instance would have its own keys and refuse the others' tokens. It is for tests.
-- **Removing an old key too early.** Its tokens are refused from that moment: keep it until
-  the last token it signed has expired.
 - **The development secret in production.** Anyone who read the sample can sign tokens for your
   API (step 1).
 - **Forgetting to free `Claims`**, or reading a claim without checking for nil (step 4).
@@ -518,14 +338,8 @@ script, as `tools/http_scenarios_tenants.sh` does with Python (`sign`).
 
 ## Reference
 
-- `PascalApi.Jwt`: `TJwt` (sign, decode, the checks and their order in the comment at the top;
-  `ReadKid`).
-- `PascalApi.JwtKeys`: `TStaticJwtKeyRing` (`JWT_KEYS`), `TRotatingJwtKeyRing` and
-  `TJwtRotationOptions`, the stores (`IJwtKeyStore`, `TDbJwtKeyStore`, `TMemoryJwtKeyStore`),
-  `TJwtKeys` (sign and decode by `kid`).
-- `PascalApi.JwtKeys`: `IJwtSecretCipher`, `TAesGcmSecretCipher` (`JWT_KEYS_MASTER_KEY`),
-  `TSealedJwtKeyStore`.
-- `src/redis/PascalApi.Redis.JwtKeys`: `TRedisJwtKeyStore`.
+- `PascalApi.Jwt`: `TJwt` (sign, decode, the checks and their order in the comment at the top).
+- `PascalApi.JwtKeys` and the key rings: [JWT signing keys and rotation](jwt-keys.md).
 - `PascalApi.Crypto`: SHA-256, HMAC, Base64url (tested against FIPS 180, RFC 4231, RFC 4648).
 - `PascalApi.Http`: `ParseBearer`, `PathMatchesAny`, `BearerChallenge`.
 - `PascalApi.Horse.Middlewares`: `TJwtMiddleware`, `TAuthMiddleware`.
