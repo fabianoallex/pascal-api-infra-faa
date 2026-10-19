@@ -1,6 +1,7 @@
 # Validation — design
 
-Status: **F1 and F2 built** (pascal-common-faa 1.21.0, pascal-api-infra-faa 0.20.0), 2026-10-19.
+Status: **built** (pascal-common-faa 1.21.0, pascal-api-infra-faa 0.20.0; F3 adopted in
+pascal-agenda-faa, 333 HTTP checks on the four targets; F4 in the skill), 2026-10-19.
 Four decisions taken with the user (below). The open points were settled as proposed: `Required`
 by hand for plain members; the edge checks the raw value (sample 02's PATCH sends `"rn"`, not
 `" rn"`, which a `MaxLength(2)` refuses); `Pattern` documented only; `error` holds the first
