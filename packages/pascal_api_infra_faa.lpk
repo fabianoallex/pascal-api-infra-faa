@@ -15,7 +15,7 @@
     </CompilerOptions>
     <Description Value="Infrastructure for REST APIs on Horse, for Delphi and Lazarus/FPC (dual-compiler): pagination and ordering from the query string, configuration, file logging, rate limiting and middlewares. Built on pascal-common-faa, pascal-jsonmapper-faa and pascal-db-faa."/>
     <License Value="MIT"/>
-    <Version Minor="18"/>
+    <Version Minor="19"/>
     <Files>
       <Item>
         <Filename Value="..\src\pascalapi.inc"/>
@@ -85,6 +85,14 @@
         <Filename Value="..\src\PascalApi.Tenancy.pas"/>
         <UnitName Value="PascalApi.Tenancy"/>
       </Item>
+      <Item>
+        <Filename Value="..\src\PascalApi.QueryParams.pas"/>
+        <UnitName Value="PascalApi.QueryParams"/>
+      </Item>
+      <Item>
+        <Filename Value="..\src\PascalApi.PagedQuery.pas"/>
+        <UnitName Value="PascalApi.PagedQuery"/>
+      </Item>
     </Files>
     <RequiredPkgs>
       <Item>
@@ -95,7 +103,7 @@
       <Item>
         <PackageName Value="pascaljsonmapper_pkg"/>
         <DefaultFilename Value="..\external\pascal-jsonmapper-faa\packages\pascaljsonmapper_pkg.lpk" Prefer="True"/>
-        <MinVersion Minor="6" Valid="True"/>
+        <MinVersion Minor="7" Valid="True"/>
       </Item>
       <Item>
         <PackageName Value="pascal_db_faa"/>

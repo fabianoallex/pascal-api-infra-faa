@@ -59,6 +59,11 @@ status_is 400 "limit not a number"
 body_is '{"error":"\"limit\" must be an integer."}' "limit not a number: names the parameter"
 req GET '/cities?page=99999999999' ""
 status_is 400 "page past Integer (wrapped around on FPC until 0.13.0)"
+body_is '{"error":"page: 99999999999 is out of range (-2147483648..2147483647)"}' "page past Integer: the range, named (0.19.0)"
+# The Find DTO is read by THorseQueryParams (0.19.0): a parameter it doesn't
+# have is ignored, as a cache buster would be.
+req GET '/cities?limit=2&_=1729' ""
+status_is 200 "an unknown query parameter is ignored"
 req GET '/cities?limit=%243' ""
 status_is 400 "limit in hex"
 req GET '/cities?orderBy=bad' ""

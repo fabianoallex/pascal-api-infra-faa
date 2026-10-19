@@ -6,6 +6,37 @@ may change the API; each such change is listed here.
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-10-19
+
+Two pieces every list route of pascal-agenda-faa, the library's first application, wrote by hand
+(five copies each): reading the Find DTO from the query string, and the paged query. Needs
+pascal-jsonmapper-faa 0.7.0.
+
+### Added
+
+- `PascalApi.QueryParams`: `TQueryParams.Read<IFind>(AMapper, AValues)` fills a Find DTO from
+  query-string values by the members the OpenAPI document lists for it (`QueryParams<IFind>`),
+  through the mapper, so a value meets a body's rules (optionals, ranges, `TUtcDateTime`'s
+  zone, converters). Empty is absent; unknown parameters are ignored; names ignore case; a
+  value of the wrong kind is a 400 naming the parameter; the mapper's `$.name: reason` becomes
+  `name: reason`. `THorseQueryParams.Read<IFind>(AReq)` (`PascalApi.Horse.Middlewares`) reads
+  `AReq.Query`. Sample 02's `GetCities` uses it; `PascalApi.QueryParamsTests`.
+- `ApiQueryParamType` (`PascalApi.OpenApi`): how a member travels in a query string, the one
+  rule the document's query parameters and `TQueryParams` share.
+- `PascalApi.PagedQuery`: `TPagedQuery.Run<T>` (on a factory) and `TTenantPagedQuery.Run<T>` (on
+  a tenant's scope, through `TTenantFilter.Prepare`): the `COUNT` and the page through the same
+  filters in one transaction, `${ORDER}` and `${PAGE}` replaced, the same `TQueryArgs` bound to
+  both, each row read by a plain function (`TPageRowFunc<T>`). `TQueryArgs` is a value with
+  `IParams`' setter names, each returning a changed copy. Sample 02's repository uses it;
+  `PascalApi.PagedQueryTests` on pascal-db-faa's mock.
+- `TApiMessages.InvalidQueryNumber` and `InvalidQueryBoolean` (English and Portuguese).
+- `TUtcDateTime` members (pascal-jsonmapper-faa 0.7.0) are `date-time` in the document.
+
+### Changed
+
+- pascal-jsonmapper-faa 0.7.0 is the minimum (`.lpk`). The test submodules: pascal-common-faa
+  1.20.0, pascal-jsonmapper-faa 0.7.0, pascal-db-faa 0.16.0.
+
 ## [0.18.0] - 2026-10-19
 
 A DTO's interface now shows every member, read-only, so code that sees only the interface (a

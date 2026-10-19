@@ -28,6 +28,8 @@ uses
   PascalApi.ConfigTests,
   PascalApi.OrderByTests,
   PascalApi.PaginationTests,
+  PascalApi.QueryParamsTests,
+  PascalApi.PagedQueryTests,
   PascalApi.RateLimitStateTests,
   PascalApi.FileLogTests,
   PascalApi.DtoTests,

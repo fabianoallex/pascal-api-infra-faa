@@ -318,7 +318,12 @@ here (opt-in) only after it works there and turns out generic, by the user's dec
 
 | Candidate | Would live in | Status |
 |---|---|---|
-| Password hashing (PBKDF2-HMAC-SHA256) | pascal-common-faa | proposed |
+| Password hashing (PBKDF2-HMAC-SHA256) | pascal-common-faa | **PBKDF2 added in pascal-common-faa 1.18.0**; the stored form stays in the application |
+| A Find DTO filled from the query string | `PascalApi.QueryParams` | found 2026-10-19 (five list routes copied each member by hand); user chose to promote; **done in 0.19.0** (`TQueryParams`, `THorseQueryParams`, `ApiQueryParamType`), sample 02 |
+| The paged query: count and page through the same filters, one transaction | `PascalApi.PagedQuery` | found 2026-10-19 (five repositories with the same `FindPage`); **done in 0.19.0** (`TPagedQuery`, `TTenantPagedQuery`, `TQueryArgs`), sample 02 |
+| An instant type: zone required on input, `Z` on output | pascal-jsonmapper-faa | found 2026-10-19 (time off carried as strings); **done in pascal-jsonmapper-faa 0.7.0** (`TUtcDateTime`), `date-time` in the document here in 0.19.0 |
+| LIKE patterns escaped with `!` | pascal-db-faa | found 2026-10-19: the application wrote its own with `ESCAPE '\'` and answered 500 on a search combined with a filter (pascal-db-faa's gotcha 26); **done in pascal-db-faa 0.16.0** (`PdbLikeContains`) |
+| Search key: lower case, accents removed | pascal-common-faa | **done in pascal-common-faa 1.20.0** (`PcFoldForSearch`) |
 | Refresh tokens (rotation, reuse detection) | `PascalApi.RefreshTokens` | proposed; reopens "an application's flow" in `docs/jwt-keys-design.md` |
 | `Idempotency-Key` middleware | `PascalApi.Idempotency` | proposed |
 | `ETag`/`If-Match` (412/428) | `PascalApi.Http` | proposed |

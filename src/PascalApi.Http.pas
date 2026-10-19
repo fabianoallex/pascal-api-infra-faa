@@ -137,6 +137,8 @@ type
     InternalError: string;             // 500: any exception not mapped above
     ServerBusy: string;                // 503: no free database connection in time
     InvalidQueryInteger: string;       // Format: %s = the query parameter (PascalApi.Pagination)
+    InvalidQueryNumber: string;        // Format: %s = the query parameter (PascalApi.QueryParams, 0.19.0)
+    InvalidQueryBoolean: string;       // Format: %s = the query parameter (PascalApi.QueryParams, 0.19.0)
     class function English: TApiMessages; static;
     class function Portuguese: TApiMessages; static;
     /// The messages in use. Assign once, at startup.
@@ -464,6 +466,8 @@ begin
   Result.InternalError := 'An unexpected error occurred.';
   Result.ServerBusy := 'The server is busy. Try again shortly.';
   Result.InvalidQueryInteger := '"%s" must be an integer.';
+  Result.InvalidQueryNumber := '"%s" must be a number.';
+  Result.InvalidQueryBoolean := '"%s" must be true or false.';
 end;
 
 class function TApiMessages.Portuguese: TApiMessages;
@@ -490,6 +494,8 @@ begin
   Result.InternalError := 'Ocorreu um erro inesperado.';
   Result.ServerBusy := 'O servidor está ocupado. Tente novamente em instantes.';
   Result.InvalidQueryInteger := '"%s" deve ser um número inteiro.';
+  Result.InvalidQueryNumber := '"%s" deve ser um número.';
+  Result.InvalidQueryBoolean := '"%s" deve ser true ou false.';
 end;
 
 { Error mapping }

@@ -343,21 +343,30 @@ member the wire doesn't have; the optional types become "not required" and "null
 
 ### 7. The query string
 
-Query parameters are text, not JSON: read them with `ParseQueryInt`/`ParseQueryStr`
-(`PascalApi.Pagination`), which give optionals, into a Find DTO (sample 02's `GetCities`):
+Query parameters are text, not JSON. Since 0.19.0 a Find DTO is read from them by the members the
+route documents (`TRouteDoc`'s `QueryParams<ICityFind>`), in one call (sample 02's `GetCities`):
 
 ```pascal
-LFill := TCityFind.Create;   // filled through the class (LFill: TCityFind)...
-LFind := LFill;              // ...while the interface holds it (LFind: ICityFind)
-LFill.Page := ParseQueryInt('page', AReq.Query['page']);
-LFill.Limit := ParseQueryInt('limit', AReq.Query['limit']);
-LFill.OrderBy := ParseQueryStr(AReq.Query['orderBy']);
-LFill.State := ParseQueryStr(AReq.Query['state']);
+LFind := THorseQueryParams.Read<ICityFind>(AReq);   // PascalApi.Horse.Middlewares
+// without Horse: TQueryParams.Read<ICityFind>(TJsonMapper.Shared, AValues), PascalApi.QueryParams
 ```
 
-An empty or missing parameter is absent. `ParseQueryInt` takes only an optional `-` and decimal
-digits within `Integer`; anything else is a 400 naming the parameter (`"limit" must be an
-integer.`, `TApiMessages.InvalidQueryInteger`). Until 0.13.0 it used `TryStrToInt`: `abc`
+Each member the document lists (strings, integers, numbers, booleans, enumerations, dates and the
+optionals of those; `ApiQueryParamType` is the one rule for both) is looked up by its JSON name,
+ignoring case, written into a JSON object and given to the mapper, so a value meets the body's
+rules: an `IOptInteger` is absent or a number, an integer past its type is refused, a
+`TUtcDateTime` needs its zone. An empty or missing parameter is absent; a parameter the DTO
+doesn't have is ignored (unlike a body: a query string often carries a cache buster). A value of
+the wrong kind is a 400 naming the parameter (`"limit" must be an integer.`, `"active" must be
+true or false.`, `"price" must be a number.`: `TApiMessages.InvalidQueryInteger`,
+`InvalidQueryBoolean`, `InvalidQueryNumber`); what the mapper refuses is a 400 as
+`name: reason` (`page: 99999999999 is out of range (-2147483648..2147483647)`). Booleans are
+`true` or `false` only. Tested in `PascalApi.QueryParamsTests`, checked over HTTP by sample 02.
+Objects and arrays are skipped, as the document skips them.
+
+Until 0.19.0 each handler copied the members by hand with `ParseQueryInt`/`ParseQueryStr`
+(`PascalApi.Pagination`), which stay for a single value: `ParseQueryInt` takes only an optional
+`-` and decimal digits within `Integer`; anything else is a 400 naming the parameter. Until 0.13.0 it used `TryStrToInt`: `abc`
 silently became the default, `$3`, `0x3`, `+3` and ` 3` were read as 3, and on FPC 3.2.2 a number
 past `Integer` wrapped around (`page=99999999999` became page 1215752191, measured). Tested in
 `PascalApi.PaginationTests` and checked over HTTP by samples 01 and 02.

@@ -191,6 +191,15 @@ function ApiJsonSchema(ADoc: TApiDocument; AInterface: PTypeInfo): string;
 /// declared (as strings).
 function ApiOperationParams(ADoc: TApiDocument; AOp: TApiOperation): TArray<TApiParam>;
 
+/// How a DTO member of type ATypeInfo travels in a query string (0.19.0):
+/// False for one that can't (an object, an array, an interface that isn't
+/// one of pascal-common-faa's optionals). AOptional: the member may be
+/// absent (an IOpt* optional); any other is a required parameter. The
+/// document's query parameters (TRouteDoc QueryParams) and
+/// PascalApi.QueryParams, which reads them, follow this one rule.
+function ApiQueryParamType(ATypeInfo: PTypeInfo; out AType: TApiParamType;
+  out AOptional: Boolean): Boolean;
+
 implementation
 
 uses
@@ -683,6 +692,7 @@ begin
     tkInt64{$IFDEF FPC}, tkQWord{$ENDIF}: Result := 'int64';
     tkFloat:
       if ATypeInfo = TypeInfo(TDateTime) then Result := 'date-time'
+      else if ATypeInfo = TypeInfo(TUtcDateTime) then Result := 'date-time'
       else if ATypeInfo = TypeInfo(TDate) then Result := 'date'
       else if ATypeInfo = TypeInfo(TTime) then Result := 'time'
       else
@@ -693,6 +703,34 @@ begin
           Result := 'double';
         end;
   end;
+end;
+
+function ApiQueryParamType(ATypeInfo: PTypeInfo; out AType: TApiParamType;
+  out AOptional: Boolean): Boolean;
+var
+  LOpt: TOptionalKind;
+  LBase: string;
+begin
+  AType := ptString;
+  AOptional := False;
+  Result := True;
+  if (ATypeInfo^.Kind = tkInterface) and FindOptional(ATypeInfo, LOpt) then
+  begin
+    LBase := LOpt.Base;
+    AOptional := LOpt.Optional;
+  end
+  else if (ATypeInfo^.Kind = tkEnumeration) and not IsBooleanType(ATypeInfo) then
+    LBase := 'string'
+  else if ATypeInfo^.Kind in [tkInterface, tkDynArray, tkClass] then
+    Exit(False) // a query string has no objects or arrays here
+  else
+    LBase := BaseOfType(ATypeInfo);
+  if (LBase = 'integer') or (LBase = 'int64') then
+    AType := ptInteger
+  else if (LBase = 'float') or (LBase = 'double') or (LBase = 'currency') then
+    AType := ptNumber
+  else if LBase = 'boolean' then
+    AType := ptBoolean;
 end;
 
 procedure TApiDocWriter.WriteExample(const ABase, AExample: string);
@@ -1003,9 +1041,7 @@ var
   LMembers: TJsonMemberArray;
   LMeta: TApiSchemaMeta;
   LPropMeta: TApiPropMeta;
-  LOpt: TOptionalKind;
-  LTypeInfo: PTypeInfo;
-  LBase: string;
+  LOptional: Boolean;
   LParam: TApiParam;
   I: Integer;
 begin
@@ -1017,27 +1053,9 @@ begin
   LMeta := SchemaMetaOf(AQueryDto);
   for I := 0 to High(LMembers) do
   begin
-    LTypeInfo := LMembers[I].TypeInfo;
-    LParam.Required := True;
-    if (LTypeInfo^.Kind = tkInterface) and FindOptional(LTypeInfo, LOpt) then
-    begin
-      LBase := LOpt.Base;
-      LParam.Required := not LOpt.Optional;
-    end
-    else if (LTypeInfo^.Kind = tkEnumeration) and not IsBooleanType(LTypeInfo) then
-      LBase := 'string'
-    else if LTypeInfo^.Kind in [tkInterface, tkDynArray, tkClass] then
-      Continue // a query string has no objects or arrays here
-    else
-      LBase := BaseOfType(LTypeInfo);
-    if (LBase = 'integer') or (LBase = 'int64') then
-      LParam.ParamType := ptInteger
-    else if (LBase = 'float') or (LBase = 'double') or (LBase = 'currency') then
-      LParam.ParamType := ptNumber
-    else if LBase = 'boolean' then
-      LParam.ParamType := ptBoolean
-    else
-      LParam.ParamType := ptString;
+    if not ApiQueryParamType(LMembers[I].TypeInfo, LParam.ParamType, LOptional) then
+      Continue;
+    LParam.Required := not LOptional;
     LParam.Name := LMembers[I].JsonName;
     LParam.Location := plQuery;
     LParam.Description := '';

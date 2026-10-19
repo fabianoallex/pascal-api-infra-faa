@@ -173,16 +173,11 @@ runs a `COUNT` and the page in one transaction:
 ```pascal
 procedure GetCities(AReq: THorseRequest; ARes: THorseResponse; ANext: TNextProc);
 var
-  LFill: TCityFind;
   LFind: ICityFind;
   LPage: TPage<ICity>;
 begin
-  LFill := TCityFind.Create;     // filled through the class: the interface is read-only
-  LFind := LFill;                // the interface holds it
-  LFill.Page := ParseQueryInt('page', AReq.Query['page']);    // 400 unless digits
-  LFill.Limit := ParseQueryInt('limit', AReq.Query['limit']);
-  LFill.OrderBy := ParseQueryStr(AReq.Query['orderBy']);
-  LFill.State := ParseQueryStr(AReq.Query['state']);
+  // The members QueryParams<ICityFind> documents; 400 for a value of the wrong kind.
+  LFind := THorseQueryParams.Read<ICityFind>(AReq);
   LPage := GCities.FindPage(LFind.State, LFind.OrderBy.Value,
     PageRequestFrom(LFind.Page, LFind.Limit, 2, 50));          // default 2, at most 50
   TJsonSend.Send(ARes, PageEnvelopeJson(LPage.Meta,
@@ -200,18 +195,22 @@ SELECT CODE, NAME, STATE, POPULATION FROM CITIES WHERE 1 = 1
 
 ```pascal
 LOrder := CityOrderSpec.Build(AOrderBy); // before touching the database: 400 if invalid
-LScope := FFactory.GetPool.AcquireQuery(LQuery);
-LScope.StartTransaction;
-try
-  LQuery.Sql := FFactory.SqlLoader['CITY.COUNT'].ProcessTag('STATE', AState.HasValue).SQL;
-  if AState.HasValue then
-    LQuery.Params.Strings['STATE'] := UpperCase(AState.Value);
-  Result.Meta := TPageMeta.Create(APage, LQuery.Open.Int64s['TOTAL']);
-
-  LQuery.Sql := FFactory.SqlLoader['CITY.PAGE'].ProcessTag('STATE', AState.HasValue)
-    .ReplaceLiteral('ORDER', LOrder).ReplaceLiteral('PAGE', PdbPagingClause(LScope, APage)).SQL;
-  ...
+LArgs := TQueryArgs.New;
+if AState.HasValue then
+  LArgs := LArgs.Strings('STATE', UpperCase(AState.Value));
+Result := TPagedQuery.Run<ICity>(FFactory,
+  FFactory.SqlLoader['CITY.COUNT'].ProcessTag('STATE', AState.HasValue),
+  FFactory.SqlLoader['CITY.PAGE'].ProcessTag('STATE', AState.HasValue),
+  LOrder, APage, LArgs, ReadCity);       // ReadCity(AResult): ICity, a plain function
 ```
+
+`TPagedQuery.Run` (`PascalApi.PagedQuery`, 0.19.0) does what every list repository did by hand
+until then: one transaction, the `COUNT` (a column named `TOTAL`), the page with `${ORDER}` and
+`${PAGE}` replaced, the same `TQueryArgs` bound to both statements, each row read by the reader,
+rollback on an exception. `TTenantPagedQuery.Run` is the same on a tenant's scope, both statements
+through `TTenantFilter.Prepare` ([Multi-tenancy](multitenancy.md)). The arguments are a value,
+not a callback (FPC 3.2.2 has no anonymous methods); their setters have `IParams`' names
+(`Strings`, `Integers`, `Int64s`, `Booleans`, `Doubles`) and return a changed copy.
 
 - **`${ORDER}`** comes from `TOrderBySpec` (`PascalApi.OrderBy`), an allow-list from the client's
   names to columns, never the client's text:
@@ -428,6 +427,9 @@ paging, ordering, the filter, the 409 from the key, the 400s, readiness and the 
 - `samples/02-db`: `DbApiSample.dpr` (factory, migrations, handlers, health) and
   `DbApiSample.Cities.pas` (DTOs, SQL, migrations, repository); `tools/http_scenarios_db.sh`.
 - `PascalApi.Pagination` (`ParseQueryInt`, `PageRequestFrom`, `PageEnvelopeJson`),
+  `PascalApi.PagedQuery` (`TPagedQuery`, `TTenantPagedQuery`, `TQueryArgs`, 0.19.0),
+  `PascalApi.QueryParams` (`TQueryParams`; `THorseQueryParams` in
+  `PascalApi.Horse.Middlewares`, 0.19.0),
   `PascalApi.OrderBy` (`TOrderBySpec`), `PascalApi.Http` (`MapException`).
 - pascal-db-faa's guides, `external/pascal-db-faa/docs/`: getting started, SQL by key, the pool,
   errors, migrations, optionals, adapters, the mock, gotchas.

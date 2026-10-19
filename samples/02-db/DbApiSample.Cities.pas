@@ -139,7 +139,6 @@ type
   TCityRepository = class
   private
     FFactory: IDBFactory;
-    function ReadCity(const AResult: IQueryResult): ICity;
   public
     constructor Create(const AFactory: IDBFactory);
     /// A page of cities, optionally of one state, ordered by AOrderBy (the
@@ -178,6 +177,7 @@ uses
   PascalJsonMapper.Mapper,
   PascalApi.OpenApi,
   PascalApi.Http,
+  PascalApi.PagedQuery,
   PascalApi.Text,
   DbApiSample.Normalizers;
 
@@ -343,7 +343,9 @@ begin
   FFactory := AFactory;
 end;
 
-function TCityRepository.ReadCity(const AResult: IQueryResult): ICity;
+// A plain function, not a method: TPagedQuery's row reader (TPageRowFunc)
+// and FindByCode share it.
+function ReadCity(const AResult: IQueryResult): ICity;
 var
   LCity: TCity;
 begin
@@ -355,44 +357,22 @@ begin
   LCity.Population := AResult.NullableIntegers['POPULATION'];
 end;
 
+// The count and the page through the same filter (PascalApi.PagedQuery,
+// 0.19.0): the STATE block kept in both, its value bound to both.
 function TCityRepository.FindPage(const AState: IOptString; const AOrderBy: string;
   const APage: TPageRequest): TPage<ICity>;
 var
-  LQuery: IQuery;
-  LScope: IScopeTransaction;
-  LResult: IQueryResult;
   LOrder: string;
-  LCount: Integer;
+  LArgs: TQueryArgs;
 begin
   LOrder := CityOrderSpec.Build(AOrderBy); // before touching the database: 400 if invalid
-  LScope := FFactory.GetPool.AcquireQuery(LQuery);
-  LScope.StartTransaction;
-  try
-    LQuery.Sql := FFactory.SqlLoader['CITY.COUNT'].ProcessTag('STATE', AState.HasValue).SQL;
-    if AState.HasValue then
-      LQuery.Params.Strings['STATE'] := UpperCase(AState.Value);
-    Result.Meta := TPageMeta.Create(APage, LQuery.Open.Int64s['TOTAL']);
-
-    LQuery.Sql := FFactory.SqlLoader['CITY.PAGE'].ProcessTag('STATE', AState.HasValue)
-      .ReplaceLiteral('ORDER', LOrder).ReplaceLiteral('PAGE', PdbPagingClause(LScope, APage)).SQL;
-    if AState.HasValue then
-      LQuery.Params.Strings['STATE'] := UpperCase(AState.Value);
-    LResult := LQuery.Open;
-    Result.Items := nil;
-    SetLength(Result.Items, LResult.RecordCount);
-    LCount := 0;
-    while not LResult.Eof do
-    begin
-      Result.Items[LCount] := ReadCity(LResult);
-      Inc(LCount);
-      LResult.Next;
-    end;
-    SetLength(Result.Items, LCount);
-    LScope.Commit;
-  except
-    LScope.Rollback;
-    raise;
-  end;
+  LArgs := TQueryArgs.New;
+  if AState.HasValue then
+    LArgs := LArgs.Strings('STATE', UpperCase(AState.Value));
+  Result := TPagedQuery.Run<ICity>(FFactory,
+    FFactory.SqlLoader['CITY.COUNT'].ProcessTag('STATE', AState.HasValue),
+    FFactory.SqlLoader['CITY.PAGE'].ProcessTag('STATE', AState.HasValue),
+    LOrder, APage, LArgs, ReadCity);
 end;
 
 function TCityRepository.FindByCode(const ACode: string): ICity;

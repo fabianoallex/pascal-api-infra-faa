@@ -295,7 +295,9 @@ TApiMessages.Current := LMessages;
 | `RateLimited` | Rate limit exceeded. Try again in %d second(s). | 429 (`%d`: seconds) |
 | `TenantMissing`, `TenantUnknown`, `TenantSuspended` | | multi-tenancy, see [Multi-tenancy](multitenancy.md) |
 | `ServerBusy` | The server is busy. Try again shortly. | 503, no free database connection in time |
-| `InvalidQueryInteger` | "%s" must be an integer. | 400, from `ParseQueryInt` (`%s` is the parameter) |
+| `InvalidQueryInteger` | "%s" must be an integer. | 400, from `ParseQueryInt` and `TQueryParams` (`%s` is the parameter) |
+| `InvalidQueryNumber` | "%s" must be a number. | 400, from `TQueryParams` (0.19.0) |
+| `InvalidQueryBoolean` | "%s" must be true or false. | 400, from `TQueryParams` (0.19.0) |
 | `InternalError` | An unexpected error occurred. | 500 |
 
 A field with `%s` or `%d` goes through `Format`: keep the placeholder when you replace it.

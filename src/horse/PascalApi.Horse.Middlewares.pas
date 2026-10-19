@@ -35,6 +35,7 @@ uses
   Horse,
   Horse.Callback,
   PascalJsonMapper.Json,
+  PascalJsonMapper.Mapper,
   PascalApi.Http,
   PascalApi.JwtKeys;
 
@@ -96,6 +97,15 @@ type
   TJsonSend = class
   public
     class procedure Send(ARes: THorseResponse; const AJson: string; AStatus: Integer = 200); static;
+  end;
+
+  /// A Find DTO from the request's query string (0.19.0): PascalApi.QueryParams'
+  /// TQueryParams.Read<I> on AReq.Query, with AMapper or TJsonMapper.Shared.
+  /// The same members TRouteDoc's QueryParams<I> documents; a value of the
+  /// wrong kind is a 400 naming the parameter.
+  THorseQueryParams = class
+  public
+    class function Read<I: IInterface>(AReq: THorseRequest; AMapper: TJsonMapper = nil): I; static;
   end;
 
   /// Answers exceptions that escape the handlers with {"error": "..."} and
@@ -264,6 +274,7 @@ type
 implementation
 
 uses
+  PascalApi.QueryParams,
   Generics.Collections,
   DateUtils,
   Horse.Core.Param,
@@ -342,6 +353,16 @@ end;
 procedure SendError(ARes: THorseResponse; AStatus: Integer; const AMessage: string);
 begin
   TJsonSend.Send(ARes, ErrorJson(AMessage), AStatus);
+end;
+
+{ THorseQueryParams }
+
+class function THorseQueryParams.Read<I>(AReq: THorseRequest; AMapper: TJsonMapper): I;
+begin
+  if AMapper = nil then
+    AMapper := TJsonMapper.Shared;
+  // Query.Content: the decoded Name=Value lines, owned by the request.
+  Result := TQueryParams.Read<I>(AMapper, AReq.Query.Content);
 end;
 
 { TPascalApiRequestState }
