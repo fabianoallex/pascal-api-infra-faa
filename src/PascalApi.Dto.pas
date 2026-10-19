@@ -83,8 +83,8 @@ uses
 // access log, with stdout in a file or a pipe); 1.15.0: PascalCommon.Random (PascalApi.JwtKeys'
 // generated keys); 1.16.0: PascalCommon.AesGcm (PascalApi.JwtKeys' sealed secrets);
 // 1.17.0: PascalCommon.Crypto (SHA-256, HMAC, Base64url: PascalApi.Crypto wraps it).
-{$IF PASCALCOMMON_VERSION < 11700}
-  {$MESSAGE FATAL 'pascal-api-infra-faa needs pascal-common-faa 1.17.0 or later'}
+{$IF PASCALCOMMON_VERSION < 12100}
+  {$MESSAGE FATAL 'pascal-api-infra-faa needs pascal-common-faa 1.21.0 or later'}
 {$IFEND}
 
 type

@@ -115,7 +115,10 @@ is a 400 naming `$.population`; `"popultion":5` is a 400 naming `$.popultion` (a
 
 ### 2. Read a request body
 
-`TJsonMapper.Shared.FromJson<I>(AReq.Body)`. The error handler turns what the parser and the
+`THorseBody.Read<I>(AReq)` (0.20.0) reads the body as the DTO and enforces what
+`TApiSchema.Describe` declares for it (lengths, `Enum`, `Minimum`, `Maximum`): a broken limit is a
+400 listing every failing field ([Errors](errors.md), step 2). Under it is
+`TJsonMapper.Shared.FromJson<I>(AReq.Body)`, which the rest of this step is about. The error handler turns what the parser and the
 mapper raise into a 400 with the reason (`TApiMessages.InvalidJson`); nothing to catch in the
 handler. Measured against sample 01 on FPC:
 
@@ -214,7 +217,12 @@ member that came into a block of SQL, so an absent member never reaches the `UPD
 LName := TOptionals.Normalize(APatch.Name, TNorm.CityName);
 LState := TOptionals.Normalize(APatch.State, TNorm.StateCode);
 LPopulation := APatch.Population;
-... // the checks: "name" not empty, at most 100 characters, "state" 2 letters...
+// The document's limits (name at most 100, state 2, population >= 0) were
+// enforced at the edge by THorseBody.Read; what it can't say is checked here,
+// for the members that came: an absent name isn't checked.
+LCheck := TPcValidation.Create;
+LCheck.Check('name', LName, TValid.Required);
+LCheck.RaiseIfAny;
 
 // 'UPDATE CITIES SET CODE = CODE [NAME {], NAME = :NAME [} NAME] ' +
 // '[STATE {], STATE = :STATE [} STATE] [POPULATION {], POPULATION = :POPULATION [} POPULATION] ' +
@@ -234,9 +242,11 @@ LQuery.Params.OptNullIntegers['POPULATION'] := LPopulation;
 This is what the optional types are for: the DTO's member goes to its parameter as it is, and
 the three states need no `if`. The normalizers keep the state (Undefined stays Undefined, Null
 stays Null, only a value changes), and they work wherever the value goes: a parameter, a
-message, a response. The checks before the `UPDATE` still test `HasValue`: deciding is their
-job. Sample 02's scenario sends `"  Natal   RN  "` and `" rn"` and gets `"Natal RN"` and `"RN"`
-back.
+message, a response. The checks don't open the optionals either: `TPcValidation.Check` has an
+overload per shape of member and checks an optional only when it holds a value
+(`PascalCommon.Validators`, 1.21.0). Sample 02's scenario sends `"  Natal   RN  "` and `"rn"`
+and gets `"Natal RN"` and `"RN"` back (`" rn"` would break the document's `MaxLength(2)` at the
+edge).
 
 The rules have a name and live in one unit, `DbApiSample.Normalizers`: a factory that inherits
 pascal-common-faa's `TPcStringNormalizers` (unit `PascalCommon.Normalizers`, 1.14.0), so typing

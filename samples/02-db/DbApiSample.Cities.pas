@@ -179,22 +179,12 @@ uses
   PascalApi.Http,
   PascalApi.PagedQuery,
   PascalApi.Text,
-  DbApiSample.Normalizers;
+  PascalCommon.Validators,
+  DbApiSample.Normalizers,
+  DbApiSample.Validators;
 
 const
   DIR = 'SQLITE';
-
-/// True when AText is exactly ALength ASCII digits. StrToIntDef would also
-/// take '+123456' or '-000001'.
-function IsDigits(const AText: string; ALength: Integer): Boolean;
-var
-  I: Integer;
-begin
-  Result := Length(AText) = ALength;
-  for I := 1 to Length(AText) do
-    if (AText[I] < '0') or (AText[I] > '9') then
-      Exit(False);
-end;
 
 function CitySqlSource: ISqlSource;
 var
@@ -403,21 +393,19 @@ function TCityRepository.Insert(const ACity: ICityInsert): ICity;
 var
   LQuery: IQuery;
   LScope: IScopeTransaction;
-  LCode: string;
+  LCode, LName: string;
+  LCheck: TPcValidation;
 begin
-  // The limits the OpenAPI document declares (TApiSchema.Describe below): the
-  // document describes them, only this enforces them.
+  // The limits the OpenAPI document declares (TApiSchema.Describe below)
+  // were enforced at the edge (THorseBody.Read, pascal-api-infra-faa 0.20.0).
+  // Here: normalize, then the rules the document can't say (DbApiSample.Validators),
+  // every failing field in one 400.
   LCode := Trim(ACity.Code);
-  if not IsDigits(LCode, 7) then
-    raise EValidationException.Create('"code" must be the 7-digit IBGE code.');
-  if Trim(ACity.Name) = '' then
-    raise EValidationException.Create('"name" is required.');
-  if PaCharCount(Trim(ACity.Name)) > 100 then
-    raise EValidationException.Create('"name" must have at most 100 characters.');
-  if Length(Trim(ACity.State)) <> 2 then
-    raise EValidationException.Create('"state" must have 2 letters.');
-  if ACity.Population.HasValue and (ACity.Population.Value < 0) then
-    raise EValidationException.Create('"population" can''t be negative.');
+  LName := TNorm.CityName.Apply(ACity.Name);
+  LCheck := TPcValidation.Create;
+  LCheck.Check('code', LCode, TValid.IbgeCode);
+  LCheck.Check('name', LName, TValid.Required);
+  LCheck.RaiseIfAny;
 
   LScope := FFactory.GetPool.AcquireQuery(LQuery);
   LScope.StartTransaction;
@@ -425,8 +413,8 @@ begin
     LQuery.Sql := FFactory.SqlLoader['CITY.INSERT']
       .ProcessTag('POPULATION', ACity.Population.HasValue).SQL;
     LQuery.Params.Strings['CODE'] := LCode;
-    LQuery.Params.Strings['NAME'] := Trim(ACity.Name);
-    LQuery.Params.Strings['STATE'] := UpperCase(Trim(ACity.State));
+    LQuery.Params.Strings['NAME'] := LName;
+    LQuery.Params.Strings['STATE'] := TNorm.StateCode.Apply(ACity.State);
     // No if: absent, the column and its parameter are gone (the database
     // writes NULL); present, the value is bound.
     LQuery.Params.OptIntegers['POPULATION'] := ACity.Population;
@@ -443,6 +431,7 @@ function TCityRepository.Update(const ACode: string; const APatch: ICityPatch): 
 var
   LName, LState: IOptString;
   LPopulation: IOptNullInteger;
+  LCheck: TPcValidation;
   LQuery: IQuery;
   LScope: IScopeTransaction;
   LRows: Int64;
@@ -454,15 +443,12 @@ begin
   LName := TOptionals.Normalize(APatch.Name, TNorm.CityName);
   LState := TOptionals.Normalize(APatch.State, TNorm.StateCode);
   LPopulation := APatch.Population;
-  // The same limits as Insert, for the members that came.
-  if LName.HasValue and (LName.Value = '') then
-    raise EValidationException.Create('"name" can''t be empty.');
-  if LName.HasValue and (PaCharCount(LName.Value) > 100) then
-    raise EValidationException.Create('"name" must have at most 100 characters.');
-  if LState.HasValue and (Length(LState.Value) <> 2) then
-    raise EValidationException.Create('"state" must have 2 letters.');
-  if LPopulation.HasValue and not LPopulation.IsNull and (LPopulation.Value < 0) then
-    raise EValidationException.Create('"population" can''t be negative.');
+  // The document's limits were enforced at the edge (THorseBody.Read); the
+  // rule it can't say, for the members that came: an absent name isn't
+  // checked.
+  LCheck := TPcValidation.Create;
+  LCheck.Check('name', LName, TValid.Required);
+  LCheck.RaiseIfAny;
   if not (LName.HasValue or LState.HasValue or LPopulation.HasValue) then
     Exit(FindByCode(ACode)); // nothing to change
 

@@ -60,6 +60,7 @@ uses
   SysUtils,
   TypInfo,
   PascalJsonMapper.Json,
+  PascalCommon.Validators,
   PascalApi.OpenApi,
   PascalApi.Http;
 
@@ -208,6 +209,7 @@ class function TQueryParams.Read<I>(AMapper: TJsonMapper; AValues: TStrings): I;
 var
   LClass: TClass;
   LJson: string;
+  LCheck: TPcValidation;
 begin
   LClass := AMapper.FindImplClass(TypeInfo(I));
   if LClass = nil then
@@ -225,6 +227,10 @@ begin
       else
         raise EValidationException.Create(E.Message);
   end;
+  // The limits the document declares for these parameters (0.20.0).
+  LCheck := TPcValidation.Create;
+  TApiSchema.Check(TypeInfo(I), Result, LCheck, AMapper);
+  LCheck.RaiseIfAny;
 end;
 
 end.

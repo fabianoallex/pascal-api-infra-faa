@@ -99,9 +99,14 @@ status_is 409 "duplicate code (the database's primary key)"
 body_is '{"error":"A record with these values already exists."}' "duplicate code"
 req POST /cities '{"code":"12","name":"X","state":"SP"}'
 status_is 400 "invalid code"
+# Two fields wrong at once: both in one answer (0.20.0).
+req POST /cities '{"code":"12","name":"  ","state":"SPX","population":-1}'
+status_is 400 "every failing field in one answer"
+body_has '"code":"invalid_fields","fields":[{"field":"state","code":"too_long"' "the document's limits first (at the edge)"
+body_has '{"field":"population","code":"below_minimum"' "and every one of them"
 req POST /cities '{"code":"1234567","name":"","state":"SP"}'
 status_is 400 "missing name"
-body_is '{"error":"\"name\" is required."}' "missing name"
+body_is '{"error":"\"name\" is required.","code":"invalid_fields","fields":[{"field":"name","code":"required","message":"\"name\" is required."}]}' "missing name: every failing field (0.20.0)"
 req POST /cities '{"code":"1234567","name":"X","state":"SP","population":"many"}'
 status_is 400 "wrong type"
 body_has '$.population' "wrong type"
@@ -112,7 +117,7 @@ req POST /cities '{"code":"+123456","name":"X","state":"SP"}'
 status_is 400 "code: digits only (the document's pattern)"
 req POST /cities "{\"code\":\"1000001\",\"name\":\"$(printf 'x%.0s' $(seq 1 101))\",\"state\":\"SP\"}"
 status_is 400 "name: at most 100 characters (the document's maxLength)"
-body_is '{"error":"\"name\" must have at most 100 characters."}' "name too long"
+body_has '"fields":[{"field":"name","code":"too_long","message":"\"name\" must have at most 100 characters."}]' "name too long: the document's maxLength, enforced"
 req POST /cities '{"code":"1000001","name":"X","state":"SP","population":-5}'
 status_is 400 "population: not negative (the document's minimum)"
 # 100 characters of two bytes each: counted as characters on both compilers.
@@ -141,7 +146,9 @@ status_is 200 "empty patch"
 body_is '{"code":"2408102","name":"Natal","state":"RN","population":890480}' "empty patch changes nothing"
 req PATCH /cities/2408102 '{"population":null}'
 body_is '{"code":"2408102","name":"Natal","state":"RN","population":null}' "patch null clears population"
-req PATCH /cities/2408102 '{"name":"  Natal   RN  ","state":" rn"}'
+# The edge enforces the document's limits on the value as it came (state:
+# exactly 2 characters), then the repository normalizes ("rn" -> "RN").
+req PATCH /cities/2408102 '{"name":"  Natal   RN  ","state":"rn"}'
 body_is '{"code":"2408102","name":"Natal RN","state":"RN","population":null}' "patch two members, normalized (TNorm.CityName, StateCode)"
 req GET /cities/2408102 ""
 body_is '{"code":"2408102","name":"Natal RN","state":"RN","population":null}' "patch read back"

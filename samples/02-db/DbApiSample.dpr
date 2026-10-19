@@ -72,6 +72,7 @@ uses
   PascalCommon.SafeLog,
   PascalApi.Otlp,
   DbApiSample.Normalizers in 'DbApiSample.Normalizers.pas',
+  DbApiSample.Validators in 'DbApiSample.Validators.pas',
   DbApiSample.Cities in 'DbApiSample.Cities.pas';
 
 var
@@ -103,13 +104,13 @@ end;
 procedure PostCity(AReq: THorseRequest; ARes: THorseResponse; ANext: TNextProc);
 begin
   TJsonSend.Send(ARes, TJsonMapper.Shared.ToJson<ICity>(
-    GCities.Insert(TJsonMapper.Shared.FromJson<ICityInsert>(AReq.Body))), 201);
+    GCities.Insert(THorseBody.Read<ICityInsert>(AReq))), 201);
 end;
 
 procedure PatchCity(AReq: THorseRequest; ARes: THorseResponse; ANext: TNextProc);
 begin
   TJsonSend.Send(ARes, TJsonMapper.Shared.ToJson<ICity>(GCities.Update(AReq.Params['code'],
-    TJsonMapper.Shared.FromJson<ICityPatch>(AReq.Body))));
+    THorseBody.Read<ICityPatch>(AReq))));
 end;
 
 procedure DeleteCity(AReq: THorseRequest; ARes: THorseResponse; ANext: TNextProc);

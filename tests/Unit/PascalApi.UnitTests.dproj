@@ -140,6 +140,7 @@
         <DCCReference Include="PascalApi.QueryParamsTests.pas"/>
         <DCCReference Include="PascalApi.PagedQueryTests.pas"/>
         <DCCReference Include="PascalApi.RefreshTokensTests.pas"/>
+        <DCCReference Include="PascalApi.ValidationTests.pas"/>
         <DCCReference Include="PascalApi.RateLimitStateTests.pas"/>
         <DCCReference Include="PascalApi.FileLogTests.pas"/>
         <DCCReference Include="PascalApi.DtoTests.pas"/>

@@ -63,6 +63,10 @@
         <IsPartOfProject Value="True"/>
       </Unit>
       <Unit>
+        <Filename Value="DbApiSample.Validators.pas"/>
+        <IsPartOfProject Value="True"/>
+      </Unit>
+      <Unit>
         <Filename Value="DbApiSample.Cities.pas"/>
         <IsPartOfProject Value="True"/>
       </Unit>

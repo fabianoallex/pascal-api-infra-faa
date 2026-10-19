@@ -31,6 +31,7 @@ uses
   PascalApi.QueryParamsTests,
   PascalApi.PagedQueryTests,
   PascalApi.RefreshTokensTests,
+  PascalApi.ValidationTests,
   PascalApi.RateLimitStateTests,
   PascalApi.FileLogTests,
   PascalApi.DtoTests,

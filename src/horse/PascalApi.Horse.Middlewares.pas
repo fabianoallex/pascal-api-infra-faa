@@ -108,6 +108,14 @@ type
     class function Read<I: IInterface>(AReq: THorseRequest; AMapper: TJsonMapper = nil): I; static;
   end;
 
+  /// A request body as the DTO I, checked against what TApiSchema.Describe
+  /// declares for it (0.20.0): PascalApi.OpenApi's TApiInput.FromJson on
+  /// AReq.Body. A limit that fails is a 400 listing the fields.
+  THorseBody = class
+  public
+    class function Read<I: IInterface>(AReq: THorseRequest; AMapper: TJsonMapper = nil): I; static;
+  end;
+
   /// Answers exceptions that escape the handlers with {"error": "..."} and
   /// the status of PascalApi.Http.MapException, through THorse.OnError (not
   /// a middleware in the chain: register it any time before Listen). AOnError
@@ -275,6 +283,7 @@ implementation
 
 uses
   PascalApi.QueryParams,
+  PascalApi.OpenApi,
   Generics.Collections,
   DateUtils,
   Horse.Core.Param,
@@ -355,6 +364,13 @@ begin
   TJsonSend.Send(ARes, ErrorJson(AMessage), AStatus);
 end;
 
+{ THorseBody }
+
+class function THorseBody.Read<I>(AReq: THorseRequest; AMapper: TJsonMapper): I;
+begin
+  Result := TApiInput.FromJson<I>(AReq.Body, AMapper);
+end;
+
 { THorseQueryParams }
 
 class function THorseQueryParams.Read<I>(AReq: THorseRequest; AMapper: TJsonMapper): I;
@@ -411,14 +427,16 @@ begin
     AResponse.AddHeader('WWW-Authenticate', LError.Challenge);
   if LError.LogLine = '' then
   begin
-    TJsonSend.Send(AResponse, ErrorJson(LError.Message, '', LError.Code), LError.Status);
+    TJsonSend.Send(AResponse, ErrorJson(LError.Message, '', LError.Code, LError.Fields),
+      LError.Status);
     Exit;
   end;
   // A logged error: the body carries the id its log line ends with.
   LRequestId := LoggedRequestId(ARequest);
   if Assigned(GOnError) then
     GOnError(WithTraceId(LError.LogLine, LRequestId));
-  TJsonSend.Send(AResponse, ErrorJson(LError.Message, LRequestId, LError.Code), LError.Status);
+  TJsonSend.Send(AResponse, ErrorJson(LError.Message, LRequestId, LError.Code, LError.Fields),
+    LError.Status);
 end;
 
 class procedure TErrorHandlerMiddleware.Register;

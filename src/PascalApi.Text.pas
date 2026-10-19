@@ -53,7 +53,8 @@ uses
   {$ELSE}
   System.Hash,
   {$ENDIF}
-  PascalCommon.Utf8;
+  PascalCommon.Utf8,
+  PascalCommon.Text;
 
 function PaUtf8BytesToString(const ABytes: TBytes; const AOrigin: string): string;
 begin
@@ -129,16 +130,9 @@ begin
 end;
 
 function PaCharCount(const AText: string): Integer;
-var
-  LBytes: TBytes;
-  I: Integer;
 begin
-  // One character per byte that isn't a continuation byte (10xxxxxx).
-  LBytes := PaStringToUtf8Bytes(AText);
-  Result := 0;
-  for I := 0 to High(LBytes) do
-    if (LBytes[I] and $C0) <> $80 then
-      Inc(Result);
+  // pascal-common-faa's since its 1.21.0 (the validators count with it).
+  Result := PcCharCount(AText);
 end;
 
 end.

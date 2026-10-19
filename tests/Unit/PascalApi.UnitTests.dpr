@@ -43,6 +43,7 @@ uses
   PascalApi.QueryParamsTests in 'PascalApi.QueryParamsTests.pas',
   PascalApi.PagedQueryTests in 'PascalApi.PagedQueryTests.pas',
   PascalApi.RefreshTokensTests in 'PascalApi.RefreshTokensTests.pas',
+  PascalApi.ValidationTests in 'PascalApi.ValidationTests.pas',
   PascalApi.RateLimitStateTests in 'PascalApi.RateLimitStateTests.pas',
   PascalApi.FileLogTests in 'PascalApi.FileLogTests.pas',
   PascalApi.DtoTests in 'PascalApi.DtoTests.pas',

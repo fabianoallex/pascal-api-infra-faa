@@ -57,7 +57,12 @@ interface
 
 uses
   SysUtils,
-  PascalCommon.Tracing;
+  PascalCommon.Tracing,
+  PascalCommon.Validators;
+
+const
+  /// The "code" of a 400 that lists failing fields (0.20.0).
+  API_CODE_INVALID_FIELDS = 'invalid_fields';
 
 type
   /// A log sink (reference to procedure on Delphi, of object on FPC). The
@@ -155,6 +160,9 @@ type
     /// What goes to the error log; '' when the exception is an expected
     /// outcome (a client error) and isn't logged.
     LogLine: string;
+    /// Every failing field of an EPcValidationError (0.20.0), sent as
+    /// "fields"; empty for any other error.
+    Fields: TPcFieldErrors;
   end;
 
   THttpHeader = record
@@ -230,6 +238,12 @@ function ErrorJson(const AMessage, ARequestId: string): string; overload;
 /// {"error":"<message>","code":"<ACode>","requestId":"<ARequestId>"}; code
 /// and requestId only when not ''.
 function ErrorJson(const AMessage, ARequestId, ACode: string): string; overload;
+
+/// The same with "fields": [{"field","code","message"}...] when AFields
+/// isn't empty (0.20.0): the body of a 400 for pascal-common-faa's
+/// EPcValidationError.
+function ErrorJson(const AMessage, ARequestId, ACode: string;
+  const AFields: TPcFieldErrors): string; overload;
 
 /// The CORS headers for a request from ARequestOrigin; none when the origin
 /// isn't allowed.
@@ -515,6 +529,7 @@ begin
   Result.LogLine := '';
   Result.Code := '';
   Result.Challenge := '';
+  Result.Fields := nil;
 
   // An HTTP status that can't go on a status line: the code that raised it
   // is wrong, and the client gets a plain 500.
@@ -535,6 +550,16 @@ begin
     // HTTP requires the scheme on every 401 (RFC 9110, 11.6.1).
     if Result.Status = 401 then
       Result.Challenge := BearerChallenge(False);
+  end
+  // pascal-common-faa's validators (TPcValidation.RaiseIfAny, and
+  // TApiSchema.Check for the document's limits): every failing field, the
+  // first one's message in "error" for a client that shows only that.
+  else if E is EPcValidationError then
+  begin
+    Result.Status := 400;
+    Result.Message := E.Message;
+    Result.Code := API_CODE_INVALID_FIELDS;
+    Result.Fields := EPcValidationError(E).Errors;
   end
   else if E is EOrderByException then
   begin
@@ -628,8 +653,15 @@ begin
 end;
 
 function ErrorJson(const AMessage, ARequestId, ACode: string): string;
+begin
+  Result := ErrorJson(AMessage, ARequestId, ACode, nil);
+end;
+
+function ErrorJson(const AMessage, ARequestId, ACode: string;
+  const AFields: TPcFieldErrors): string;
 var
   LWriter: TJsonWriter;
+  I: Integer;
 begin
   LWriter := TJsonWriter.Create;
   try
@@ -645,6 +677,23 @@ begin
     begin
       LWriter.Name('requestId');
       LWriter.WriteString(ARequestId);
+    end;
+    if Length(AFields) > 0 then
+    begin
+      LWriter.Name('fields');
+      LWriter.BeginArray;
+      for I := 0 to High(AFields) do
+      begin
+        LWriter.BeginObject;
+        LWriter.Name('field');
+        LWriter.WriteString(AFields[I].Field);
+        LWriter.Name('code');
+        LWriter.WriteString(AFields[I].Code);
+        LWriter.Name('message');
+        LWriter.WriteString(AFields[I].Message);
+        LWriter.EndObject;
+      end;
+      LWriter.EndArray;
     end;
     LWriter.EndObject;
     Result := LWriter.ToString;

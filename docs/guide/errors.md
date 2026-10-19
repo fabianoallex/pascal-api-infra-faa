@@ -134,26 +134,51 @@ step 5). The error handler turns the mapper's exceptions into 400:
 A mapper error *without* a JSON path (`Interface ICity has no mapping`) is a programming error,
 a DTO you forgot to register, and stays a 500 (tested: `JsonMapperErrorWithoutPath_Is500`).
 
-**The rules of the data**, in the handler or the repository, with `EValidationException`. From
-`samples/02-db/DbApiSample.Cities.pas`:
+**The limits the OpenAPI document declares**, at the edge, since 0.20.0. What
+`TApiSchema.Describe` says (`MinLength`, `MaxLength`, `Enum` on text, `Minimum`, `Maximum` on
+numbers) is enforced when the handler reads the body with `THorseBody.Read<I>`
+(`PascalApi.Horse.Middlewares`; without Horse, `TApiInput.FromJson<I>` in `PascalApi.OpenApi`) or
+the query string with `THorseQueryParams.Read<I>`: a limit written once is documented and
+enforced. An optional member is checked only when it holds a value.
+
+```pascal
+// samples/02-db: .Prop('Name').MaxLength(100), .Prop('State').MinLength(2).MaxLength(2),
+// .Prop('Population').Minimum(0) in its Describe
+GCities.Insert(THorseBody.Read<ICityInsert>(AReq))
+```
+
+The limits apply to the value **as it came**, before any normalizer: the document describes the
+wire. `" rn"` is 3 characters for a `MaxLength(2)`.
+
+**The rules the document can't say**, in the repository, after normalizing, with
+pascal-common-faa's validators (`PascalCommon.Validators`, 1.21.0) collected by `TPcValidation`.
+From `samples/02-db/DbApiSample.Cities.pas` (`TValid` is the sample's factory,
+`DbApiSample.Validators`, inheriting `TPcStringValidators`):
 
 ```pascal
 LCode := Trim(ACity.Code);
-if not IsDigits(LCode, 7) then
-  raise EValidationException.Create('"code" must be the 7-digit IBGE code.');
-if Trim(ACity.Name) = '' then
-  raise EValidationException.Create('"name" is required.');
-if PaCharCount(Trim(ACity.Name)) > 100 then
-  raise EValidationException.Create('"name" must have at most 100 characters.');
-if Length(Trim(ACity.State)) <> 2 then
-  raise EValidationException.Create('"state" must have 2 letters.');
-if ACity.Population.HasValue and (ACity.Population.Value < 0) then
-  raise EValidationException.Create('"population" can''t be negative.');
+LName := TNorm.CityName.Apply(ACity.Name);
+LCheck := TPcValidation.Create;
+LCheck.Check('code', LCode, TValid.IbgeCode);     // the document's Pattern isn't enforced
+LCheck.Check('name', LName, TValid.Required);     // something besides blanks
+LCheck.RaiseIfAny;
 ```
 
-These are the limits the sample's OpenAPI document declares: the document describes them, and
-only this code enforces them ([OpenAPI](openapi.md), step 5, with what each broken limit did
-before the sample checked it).
+Both answer one 400 with every failing field (`EPcValidationError`):
+
+```
+POST /cities {"code":"12","name":"  ","state":"SPX","population":-1}
+400 {"error":"\"state\" must have at most 2 characters.","code":"invalid_fields",
+     "fields":[{"field":"state","code":"too_long","message":"..."},
+               {"field":"population","code":"below_minimum","message":"..."}]}
+```
+
+`error` holds the first field's message, for a client that shows only that. The edge answers
+before the repository runs, so a request that breaks both a limit and a rule hears of the limits
+first. The validators' messages are `TPcValidationMessages` (English by default,
+`TPcValidationMessages.Current := TPcValidationMessages.Portuguese` at startup, next to
+`TApiMessages`). A single business refusal (`own_account`) stays an `EValidationException` with
+its code.
 
 The mapper doesn't know which members are required: "required" is a check you write, like the
 ones above. An optional member left out arrives without a value (checked: sample 01 creates a

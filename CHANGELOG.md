@@ -6,6 +6,36 @@ may change the API; each such change is listed here.
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-10-19
+
+Validation, phase F2 of `docs/validation-design.md`: what the OpenAPI document declares is
+enforced, and a 400 lists every failing field. Needs pascal-common-faa 1.21.0
+(`PascalCommon.Validators`, phase F1).
+
+### Added
+
+- The error handler answers pascal-common-faa's `EPcValidationError` with a 400:
+  `{"error": <the first field's message>, "code": "invalid_fields", "fields": [{"field", "code",
+  "message"}...]}` (`TErrorResponse.Fields`, `ErrorJson(..., AFields)`,
+  `API_CODE_INVALID_FIELDS`). The document's `Error` schema gains `code` (sent since 0.17.0) and
+  `fields`.
+- `TApiSchema.Check(AInterface, ADto, var AValidation)`: what `Describe` declares, enforced
+  (`MinLength`, `MaxLength`, `Enum` on text, counted in characters; `Minimum`, `Maximum` on
+  numbers), under the members' JSON names; an optional member only when it holds a value.
+  `Pattern` stays documentation; nested DTOs aren't walked.
+- `TApiInput.FromJson<I>` (`FromJson` + `Check` + `RaiseIfAny`) and `THorseBody.Read<I>(AReq)` on
+  it. `TQueryParams.Read<I>` (so `THorseQueryParams.Read<I>`) applies the same check. All opt-in:
+  a handler that calls `FromJson` itself sees no change.
+- Sample 02 validates through them: its hand-written limits are gone (the `Describe` holds them),
+  and `DbApiSample.Validators` (`TValid = class(TPcStringValidators)`) has the two rules the
+  document can't say (the IBGE code, a name besides blanks). Scenarios: every failing field in
+  one answer; the PATCH sends `"rn"` (a `MaxLength(2)` refuses `" rn"` at the edge).
+
+### Changed
+
+- pascal-common-faa 1.21.0 is the minimum (`PascalApi.Dto`'s check, the `.lpk`).
+  `PaCharCount` is `PcCharCount` underneath.
+
 ## [0.19.1] - 2026-10-19
 
 `PascalApi.RefreshTokens` gets a tested sample and a guide; writing them found a race that

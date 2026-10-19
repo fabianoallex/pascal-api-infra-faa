@@ -36,7 +36,8 @@ uses
   TypInfo,
   Generics.Collections,
   PascalJsonMapper.Json,
-  PascalJsonMapper.Mapper;
+  PascalJsonMapper.Mapper,
+  PascalCommon.Validators;
 
 type
   EApiSchemaError = class(Exception);
@@ -178,6 +179,24 @@ type
     class function SchemaName(AInterface: PTypeInfo): string; static;
     /// Forgets every registered description (tests).
     class procedure Clear; static;
+    /// What Describe declared for AInterface, enforced on ADto (0.20.0):
+    /// MinLength, MaxLength and Enum on text, Minimum and Maximum on numbers,
+    /// added to AValidation under each member's JSON name. A plain member is
+    /// always checked; an optional one only when it holds a value. Nested
+    /// DTOs and arrays aren't walked; Pattern isn't enforced (no regular
+    /// expression dialect both compilers share). Nothing for a DTO with no
+    /// description.
+    class procedure Check(AInterface: PTypeInfo; const ADto: IInterface;
+      var AValidation: TPcValidation; AMapper: TJsonMapper = nil); static;
+  end;
+
+  /// A DTO read and checked against its description in one call (0.20.0):
+  /// the mapper's FromJson, then TApiSchema.Check; EPcValidationError (a 400
+  /// listing the fields, through the error handler) when a limit fails.
+  TApiInput = class
+  public
+    class function FromJson<I: IInterface>(const AJson: string;
+      AMapper: TJsonMapper = nil): I; static;
   end;
 
 /// The JSON Schema (2020-12) of the DTO AInterface, self-contained: nested
@@ -513,6 +532,141 @@ function SchemaMetaOf(AInterface: PTypeInfo): TApiSchemaMeta;
 begin
   if not GSchemaMetas.TryGetValue(AInterface, Result) then
     Result := nil;
+end;
+
+{ TApiSchema.Check }
+
+procedure CheckText(var AValidation: TPcValidation; const AField, AValue: string;
+  AMeta: TApiPropMeta);
+begin
+  if AMeta.MinLength >= 0 then
+    AValidation.Check(AField, AValue, TPcStringValidators.MinLength(AMeta.MinLength));
+  if AMeta.MaxLength >= 0 then
+    AValidation.Check(AField, AValue, TPcStringValidators.MaxLength(AMeta.MaxLength));
+  if Length(AMeta.EnumValues) > 0 then
+    AValidation.Check(AField, AValue, TPcStringValidators.OneOf(AMeta.EnumValues));
+end;
+
+procedure CheckNumber(var AValidation: TPcValidation; const AField: string; AValue: Double;
+  AMeta: TApiPropMeta);
+begin
+  if AMeta.HasMinimum and AMeta.HasMaximum then
+    AValidation.Check(AField, AValue, TPcDoubleValidators.Range(AMeta.Minimum, AMeta.Maximum))
+  else if AMeta.HasMinimum then
+    AValidation.Check(AField, AValue, TPcDoubleValidators.Min(AMeta.Minimum))
+  else if AMeta.HasMaximum then
+    AValidation.Check(AField, AValue, TPcDoubleValidators.Max(AMeta.Maximum));
+end;
+
+function IsDateType(ATypeInfo: PTypeInfo): Boolean;
+begin
+  Result := (ATypeInfo = TypeInfo(TDateTime)) or (ATypeInfo = TypeInfo(TDate)) or
+    (ATypeInfo = TypeInfo(TTime)) or (ATypeInfo = TypeInfo(TUtcDateTime));
+end;
+
+// An optional member: checked when it holds a value. Every optional class of
+// pascal-common-faa implements the three flavors of its type, so the
+// IOptNullXxx view reads any of them.
+procedure CheckOptional(var AValidation: TPcValidation; const AField: string;
+  const AValue: IInterface; const ABase: string; AMeta: TApiPropMeta);
+var
+  LText: IOptNullString;
+  LInt: IOptNullInteger;
+  LInt64: IOptNullInt64;
+  LDouble: IOptNullDouble;
+  LCurr: IOptNullCurrency;
+begin
+  if AValue = nil then
+    Exit;
+  if (ABase = 'string') and Supports(AValue, IOptNullString, LText) then
+  begin
+    if LText.HasValue and not LText.IsNull then
+      CheckText(AValidation, AField, LText.Value, AMeta);
+  end
+  else if (ABase = 'integer') and Supports(AValue, IOptNullInteger, LInt) then
+  begin
+    if LInt.HasValue and not LInt.IsNull then
+      CheckNumber(AValidation, AField, LInt.Value, AMeta);
+  end
+  else if (ABase = 'int64') and Supports(AValue, IOptNullInt64, LInt64) then
+  begin
+    if LInt64.HasValue and not LInt64.IsNull then
+      CheckNumber(AValidation, AField, LInt64.Value, AMeta);
+  end
+  else if (ABase = 'double') and Supports(AValue, IOptNullDouble, LDouble) then
+  begin
+    if LDouble.HasValue and not LDouble.IsNull then
+      CheckNumber(AValidation, AField, LDouble.Value, AMeta);
+  end
+  else if (ABase = 'currency') and Supports(AValue, IOptNullCurrency, LCurr) then
+  begin
+    if LCurr.HasValue and not LCurr.IsNull then
+      CheckNumber(AValidation, AField, LCurr.Value, AMeta);
+  end;
+end;
+
+class procedure TApiSchema.Check(AInterface: PTypeInfo; const ADto: IInterface;
+  var AValidation: TPcValidation; AMapper: TJsonMapper);
+var
+  LMeta: TApiSchemaMeta;
+  LProp: TApiPropMeta;
+  LObject: TObject;
+  LMembers: TJsonMemberArray;
+  LInfo: PPropInfo;
+  LType: PTypeInfo;
+  LOpt: TOptionalKind;
+  I: Integer;
+begin
+  LMeta := SchemaMetaOf(AInterface);
+  if (LMeta = nil) or (ADto = nil) then
+    Exit;
+  LObject := ADto as TObject;
+  LMembers := MapperOrShared(AMapper).Members(LObject.ClassType);
+  for I := 0 to High(LMembers) do
+  begin
+    LProp := LMeta.PropMeta(LMembers[I].PropertyName);
+    if LProp = nil then
+      Continue;
+    LInfo := GetPropInfo(LObject, LMembers[I].PropertyName);
+    if LInfo = nil then
+      Continue;
+    LType := LMembers[I].TypeInfo;
+    if IsStringKind(LType^.Kind) then
+      CheckText(AValidation, LMembers[I].JsonName, GetStrProp(LObject, LInfo), LProp)
+    else if IsBooleanType(LType) or (LType^.Kind = tkEnumeration) then
+      Continue
+    else
+      case LType^.Kind of
+        tkInteger:
+          CheckNumber(AValidation, LMembers[I].JsonName, GetOrdProp(LObject, LInfo), LProp);
+        tkInt64:
+          CheckNumber(AValidation, LMembers[I].JsonName, GetInt64Prop(LObject, LInfo), LProp);
+        tkFloat:
+          if not IsDateType(LType) then
+            CheckNumber(AValidation, LMembers[I].JsonName, GetFloatProp(LObject, LInfo), LProp);
+        tkInterface:
+          if FindOptional(LType, LOpt) then
+            CheckOptional(AValidation, LMembers[I].JsonName, GetInterfaceProp(LObject, LInfo),
+              LOpt.Base, LProp);
+      end;
+  end;
+end;
+
+{ TApiInput }
+
+class function TApiInput.FromJson<I>(const AJson: string; AMapper: TJsonMapper): I;
+var
+  LCheck: TPcValidation;
+begin
+  // Only public symbols here: FPC 3.2.2 refuses a generic body that uses one
+  // of the implementation section ("Global Generic template references
+  // static symtable"), such as MapperOrShared.
+  if AMapper = nil then
+    AMapper := TJsonMapper.Shared;
+  Result := AMapper.FromJson<I>(AJson);
+  LCheck := TPcValidation.Create;
+  TApiSchema.Check(TypeInfo(I), Result, LCheck, AMapper);
+  LCheck.RaiseIfAny;
 end;
 
 { TApiDocument }
@@ -1328,12 +1482,47 @@ begin
         FW.Name('type');
         FW.WriteString('string');
         FW.EndObject;
+        // A machine-readable code, when the error has one (0.17.0).
+        FW.Name('code');
+        FW.BeginObject;
+        FW.Name('type');
+        FW.WriteString('string');
+        FW.EndObject;
         // Only on the errors the handler logs (500, 503...): the id their
         // log line ends with.
         FW.Name('requestId');
         FW.BeginObject;
         FW.Name('type');
         FW.WriteString('string');
+        FW.EndObject;
+        // Every failing field of a 400 "invalid_fields" (0.20.0).
+        FW.Name('fields');
+        FW.BeginObject;
+        FW.Name('type');
+        FW.WriteString('array');
+        FW.Name('items');
+        FW.BeginObject;
+        FW.Name('type');
+        FW.WriteString('object');
+        FW.Name('properties');
+        FW.BeginObject;
+        FW.Name('field');
+        FW.BeginObject;
+        FW.Name('type');
+        FW.WriteString('string');
+        FW.EndObject;
+        FW.Name('code');
+        FW.BeginObject;
+        FW.Name('type');
+        FW.WriteString('string');
+        FW.EndObject;
+        FW.Name('message');
+        FW.BeginObject;
+        FW.Name('type');
+        FW.WriteString('string');
+        FW.EndObject;
+        FW.EndObject;
+        FW.EndObject;
         FW.EndObject;
         FW.EndObject;
         FW.Name('required');

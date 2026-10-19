@@ -66,6 +66,7 @@
             <MainSource>MainSource</MainSource>
         </DelphiCompile>
         <DCCReference Include="DbApiSample.Normalizers.pas"/>
+        <DCCReference Include="DbApiSample.Validators.pas"/>
         <DCCReference Include="DbApiSample.Cities.pas"/>
         <BuildConfiguration Include="Base">
             <Key>Base</Key>
