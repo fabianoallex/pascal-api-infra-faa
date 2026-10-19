@@ -6,6 +6,12 @@ may change the API; each such change is listed here.
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-10-19
+
+A DTO's interface now shows every member, read-only, so code that sees only the interface (a
+repository, a test) knows what the DTO carries without opening the class. Raised from
+pascal-agenda-faa. **Breaking** for code that wrote the paged bases through their interfaces.
+
 ### Changed
 
 - **Breaking: the paged DTO bases are read-only through their interfaces.**
