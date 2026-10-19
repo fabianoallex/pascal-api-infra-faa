@@ -89,6 +89,8 @@ type
     ['{105EF129-E440-4988-9419-D8730144006C}']
     function GetItem: string;
     function GetAmount: Currency;
+    property Item: string read GetItem;
+    property Amount: Currency read GetAmount;
   end;
 
 {$M+}

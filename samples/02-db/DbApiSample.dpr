@@ -82,16 +82,20 @@ var
 
 procedure GetCities(AReq: THorseRequest; ARes: THorseResponse; ANext: TNextProc);
 var
+  LFill: TCityFind;
   LFind: ICityFind;
   LPage: TPage<ICity>;
 begin
   // The query string into the Find DTO the route documents (QueryParams).
-  LFind := TCityFind.Create;
-  LFind.Page := ParseQueryInt('page', AReq.Query['page']);
-  LFind.Limit := ParseQueryInt('limit', AReq.Query['limit']);
-  LFind.OrderBy := ParseQueryStr(AReq.Query['orderBy']);
-  LFind.SetState(ParseQueryStr(AReq.Query['state']));
-  LPage := GCities.FindPage(LFind.GetState, LFind.OrderBy.Value,
+  // Filled through the class (the interface is read-only), while LFind
+  // holds it.
+  LFill := TCityFind.Create;
+  LFind := LFill;
+  LFill.Page := ParseQueryInt('page', AReq.Query['page']);
+  LFill.Limit := ParseQueryInt('limit', AReq.Query['limit']);
+  LFill.OrderBy := ParseQueryStr(AReq.Query['orderBy']);
+  LFill.State := ParseQueryStr(AReq.Query['state']);
+  LPage := GCities.FindPage(LFind.State, LFind.OrderBy.Value,
     PageRequestFrom(LFind.Page, LFind.Limit, 2, 50));
   TJsonSend.Send(ARes, PageEnvelopeJson(LPage.Meta,
     TJsonMapper.Shared.Serialize<TCityArray>(LPage.Items)));

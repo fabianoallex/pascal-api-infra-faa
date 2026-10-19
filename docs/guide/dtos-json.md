@@ -34,6 +34,9 @@ type
     function GetName: string;
     function GetState: string;
     function GetPopulation: IOptInteger;
+    property Name: string read GetName;
+    property State: string read GetState;
+    property Population: IOptInteger read GetPopulation;
   end;
 
 {$M+}
@@ -76,6 +79,28 @@ is a 400 naming `$.population`; `"popultion":5` is a 400 naming `$.popultion` (a
 - **An interface for the callers, a class for the mapper.** The handler asks for `ICityInsert`;
   `RegisterMapping<I, C>` tells the mapper which class to create. The class's own constructor
   runs. Register in the `initialization` of the unit that declares the DTO.
+- **The interface mirrors the class, read-only.** Each published property of the class has a
+  property of the same name and type in the interface, read through its getter
+  (`property Name: string read GetName;`), so whoever holds only the interface sees every member
+  (`ACity.Name`) and can't change it. The mapper reads the class, never the interface, so the
+  mirror changes nothing on the wire or in the OpenAPI document (probe 2026-10-19: same members,
+  same JSON). The bases' `Page`, `Limit`, `OrderBy`, `Search` and `Total` are read-only too since
+  0.18.0.
+- **Fill a DTO through its class, while an interface variable holds it.** The reference count
+  lives in the interface: an object kept only in a class variable is freed by the first interface
+  that lets it go, and the class variable is left pointing at freed memory.
+
+  ```pascal
+  LCity := TCity.Create;
+  Result := LCity;                        // the interface holds it (Result: ICity)
+  LCity.Name := AResult.Strings['NAME'];  // edited through the class
+  ```
+
+- **Code that receives the interface treats the DTO as a value.** A different value goes into a
+  local variable or a new DTO (sample 01's `AddCity` builds the stored city from the
+  `ICityInsert` it got), never into the one received, and never through
+  `(ACity as TObject) as TCityInsert`: the caller may still use it, and a mock wouldn't be that
+  class.
 - **Published properties under `{$M+}`**, the members the JSON has. Public properties are
   ignored on both compilers (FPC 3.2.2's RTTI doesn't see them, so Delphi ignores them too;
   mapper test `PublicProperty_IsIgnored`). Read-only properties are written, never read
@@ -151,6 +176,9 @@ type
     function GetName: IOptString;
     function GetState: IOptString;
     function GetPopulation: IOptNullInteger;
+    property Name: IOptString read GetName;
+    property State: IOptString read GetState;
+    property Population: IOptNullInteger read GetPopulation;
   end;
 
 {$M+}
@@ -183,9 +211,9 @@ member that came into a block of SQL, so an absent member never reaches the `UPD
 ```pascal
 // Normalized inside the optionals, by the rules of DbApiSample.Normalizers:
 // an absent member stays absent, so there is no if here.
-LName := TOptionals.Normalize(APatch.GetName, TNorm.CityName);
-LState := TOptionals.Normalize(APatch.GetState, TNorm.StateCode);
-LPopulation := APatch.GetPopulation;
+LName := TOptionals.Normalize(APatch.Name, TNorm.CityName);
+LState := TOptionals.Normalize(APatch.State, TNorm.StateCode);
+LPopulation := APatch.Population;
 ... // the checks: "name" not empty, at most 100 characters, "state" 2 letters...
 
 // 'UPDATE CITIES SET CODE = CODE [NAME {], NAME = :NAME [} NAME] ' +
@@ -264,7 +292,7 @@ end;
 
 The create works the same way: its population is a tagged block in the `INSERT`, gone when the
 member is absent (the column takes its default, `NULL`), and bound with
-`OptIntegers['POPULATION'] := ACity.GetPopulation`, no `if`. Sample 03 does it through the tenant
+`OptIntegers['POPULATION'] := ACity.Population`, no `if`. Sample 03 does it through the tenant
 filter: `TTenantFilter.Prepare` takes the processed SQL ([Multi-tenancy](multitenancy.md)).
 
 For an `IOptNullXxx`, **`HasValue` means "the member came"**, with a value or with `null`;
@@ -319,10 +347,12 @@ Query parameters are text, not JSON: read them with `ParseQueryInt`/`ParseQueryS
 (`PascalApi.Pagination`), which give optionals, into a Find DTO (sample 02's `GetCities`):
 
 ```pascal
-LFind := TCityFind.Create;
-LFind.Page := ParseQueryInt('page', AReq.Query['page']);
-LFind.Limit := ParseQueryInt('limit', AReq.Query['limit']);
-LFind.OrderBy := ParseQueryStr(AReq.Query['orderBy']);
+LFill := TCityFind.Create;   // filled through the class (LFill: TCityFind)...
+LFind := LFill;              // ...while the interface holds it (LFind: ICityFind)
+LFill.Page := ParseQueryInt('page', AReq.Query['page']);
+LFill.Limit := ParseQueryInt('limit', AReq.Query['limit']);
+LFill.OrderBy := ParseQueryStr(AReq.Query['orderBy']);
+LFill.State := ParseQueryStr(AReq.Query['state']);
 ```
 
 An empty or missing parameter is absent. `ParseQueryInt` takes only an optional `-` and decimal
@@ -354,9 +384,9 @@ var
   LOrder: IOrder;
 begin
   LOrder := TJsonMapper.Shared.FromJson<IOrder>(AReq.Body);
-  if Trim(LOrder.GetItem) = '' then
+  if Trim(LOrder.Item) = '' then
     raise EValidationException.Create('"item" is required.');
-  if LOrder.GetQuantity <= 0 then
+  if LOrder.Quantity <= 0 then
     raise EValidationException.Create('"quantity" must be positive.');
   Result := TJsonMapper.Shared.ToJson<IOrder>(LOrder);
 end;
@@ -440,8 +470,8 @@ begin
   LOrder := TJsonMapper.Shared.FromJson<IOrder>(FrameText(ARequest));
   LReply := TOrderReply.Create;
   LReplyIntf := LReply;
-  LReply.Accepted := LOrder.GetQuantity > 0;
-  LReply.Item := LOrder.GetItem;
+  LReply.Accepted := LOrder.Quantity > 0;
+  LReply.Item := LOrder.Item;
   AReply := PaStringToUtf8Bytes(TJsonMapper.Shared.ToJson<IOrderReply>(LReplyIntf));
 end;
 
@@ -526,6 +556,10 @@ header). Where both ends must agree, one library on both: the mapper.
   `0.00025` as `0.0003` (measured with `POST /prices`). Use 0.6.0 or later.
 - **`null` into a plain type keeps the old value** (step 2).
 - **Public properties**: invisible to the mapper on both compilers.
+- **A DTO kept only in a class variable**: freed when the first interface reference to it goes
+  away (passed to a routine that takes the interface, for example), and the class variable then
+  points at freed memory. Assign it to an interface variable first, then fill it through the
+  class (step 1).
 - **`Length` for a "max N characters" rule**: it counts bytes on FPC and UTF-16 units on Delphi;
   use `PaCharCount` ([OpenAPI](openapi.md), step 5).
 - **Times without a zone** (step 6).

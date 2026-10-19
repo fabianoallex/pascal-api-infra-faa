@@ -173,15 +173,17 @@ runs a `COUNT` and the page in one transaction:
 ```pascal
 procedure GetCities(AReq: THorseRequest; ARes: THorseResponse; ANext: TNextProc);
 var
+  LFill: TCityFind;
   LFind: ICityFind;
   LPage: TPage<ICity>;
 begin
-  LFind := TCityFind.Create;
-  LFind.Page := ParseQueryInt('page', AReq.Query['page']);    // 400 unless digits
-  LFind.Limit := ParseQueryInt('limit', AReq.Query['limit']);
-  LFind.OrderBy := ParseQueryStr(AReq.Query['orderBy']);
-  LFind.SetState(ParseQueryStr(AReq.Query['state']));
-  LPage := GCities.FindPage(LFind.GetState, LFind.OrderBy.Value,
+  LFill := TCityFind.Create;     // filled through the class: the interface is read-only
+  LFind := LFill;                // the interface holds it
+  LFill.Page := ParseQueryInt('page', AReq.Query['page']);    // 400 unless digits
+  LFill.Limit := ParseQueryInt('limit', AReq.Query['limit']);
+  LFill.OrderBy := ParseQueryStr(AReq.Query['orderBy']);
+  LFill.State := ParseQueryStr(AReq.Query['state']);
+  LPage := GCities.FindPage(LFind.State, LFind.OrderBy.Value,
     PageRequestFrom(LFind.Page, LFind.Limit, 2, 50));          // default 2, at most 50
   TJsonSend.Send(ARes, PageEnvelopeJson(LPage.Meta,
     TJsonMapper.Shared.Serialize<TCityArray>(LPage.Items)));
@@ -250,19 +252,19 @@ The answer is the same envelope as in [Getting started](getting-started.md), ste
 From `TCityRepository.Insert`:
 
 ```pascal
-if Trim(ACity.GetName) = '' then
+if Trim(ACity.Name) = '' then
   raise EValidationException.Create('"name" is required.');
 ...
 LScope := FFactory.GetPool.AcquireQuery(LQuery);
 LScope.StartTransaction;
 try
   LQuery.Sql := FFactory.SqlLoader['CITY.INSERT']
-    .ProcessTag('POPULATION', ACity.GetPopulation.HasValue).SQL;
+    .ProcessTag('POPULATION', ACity.Population.HasValue).SQL;
   LQuery.Params.Strings['CODE'] := LCode;
   ...
   // No if: absent, the column and its parameter are gone (the database
   // writes NULL); present, the value is bound.
-  LQuery.Params.OptIntegers['POPULATION'] := ACity.GetPopulation;
+  LQuery.Params.OptIntegers['POPULATION'] := ACity.Population;
   LQuery.ExecSql; // EConstraintViolationException (cvUnique) -> 409
   LScope.Commit;
 except

@@ -293,6 +293,9 @@ type
     function GetName: string;
     function GetState: string;
     function GetPopulation: IOptInteger;
+    property Name: string read GetName;
+    property State: string read GetState;
+    property Population: IOptInteger read GetPopulation;
   end;
 
 {$M+}
@@ -326,9 +329,9 @@ end;
 
 function AddCity(const ACity: ICityInsert): string;
 begin
-  if Trim(ACity.GetName) = '' then
+  if Trim(ACity.Name) = '' then
     raise EValidationException.Create('"name" is required.');
-  if Length(ACity.GetState) <> 2 then
+  if Length(ACity.State) <> 2 then
     raise EValidationException.Create('"state" must have 2 letters.');
   ...
 end;

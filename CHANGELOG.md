@@ -6,6 +6,22 @@ may change the API; each such change is listed here.
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking: the paged DTO bases are read-only through their interfaces.**
+  `IFindPaginationDTOBase` (`Page`, `Limit`, `OrderBy`, `Search`) and
+  `IResponsePaginationDTOBase` (`Page`, `Limit`, `Total`) lost their setters, and
+  `TFindPaginationDTOBase`/`TResponsePaginationDTOBase` their `SetXxx` methods. Fill them through
+  the class while an interface variable holds the object:
+  `LFill := TCityFind.Create; LFind := LFill; LFill.Page := ...` (was `LFind.Page := ...` on an
+  `ICityFind`). The JSON is the same.
+- **DTO convention** (`PascalApi.Dto`'s header, `docs/guide/dtos-json.md` step 1): a DTO's
+  interface mirrors every published property of its class, with the same name and type,
+  read-only through its getter (`property Name: string read GetName;`); the code that creates a
+  DTO fills it through the class, and code that receives the interface treats it as a value.
+  The mapper reads the class only, so the JSON and the OpenAPI document don't change (measured
+  with a probe on FPC: same members, same JSON). Samples 01 to 04 follow it.
+
 ## [0.17.0] - 2026-10-18
 
 Found by pascal-agenda-faa, the library's first application: an HTTP exception built with

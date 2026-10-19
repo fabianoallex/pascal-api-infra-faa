@@ -138,16 +138,16 @@ a DTO you forgot to register, and stays a 500 (tested: `JsonMapperErrorWithoutPa
 `samples/02-db/DbApiSample.Cities.pas`:
 
 ```pascal
-LCode := Trim(ACity.GetCode);
+LCode := Trim(ACity.Code);
 if not IsDigits(LCode, 7) then
   raise EValidationException.Create('"code" must be the 7-digit IBGE code.');
-if Trim(ACity.GetName) = '' then
+if Trim(ACity.Name) = '' then
   raise EValidationException.Create('"name" is required.');
-if PaCharCount(Trim(ACity.GetName)) > 100 then
+if PaCharCount(Trim(ACity.Name)) > 100 then
   raise EValidationException.Create('"name" must have at most 100 characters.');
-if Length(Trim(ACity.GetState)) <> 2 then
+if Length(Trim(ACity.State)) <> 2 then
   raise EValidationException.Create('"state" must have 2 letters.');
-if ACity.GetPopulation.HasValue and (ACity.GetPopulation.Value < 0) then
+if ACity.Population.HasValue and (ACity.Population.Value < 0) then
   raise EValidationException.Create('"population" can''t be negative.');
 ```
 

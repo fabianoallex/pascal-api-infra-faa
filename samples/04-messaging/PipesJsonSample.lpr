@@ -35,10 +35,16 @@ type
     ['{5FE33A96-8FA8-44AF-B011-48232C84B7A0}']
     function GetItem: string;
     function GetQuantity: Integer;
+    property Item: string read GetItem;
+    property Quantity: Integer read GetQuantity;
   end;
 
   IOrderReply = interface
     ['{BEE10F23-A8E8-47D8-B758-9BCCF384C430}']
+    function GetAccepted: Boolean;
+    function GetItem: string;
+    property Accepted: Boolean read GetAccepted;
+    property Item: string read GetItem;
   end;
 
 {$M+}
@@ -58,6 +64,9 @@ type
   private
     FAccepted: Boolean;
     FItem: string;
+  public
+    function GetAccepted: Boolean;
+    function GetItem: string;
   published
     property Accepted: Boolean read FAccepted write FAccepted;
     property Item: string read FItem write FItem;
@@ -85,6 +94,18 @@ begin
   Result := FQuantity;
 end;
 
+{ TOrderReply }
+
+function TOrderReply.GetAccepted: Boolean;
+begin
+  Result := FAccepted;
+end;
+
+function TOrderReply.GetItem: string;
+begin
+  Result := FItem;
+end;
+
 /// The bytes of a frame as text; they must be UTF-8.
 function FrameText(const AData: TBytes): string;
 begin
@@ -103,8 +124,8 @@ begin
   LOrder := TJsonMapper.Shared.FromJson<IOrder>(FrameText(ARequest));
   LReply := TOrderReply.Create;
   LReplyIntf := LReply;
-  LReply.Accepted := LOrder.GetQuantity > 0;
-  LReply.Item := LOrder.GetItem;
+  LReply.Accepted := LOrder.Quantity > 0;
+  LReply.Item := LOrder.Item;
   AReply := PaStringToUtf8Bytes(TJsonMapper.Shared.ToJson<IOrderReply>(LReplyIntf));
 end;
 
@@ -115,7 +136,7 @@ begin
   // No try: an exception goes to OnError (pascal-pipes-faa 0.2.0).
   try
     LOrder := TJsonMapper.Shared.FromJson<IOrder>(FrameText(AData));
-    SafeWriteln('message: %d x %s', [LOrder.GetQuantity, LOrder.GetItem]);
+    SafeWriteln('message: %d x %s', [LOrder.Quantity, LOrder.Item]);
   finally
     GHandled.SetEvent; // only for this demo's ordering
   end;

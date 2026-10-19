@@ -58,6 +58,8 @@ type
     ['{3ABC5334-03C4-4455-908F-3C52DB19953C}']
     function GetItem: string;
     function GetQuantity: Integer;
+    property Item: string read GetItem;
+    property Quantity: Integer read GetQuantity;
   end;
 
 {$M+}
@@ -141,11 +143,11 @@ begin
   InterlockedIncrement(GConsumed);
   GOut.Enter;
   try
-    GLastItem := LOrder.GetItem;
+    GLastItem := LOrder.Item;
   finally
     GOut.Leave;
   end;
-  Line(Format('consumed %d x %s trace=%s', [LOrder.GetQuantity, LOrder.GetItem,
+  Line(Format('consumed %d x %s trace=%s', [LOrder.Quantity, LOrder.Item,
     TraceIdOf(TPcTracing.Current)]));
   AChannel.Ack(ADelivery.DeliveryTag);
 end;
@@ -228,9 +230,9 @@ var
   LOrder: IOrder;
 begin
   LOrder := TJsonMapper.Shared.FromJson<IOrder>(AReq.Body);
-  if Trim(LOrder.GetItem) = '' then
+  if Trim(LOrder.Item) = '' then
     raise EValidationException.Create('"item" is required.');
-  if LOrder.GetQuantity <= 0 then
+  if LOrder.Quantity <= 0 then
     raise EValidationException.Create('"quantity" must be positive.');
   Result := TJsonMapper.Shared.ToJson<IOrder>(LOrder);
 end;

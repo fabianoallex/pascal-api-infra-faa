@@ -125,9 +125,9 @@ still come in the same call:
 
 ```pascal
 TTenantFilter.Prepare(LQuery, FScope, FScope.Factory.SqlLoader['CITY.INSERT']
-  .ProcessTag('POPULATION', ACity.GetPopulation.HasValue));
+  .ProcessTag('POPULATION', ACity.Population.HasValue));
 ...
-LQuery.Params.OptIntegers['POPULATION'] := ACity.GetPopulation;   // absent: column gone, NULL
+LQuery.Params.OptIntegers['POPULATION'] := ACity.Population;   // absent: column gone, NULL
 ```
 
 Take that SQL from the scope's own factory (`FScope.Factory.SqlLoader`): another factory's may be

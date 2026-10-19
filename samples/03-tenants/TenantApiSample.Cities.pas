@@ -47,24 +47,50 @@ type
     function GetName: string;
     function GetState: string;
     function GetPopulation: IOptInteger;
+    property Code: string read GetCode;
+    property Name: string read GetName;
+    property State: string read GetState;
+    property Population: IOptInteger read GetPopulation;
   end;
 
   ICity = interface(IResponseDTOBase)
     ['{6F3FCCDA-382F-49BA-8D73-E871EB26E7EF}']
+    function GetCode: string;
+    function GetName: string;
+    function GetState: string;
+    function GetPopulation: INullInteger;
+    property Code: string read GetCode;
+    property Name: string read GetName;
+    property State: string read GetState;
+    property Population: INullInteger read GetPopulation;
   end;
 
   ICityDetails = interface(IResponseDTOBase)
     ['{755E8846-CD22-4487-A5C4-3594E5D002D6}']
+    function GetCode: string;
+    function GetName: string;
+    function GetState: string;
+    function GetStateName: INullString;
+    property Code: string read GetCode;
+    property Name: string read GetName;
+    property State: string read GetState;
+    property StateName: INullString read GetStateName;
   end;
 
   IStateInsert = interface(IInsertDTOBase)
     ['{4ED8D867-E4B2-4B8D-ADFA-50D2BD542BB6}']
     function GetCode: string;
     function GetName: string;
+    property Code: string read GetCode;
+    property Name: string read GetName;
   end;
 
   IState = interface(IResponseDTOBase)
     ['{8571B874-C3D1-47D2-A446-A3E178C1A56B}']
+    function GetCode: string;
+    function GetName: string;
+    property Code: string read GetCode;
+    property Name: string read GetName;
   end;
 
 {$M+}
@@ -88,6 +114,11 @@ type
   private
     FCode, FName, FState: string;
     FPopulation: INullInteger;
+  public
+    function GetCode: string;
+    function GetName: string;
+    function GetState: string;
+    function GetPopulation: INullInteger;
   published
     property Code: string read FCode write FCode;
     property Name: string read FName write FName;
@@ -99,6 +130,11 @@ type
   private
     FCode, FName, FState: string;
     FStateName: INullString;
+  public
+    function GetCode: string;
+    function GetName: string;
+    function GetState: string;
+    function GetStateName: INullString;
   published
     property Code: string read FCode write FCode;
     property Name: string read FName write FName;
@@ -120,6 +156,9 @@ type
   TState = class(TResponseDTOBase, IState)
   private
     FCode, FName: string;
+  public
+    function GetCode: string;
+    function GetName: string;
   published
     property Code: string read FCode write FCode;
     property Name: string read FName write FName;
@@ -275,6 +314,62 @@ begin
   Result := FName;
 end;
 
+{ TCity }
+
+function TCity.GetCode: string;
+begin
+  Result := FCode;
+end;
+
+function TCity.GetName: string;
+begin
+  Result := FName;
+end;
+
+function TCity.GetState: string;
+begin
+  Result := FState;
+end;
+
+function TCity.GetPopulation: INullInteger;
+begin
+  Result := TOptionals.Safe(FPopulation);
+end;
+
+{ TCityDetails }
+
+function TCityDetails.GetCode: string;
+begin
+  Result := FCode;
+end;
+
+function TCityDetails.GetName: string;
+begin
+  Result := FName;
+end;
+
+function TCityDetails.GetState: string;
+begin
+  Result := FState;
+end;
+
+function TCityDetails.GetStateName: INullString;
+begin
+  Result := TOptionals.Safe(FStateName);
+end;
+
+{ TState }
+
+function TState.GetCode: string;
+begin
+  Result := FCode;
+end;
+
+function TState.GetName: string;
+begin
+  Result := FName;
+end;
+
 { TCityRepository }
 
 constructor TCityRepository.Create(const AScope: TTenantDataScope);
@@ -356,16 +451,16 @@ var
 begin
   // The limits the OpenAPI document declares (TApiSchema.Describe below): the
   // document describes them, only this enforces them.
-  LCode := Trim(ACity.GetCode);
+  LCode := Trim(ACity.Code);
   if not IsDigits(LCode, 7) then
     raise EValidationException.Create('"code" must be the 7-digit IBGE code.');
-  if Trim(ACity.GetName) = '' then
+  if Trim(ACity.Name) = '' then
     raise EValidationException.Create('"name" is required.');
-  if PaCharCount(Trim(ACity.GetName)) > 100 then
+  if PaCharCount(Trim(ACity.Name)) > 100 then
     raise EValidationException.Create('"name" must have at most 100 characters.');
-  if Length(Trim(ACity.GetState)) <> 2 then
+  if Length(Trim(ACity.State)) <> 2 then
     raise EValidationException.Create('"state" must have 2 letters.');
-  if ACity.GetPopulation.HasValue and (ACity.GetPopulation.Value < 0) then
+  if ACity.Population.HasValue and (ACity.Population.Value < 0) then
     raise EValidationException.Create('"population" can''t be negative.');
 
   LScope := FScope.Factory.GetPool.AcquireQuery(LQuery);
@@ -374,12 +469,12 @@ begin
     // SQL already processed (the POPULATION block), then the tenant's
     // condition and :TENANT_ID in the same call.
     TTenantFilter.Prepare(LQuery, FScope, FScope.Factory.SqlLoader['CITY.INSERT']
-      .ProcessTag('POPULATION', ACity.GetPopulation.HasValue));
+      .ProcessTag('POPULATION', ACity.Population.HasValue));
     LQuery.Params.Strings['CODE'] := LCode;
-    LQuery.Params.Strings['NAME'] := Trim(ACity.GetName);
-    LQuery.Params.Strings['STATE'] := UpperCase(Trim(ACity.GetState));
+    LQuery.Params.Strings['NAME'] := Trim(ACity.Name);
+    LQuery.Params.Strings['STATE'] := UpperCase(Trim(ACity.State));
     // No if: absent, the column and its parameter are gone (NULL).
-    LQuery.Params.OptIntegers['POPULATION'] := ACity.GetPopulation;
+    LQuery.Params.OptIntegers['POPULATION'] := ACity.Population;
     LQuery.ExecSql; // EConstraintViolationException (cvUnique) -> 409
     LScope.Commit;
   except
@@ -449,12 +544,12 @@ var
   LState: TState;
   LCode: string;
 begin
-  LCode := UpperCase(Trim(AState.GetCode));
+  LCode := UpperCase(Trim(AState.Code));
   if Length(LCode) <> 2 then
     raise EValidationException.Create('"code" must have 2 letters.');
-  if Trim(AState.GetName) = '' then
+  if Trim(AState.Name) = '' then
     raise EValidationException.Create('"name" is required.');
-  if PaCharCount(Trim(AState.GetName)) > 100 then
+  if PaCharCount(Trim(AState.Name)) > 100 then
     raise EValidationException.Create('"name" must have at most 100 characters.');
 
   LScope := FScope.Factory.GetPool.AcquireQuery(LQuery);
@@ -462,7 +557,7 @@ begin
   try
     TTenantFilter.Prepare(LQuery, FScope, 'STATE.INSERT');
     LQuery.Params.Strings['CODE'] := LCode;
-    LQuery.Params.Strings['NAME'] := Trim(AState.GetName);
+    LQuery.Params.Strings['NAME'] := Trim(AState.Name);
     LQuery.ExecSql; // EConstraintViolationException (cvUnique) -> 409
     LScope.Commit;
   except
@@ -472,7 +567,7 @@ begin
   LState := TState.Create;
   Result := LState;
   LState.Code := LCode;
-  LState.Name := Trim(AState.GetName);
+  LState.Name := Trim(AState.Name);
 end;
 
 initialization

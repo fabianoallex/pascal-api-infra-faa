@@ -35,6 +35,10 @@ type
     function GetName: string;
     function GetState: string;
     function GetPopulation: IOptInteger;
+    property Code: string read GetCode;
+    property Name: string read GetName;
+    property State: string read GetState;
+    property Population: IOptInteger read GetPopulation;
   end;
 
   /// The query string of GET /cities: page, limit, orderBy and search from
@@ -42,11 +46,19 @@ type
   ICityFind = interface(IFindPaginationDTOBase)
     ['{68703148-01FA-4EC6-A0A5-529487B0AC1F}']
     function GetState: IOptString;
-    procedure SetState(const AValue: IOptString);
+    property State: IOptString read GetState;
   end;
 
   ICity = interface(IResponseDTOBase)
     ['{2AD7DFDC-6A1C-4F82-8E47-3E646F5971DD}']
+    function GetCode: string;
+    function GetName: string;
+    function GetState: string;
+    function GetPopulation: INullInteger;
+    property Code: string read GetCode;
+    property Name: string read GetName;
+    property State: string read GetState;
+    property Population: INullInteger read GetPopulation;
   end;
 
   /// PATCH /cities/:code: every member may be absent (left as it is). Name
@@ -57,6 +69,9 @@ type
     function GetName: IOptString;
     function GetState: IOptString;
     function GetPopulation: IOptNullInteger;
+    property Name: IOptString read GetName;
+    property State: IOptString read GetState;
+    property Population: IOptNullInteger read GetPopulation;
   end;
 
 {$M+}
@@ -81,7 +96,6 @@ type
     FState: IOptString;
   public
     function GetState: IOptString;
-    procedure SetState(const AValue: IOptString);
   published
     property State: IOptString read FState write FState;
   end;
@@ -104,6 +118,11 @@ type
   private
     FCode, FName, FState: string;
     FPopulation: INullInteger;
+  public
+    function GetCode: string;
+    function GetName: string;
+    function GetState: string;
+    function GetPopulation: INullInteger;
   published
     property Code: string read FCode write FCode;
     property Name: string read FName write FName;
@@ -294,9 +313,26 @@ begin
   Result := TOptionals.Safe(FState);
 end;
 
-procedure TCityFind.SetState(const AValue: IOptString);
+{ TCity }
+
+function TCity.GetCode: string;
 begin
-  FState := AValue;
+  Result := FCode;
+end;
+
+function TCity.GetName: string;
+begin
+  Result := FName;
+end;
+
+function TCity.GetState: string;
+begin
+  Result := FState;
+end;
+
+function TCity.GetPopulation: INullInteger;
+begin
+  Result := TOptionals.Safe(FPopulation);
 end;
 
 { TCityRepository }
@@ -391,29 +427,29 @@ var
 begin
   // The limits the OpenAPI document declares (TApiSchema.Describe below): the
   // document describes them, only this enforces them.
-  LCode := Trim(ACity.GetCode);
+  LCode := Trim(ACity.Code);
   if not IsDigits(LCode, 7) then
     raise EValidationException.Create('"code" must be the 7-digit IBGE code.');
-  if Trim(ACity.GetName) = '' then
+  if Trim(ACity.Name) = '' then
     raise EValidationException.Create('"name" is required.');
-  if PaCharCount(Trim(ACity.GetName)) > 100 then
+  if PaCharCount(Trim(ACity.Name)) > 100 then
     raise EValidationException.Create('"name" must have at most 100 characters.');
-  if Length(Trim(ACity.GetState)) <> 2 then
+  if Length(Trim(ACity.State)) <> 2 then
     raise EValidationException.Create('"state" must have 2 letters.');
-  if ACity.GetPopulation.HasValue and (ACity.GetPopulation.Value < 0) then
+  if ACity.Population.HasValue and (ACity.Population.Value < 0) then
     raise EValidationException.Create('"population" can''t be negative.');
 
   LScope := FFactory.GetPool.AcquireQuery(LQuery);
   LScope.StartTransaction;
   try
     LQuery.Sql := FFactory.SqlLoader['CITY.INSERT']
-      .ProcessTag('POPULATION', ACity.GetPopulation.HasValue).SQL;
+      .ProcessTag('POPULATION', ACity.Population.HasValue).SQL;
     LQuery.Params.Strings['CODE'] := LCode;
-    LQuery.Params.Strings['NAME'] := Trim(ACity.GetName);
-    LQuery.Params.Strings['STATE'] := UpperCase(Trim(ACity.GetState));
+    LQuery.Params.Strings['NAME'] := Trim(ACity.Name);
+    LQuery.Params.Strings['STATE'] := UpperCase(Trim(ACity.State));
     // No if: absent, the column and its parameter are gone (the database
     // writes NULL); present, the value is bound.
-    LQuery.Params.OptIntegers['POPULATION'] := ACity.GetPopulation;
+    LQuery.Params.OptIntegers['POPULATION'] := ACity.Population;
     LQuery.ExecSql; // EConstraintViolationException (cvUnique) -> 409
     LScope.Commit;
   except
@@ -435,9 +471,9 @@ begin
   // (pascal-common-faa 1.13.0): an absent member stays absent, so there is
   // no if here. HasValue is "the member came": for population, with a
   // number or null.
-  LName := TOptionals.Normalize(APatch.GetName, TNorm.CityName);
-  LState := TOptionals.Normalize(APatch.GetState, TNorm.StateCode);
-  LPopulation := APatch.GetPopulation;
+  LName := TOptionals.Normalize(APatch.Name, TNorm.CityName);
+  LState := TOptionals.Normalize(APatch.State, TNorm.StateCode);
+  LPopulation := APatch.Population;
   // The same limits as Insert, for the members that came.
   if LName.HasValue and (LName.Value = '') then
     raise EValidationException.Create('"name" can''t be empty.');

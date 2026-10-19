@@ -23,6 +23,9 @@ type
     function GetName: string;
     function GetState: string;
     function GetPopulation: IOptInteger;
+    property Name: string read GetName;
+    property State: string read GetState;
+    property Population: IOptInteger read GetPopulation;
   end;
 
 {$M+}
@@ -225,14 +228,14 @@ function AddCity(const ACity: ICityInsert): string;
 var
   LCity: TCity;
 begin
-  if Trim(ACity.GetName) = '' then
+  if Trim(ACity.Name) = '' then
     raise EValidationException.Create('"name" is required.');
-  if Length(ACity.GetState) <> 2 then
+  if Length(ACity.State) <> 2 then
     raise EValidationException.Create('"state" must have 2 letters.');
-  LCity.Name := Trim(ACity.GetName);
-  LCity.State := UpperCase(ACity.GetState);
-  if ACity.GetPopulation.HasValue then
-    LCity.Population := ACity.GetPopulation.Value
+  LCity.Name := Trim(ACity.Name);
+  LCity.State := UpperCase(ACity.State);
+  if ACity.Population.HasValue then
+    LCity.Population := ACity.Population.Value
   else
     LCity.Population := 0;
   GLock.Enter;

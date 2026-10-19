@@ -27,6 +27,7 @@ type
   ICityFind = interface(IFindPaginationDTOBase)
     ['{C462411C-51C3-4872-8E57-A9E20211C892}']
     function GetState: IOptString;
+    property State: IOptString read GetState;
   end;
 
   ICityPage = interface(IResponsePaginationDTOBase)
@@ -79,7 +80,7 @@ begin
   TAssert.AssertEquals(15, LFind.Limit.Value);
   TAssert.AssertEquals('-name', LFind.OrderBy.Value);
   TAssert.AssertEquals('São', LFind.Search.Value);
-  TAssert.AssertEquals('SP', LFind.GetState.Value);
+  TAssert.AssertEquals('SP', LFind.State.Value);
 end;
 
 procedure TDtoTests.Find_AbsentMembers_AreSafeAndEmpty;
@@ -92,7 +93,7 @@ begin
   TAssert.AssertTrue('Limit', Assigned(LFind.Limit) and not LFind.Limit.HasValue);
   TAssert.AssertTrue('OrderBy', Assigned(LFind.OrderBy) and not LFind.OrderBy.HasValue);
   TAssert.AssertTrue('Search', Assigned(LFind.Search) and not LFind.Search.HasValue);
-  TAssert.AssertTrue('State', Assigned(LFind.GetState) and not LFind.GetState.HasValue);
+  TAssert.AssertTrue('State', Assigned(LFind.State) and not LFind.State.HasValue);
 end;
 
 procedure TDtoTests.Find_FeedsPageRequest;
@@ -116,12 +117,17 @@ end;
 
 procedure TDtoTests.Page_ToJson_InheritedMembers;
 var
+  LFill: TCityPage;
   LPage: ICityPage;
 begin
-  LPage := TCityPage.Create;
-  LPage.Page := 2;
-  LPage.Limit := 10;
-  LPage.Total := 25;
+  // Filled through the class while the interface holds it: the interface
+  // is read-only.
+  LFill := TCityPage.Create;
+  LPage := LFill;
+  LFill.Page := 2;
+  LFill.Limit := 10;
+  LFill.Total := 25;
+  TAssert.AssertEquals(25, LPage.Total);
   TAssert.AssertEquals('{"page":2,"limit":10,"total":25}',
     TJsonMapper.Shared.ToJson<ICityPage>(LPage));
 end;

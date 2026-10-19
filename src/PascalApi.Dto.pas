@@ -16,6 +16,8 @@
       ['{...}']
       function GetStatus: string;
       function GetNote: INullString;
+      property Status: string read GetStatus;
+      property Note: INullString read GetNote;
     end;
 
     {$M+}
@@ -35,6 +37,24 @@
     initialization
       TJsonMapper.Shared.RegisterMapping<IOrderResponse, TOrderResponse>;
 
+  The interface mirrors every published property of the class, with the
+  same name and type, READ-ONLY through its getter: whoever holds only the
+  interface sees every member and can't change it. The mapper reads the
+  class, never the interface, so the mirror changes nothing on the wire.
+
+  The code that creates a DTO fills it through the class, while an interface
+  variable holds it (the reference count lives in the interface; an object
+  kept only in a class variable is freed by the first interface that lets it
+  go):
+
+    LOrder := TOrderResponse.Create;
+    Result := LOrder;                  // the interface holds it
+    LOrder.Status := 'paid';           // edited through the class
+
+  Code that receives the interface treats the DTO as a value: a different
+  value goes into a local variable or a new DTO, never into the one received
+  (no (AOrder as TObject) as TOrderResponse).
+
   The optional types (IOptXxx/INullXxx/IOptNullXxx) are pascal-common-faa's;
   the program uses PascalCommon.JsonMapper.Optionals once to register their
   converter. Getters of optional fields return TOptionals.Safe(FField), so
@@ -42,7 +62,8 @@
 
   Ported from Common.DTO.Base (delphi-api-infra-faa). Differences: the
   properties are published (there they were public, read by Delphi's
-  extended RTTI), the interfaces have their own GUIDs, and
+  extended RTTI), the interfaces have their own GUIDs and are read-only
+  (0.18.0; the setters of the paged bases are gone), and
   TResponsePaginationDTOBase.Total is Int64, like PascalDb.Paging's
   TPageMeta.Total. *)
 
@@ -97,14 +118,10 @@ type
     function GetLimit: IOptInteger;
     function GetOrderBy: IOptString;
     function GetSearch: IOptString;
-    procedure SetPage(const AValue: IOptInteger);
-    procedure SetLimit(const AValue: IOptInteger);
-    procedure SetOrderBy(const AValue: IOptString);
-    procedure SetSearch(const AValue: IOptString);
-    property Page: IOptInteger read GetPage write SetPage;
-    property Limit: IOptInteger read GetLimit write SetLimit;
-    property OrderBy: IOptString read GetOrderBy write SetOrderBy;
-    property Search: IOptString read GetSearch write SetSearch;
+    property Page: IOptInteger read GetPage;
+    property Limit: IOptInteger read GetLimit;
+    property OrderBy: IOptString read GetOrderBy;
+    property Search: IOptString read GetSearch;
   end;
 
   /// Paging metadata of a response; the items are a member of the concrete
@@ -114,12 +131,9 @@ type
     function GetPage: Integer;
     function GetLimit: Integer;
     function GetTotal: Int64;
-    procedure SetPage(AValue: Integer);
-    procedure SetLimit(AValue: Integer);
-    procedure SetTotal(AValue: Int64);
-    property Page: Integer read GetPage write SetPage;
-    property Limit: Integer read GetLimit write SetLimit;
-    property Total: Int64 read GetTotal write SetTotal;
+    property Page: Integer read GetPage;
+    property Limit: Integer read GetLimit;
+    property Total: Int64 read GetTotal;
   end;
 
 {$M+}
@@ -149,10 +163,6 @@ type
     function GetLimit: IOptInteger;
     function GetOrderBy: IOptString;
     function GetSearch: IOptString;
-    procedure SetPage(const AValue: IOptInteger);
-    procedure SetLimit(const AValue: IOptInteger);
-    procedure SetOrderBy(const AValue: IOptString);
-    procedure SetSearch(const AValue: IOptString);
   published
     // Published here, on the class: the mapper reads the class, never the
     // interface, and descendants inherit them.
@@ -171,9 +181,6 @@ type
     function GetPage: Integer;
     function GetLimit: Integer;
     function GetTotal: Int64;
-    procedure SetPage(AValue: Integer);
-    procedure SetLimit(AValue: Integer);
-    procedure SetTotal(AValue: Int64);
   published
     property Page: Integer read FPage write FPage;
     property Limit: Integer read FLimit write FLimit;
@@ -205,26 +212,6 @@ begin
   Result := TOptionals.Safe(FSearch);
 end;
 
-procedure TFindPaginationDTOBase.SetPage(const AValue: IOptInteger);
-begin
-  FPage := AValue;
-end;
-
-procedure TFindPaginationDTOBase.SetLimit(const AValue: IOptInteger);
-begin
-  FLimit := AValue;
-end;
-
-procedure TFindPaginationDTOBase.SetOrderBy(const AValue: IOptString);
-begin
-  FOrderBy := AValue;
-end;
-
-procedure TFindPaginationDTOBase.SetSearch(const AValue: IOptString);
-begin
-  FSearch := AValue;
-end;
-
 { TResponsePaginationDTOBase }
 
 function TResponsePaginationDTOBase.GetPage: Integer;
@@ -240,21 +227,6 @@ end;
 function TResponsePaginationDTOBase.GetTotal: Int64;
 begin
   Result := FTotal;
-end;
-
-procedure TResponsePaginationDTOBase.SetPage(AValue: Integer);
-begin
-  FPage := AValue;
-end;
-
-procedure TResponsePaginationDTOBase.SetLimit(AValue: Integer);
-begin
-  FLimit := AValue;
-end;
-
-procedure TResponsePaginationDTOBase.SetTotal(AValue: Int64);
-begin
-  FTotal := AValue;
 end;
 
 end.

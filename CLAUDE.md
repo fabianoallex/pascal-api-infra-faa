@@ -84,6 +84,14 @@ don't flow between the two automatically. Each unit's header says what changed i
 Swagger attributes (`[SwagProp]` etc.) don't exist here: FPC 3.2.2 has no custom attributes at
 all (measured, skill `references/rtti-gotchas.md`).
 
+**A DTO's interface mirrors its class, read-only** (user's decision, 2026-10-19; 0.18.0): every
+published property of the class has a property of the same name and type in the interface,
+read through its getter (`property Name: string read GetName;`), never `write`. The code that
+creates a DTO fills it through the class while an interface variable holds it
+(`Result := LCity; LCity.Name := ...`); code that receives the interface treats it as a value
+(a new DTO or a local, never `as TObject`). The convention and the reasons:
+`PascalApi.Dto`'s header and `docs/guide/dtos-json.md` step 1. The mapper reads only the class.
+
 ---
 
 ## Dependencies
