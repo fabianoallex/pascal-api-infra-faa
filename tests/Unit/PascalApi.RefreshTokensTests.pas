@@ -78,6 +78,8 @@ type
     [Test] procedure RevokeUser_EndsEveryLogin;
     [Test] procedure Security_WithoutScope;
     [Test] procedure DbStore_SqlAndParameters;
+    [Test] procedure MemoryStore_MarkUsedAndAdd_OnlyTheFirst;
+    [Test] procedure DbStore_MarkUsedAndAdd_InsertsOnlyWhenMarked;
   end;
 
 implementation
@@ -451,6 +453,64 @@ begin
   TAssert.AssertEquals('f1', LMock.LastExecution('REFRESH.REVOKE_FAMILY').AsString('FAMILY_ID'));
   LStore.RevokeUser('acme', 'u1', T0);
   TAssert.AssertEquals('u1', LMock.LastExecution('REFRESH.REVOKE_USER').AsString('USER_ID'));
+end;
+
+// The rotation in one hold of the store (0.20.1): the first call marks the
+// token and stores the next; a second call for the same token stores nothing.
+procedure TRefreshTokensTests.MemoryStore_MarkUsedAndAdd_OnlyTheFirst;
+var
+  LMemory: TMemoryRefreshTokenStore;
+  LStore: IRefreshTokenStore;
+  LAtomic: IRefreshTokenAtomicRotation;
+  LFirst, LNext: TRefreshTokenRecord;
+begin
+  LMemory := TMemoryRefreshTokenStore.Create;
+  LStore := LMemory;
+  TAssert.AssertTrue('the memory store has the atomic rotation',
+    Supports(LStore, IRefreshTokenAtomicRotation, LAtomic));
+  LFirst.Id := 'id1';
+  LFirst.UserId := 'u1';
+  LFirst.FamilyId := 'f1';
+  LFirst.ExpiresAt := T0 + 60;
+  LFirst.Used := False;
+  LFirst.Revoked := False;
+  LStore.Add('acme', 'h1', LFirst, T0);
+  LNext := LFirst;
+  LNext.Id := 'id2';
+  TAssert.AssertTrue('the first marks and stores', LAtomic.MarkUsedAndAdd('acme', 'id1', T0, 'h2', LNext));
+  LNext.Id := 'id3';
+  TAssert.AssertFalse('the second finds it used', LAtomic.MarkUsedAndAdd('acme', 'id1', T0, 'h3', LNext));
+  TAssert.AssertEquals('nothing stored by the second', 2, LMemory.Count);
+end;
+
+procedure TRefreshTokensTests.DbStore_MarkUsedAndAdd_InsertsOnlyWhenMarked;
+var
+  LMock: TMockDBFactory;
+  LFactory: IDBFactory;
+  LStore: IRefreshTokenStore;
+  LAtomic: IRefreshTokenAtomicRotation;
+  LNext: TRefreshTokenRecord;
+begin
+  LMock := TMockDBFactory.Create;
+  LFactory := LMock;
+  LStore := TDbRefreshTokenStore.Create(LFactory);
+  TAssert.AssertTrue('the database store has the atomic rotation',
+    Supports(LStore, IRefreshTokenAtomicRotation, LAtomic));
+  LNext.Id := 'id2';
+  LNext.UserId := 'u1';
+  LNext.FamilyId := 'f1';
+  LNext.ExpiresAt := T0 + 60;
+  LNext.Used := False;
+  LNext.Revoked := False;
+  LMock.SetRowsAffected('REFRESH.MARK_USED', 0);
+  TAssert.AssertFalse('no row marked: another request did',
+    LAtomic.MarkUsedAndAdd('acme', 'id1', T0, 'h2', LNext));
+  TAssert.AssertEquals('then no insert', 0, LMock.ExecutionCount('REFRESH.INSERT'));
+  LMock.SetRowsAffected('REFRESH.MARK_USED', 1);
+  TAssert.AssertTrue('one row marked', LAtomic.MarkUsedAndAdd('acme', 'id1', T0, 'h2', LNext));
+  TAssert.AssertEquals('id1', LMock.LastExecution('REFRESH.MARK_USED').AsString('ID'));
+  TAssert.AssertEquals('h2', LMock.LastExecution('REFRESH.INSERT').AsString('TOKEN_HASH'));
+  TAssert.AssertEquals('id2', LMock.LastExecution('REFRESH.INSERT').AsString('ID'));
 end;
 
 initialization

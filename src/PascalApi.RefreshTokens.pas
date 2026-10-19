@@ -24,10 +24,19 @@ unit PascalApi.RefreshTokens;
     included, and OnSecurity hears of it. Two rotations racing on one token
     are the same case: the store's MarkUsed is True for one of them only
     (an UPDATE ... WHERE USED_AT IS NULL that must match one row), and the
-    other revokes the family. The winner reads its spent token again after
+    other revokes the family. A store that can (IRefreshTokenAtomicRotation:
+    both stores here) marks the token used and stores the next one in one
+    transaction: the loser's MarkUsed waits for the winner's row lock, finds
+    the token used, and its revoke, a later statement, sees the next token.
+    With any other store the winner reads its spent token again after
     storing the next one: when the loser's revoke came first, the winner
     revokes the family too and is refused (rrRaced), so no token of a
     revoked family is ever handed out; both answers can then be refusals.
+    That re-read alone wasn't enough on PostgreSQL (0.20.1): under READ
+    COMMITTED the loser's revoke takes its snapshot when it starts, so it
+    can miss a next token committed while it runs and commit after the
+    winner's re-read. pascal-agenda-faa's race scenario saw the next token
+    survive in 4 of 7 runs on Linux; SQLite, one writer at a time, never.
   - Before a token is marked used, the application's check says whether the
     user may still have one (TRefreshUserCheck); a user gone or inactive
     revokes the family.
@@ -38,8 +47,9 @@ unit PascalApi.RefreshTokens;
     API answers the same 401 whatever happened.
   - The store is an interface (IRefreshTokenStore): TDbRefreshTokenStore on
     the application's named SQL, TMemoryRefreshTokenStore for tests. Each
-    store call is its own transaction: when issuing the next token fails
-    after the old one was marked, the holder logs in again.
+    store call is its own transaction (MarkUsedAndAdd included): when
+    issuing the next token fails after the old one was marked, the holder
+    logs in again.
 
   Time is TJwt.UnixNow (pascal-common-faa's TClock), so tests set the clock. *)
 
@@ -99,9 +109,22 @@ type
     function RevokeUser(const AScope, AUserId: string; AAt: Int64): Integer;
   end;
 
+  /// Optional, next to IRefreshTokenStore: the rotation as one transaction
+  /// (the unit's header says why). TRefreshTokens.Rotate uses it when the
+  /// store has it (Supports), else MarkUsed then Add.
+  IRefreshTokenAtomicRotation = interface
+    ['{628DAAA4-A5C0-4C16-B014-7D9235B0FEDE}']
+    /// MarkUsed(AScope, AUsedId, AAt) and, only when that marked it,
+    /// Add(AScope, ANextHash, ANext, AAt), all or nothing: False, and
+    /// nothing stored, when the token was used or revoked already.
+    function MarkUsedAndAdd(const AScope, AUsedId: string; AAt: Int64;
+      const ANextHash: string; const ANext: TRefreshTokenRecord): Boolean;
+  end;
+
   /// Tokens in this process only: tests, or one instance that accepts
   /// losing every login on restart. Thread-safe.
-  TMemoryRefreshTokenStore = class(TInterfacedObject, IRefreshTokenStore)
+  TMemoryRefreshTokenStore = class(TInterfacedObject, IRefreshTokenStore,
+    IRefreshTokenAtomicRotation)
   private type
     TEntry = record
       Scope: string;
@@ -111,6 +134,9 @@ type
   private
     FLock: TCriticalSection;
     FEntries: array of TEntry;
+    // Under FLock, held by the caller.
+    procedure AddLocked(const AScope, AHash: string; const ARecord: TRefreshTokenRecord);
+    function MarkUsedLocked(const AScope, AId: string): Boolean;
   public
     constructor Create;
     destructor Destroy; override;
@@ -120,6 +146,8 @@ type
     function MarkUsed(const AScope, AId: string; AAt: Int64): Boolean;
     function RevokeFamily(const AScope, AFamilyId: string; AAt: Int64): Integer;
     function RevokeUser(const AScope, AUserId: string; AAt: Int64): Integer;
+    function MarkUsedAndAdd(const AScope, AUsedId: string; AAt: Int64;
+      const ANextHash: string; const ANext: TRefreshTokenRecord): Boolean;
     function Count: Integer;
   end;
 
@@ -133,13 +161,18 @@ type
   ///   AND REVOKED_AT IS NULL": the rows it changes decide the race;
   /// - ARevokeFamilySql: :TENANT_ID, :FAMILY_ID, :REVOKED_AT, "REVOKED_AT IS
   ///   NULL"; ARevokeUserSql the same with :USER_ID.
-  /// TOKEN_HASH should be unique within TENANT_ID.
-  TDbRefreshTokenStore = class(TInterfacedObject, IRefreshTokenStore)
+  /// TOKEN_HASH should be unique within TENANT_ID. MarkUsedAndAdd runs
+  /// AMarkUsedSql and AInsertSql in one transaction.
+  TDbRefreshTokenStore = class(TInterfacedObject, IRefreshTokenStore,
+    IRefreshTokenAtomicRotation)
   private
     FFactory: IDBFactory;
     FInsertSql, FByHashSql, FMarkUsedSql, FRevokeFamilySql, FRevokeUserSql: string;
     function Exec(const ASqlName, AScope, AParam, AValue, ATimeParam: string;
       ATime: Int64): Int64;
+    procedure BindInsert(const AQuery: IQuery; const AScope, AHash: string;
+      const ARecord: TRefreshTokenRecord; ACreatedAt: Int64);
+    procedure BindMarkUsed(const AQuery: IQuery; const AScope, AId: string; AAt: Int64);
   public
     constructor Create(const AFactory: IDBFactory;
       const AInsertSql: string = 'REFRESH.INSERT';
@@ -153,6 +186,8 @@ type
     function MarkUsed(const AScope, AId: string; AAt: Int64): Boolean;
     function RevokeFamily(const AScope, AFamilyId: string; AAt: Int64): Integer;
     function RevokeUser(const AScope, AUserId: string; AAt: Int64): Integer;
+    function MarkUsedAndAdd(const AScope, AUsedId: string; AAt: Int64;
+      const ANextHash: string; const ANext: TRefreshTokenRecord): Boolean;
   end;
 
   /// Whether AUserId of AScope may still refresh (exists, active).
@@ -178,6 +213,10 @@ type
     function Find(const AToken: string; out AScope: string;
       out ARecord: TRefreshTokenRecord): Boolean;
     procedure RevokeFamilyOf(const AScope, AFamilyId, AReason: string);
+    /// A new token of AFamilyId ('' starts a family): its text in AToken,
+    /// its record (not stored) in Result.
+    function NextRecord(const AScope, AUserId, AFamilyId: string;
+      out AToken: string): TRefreshTokenRecord;
   public
     /// ALifetimeSeconds: how long a token is valid. AOnSecurity hears of a
     /// family revoked for a reuse, a race or a user gone (one line each).
@@ -251,20 +290,40 @@ begin
   inherited;
 end;
 
-procedure TMemoryRefreshTokenStore.Add(const AScope, AHash: string;
-  const ARecord: TRefreshTokenRecord; ACreatedAt: Int64);
+procedure TMemoryRefreshTokenStore.AddLocked(const AScope, AHash: string;
+  const ARecord: TRefreshTokenRecord);
 var
   I: Integer;
 begin
+  for I := 0 to High(FEntries) do
+    if (FEntries[I].Scope = AScope) and (FEntries[I].Hash = AHash) then
+      raise EArgumentException.Create('TMemoryRefreshTokenStore.Add: the hash is already stored');
+  SetLength(FEntries, Length(FEntries) + 1);
+  FEntries[High(FEntries)].Scope := AScope;
+  FEntries[High(FEntries)].Hash := AHash;
+  FEntries[High(FEntries)].Rec := ARecord;
+end;
+
+function TMemoryRefreshTokenStore.MarkUsedLocked(const AScope, AId: string): Boolean;
+var
+  I: Integer;
+begin
+  Result := False;
+  for I := 0 to High(FEntries) do
+    if (FEntries[I].Scope = AScope) and (FEntries[I].Rec.Id = AId) then
+    begin
+      Result := not FEntries[I].Rec.Used and not FEntries[I].Rec.Revoked;
+      FEntries[I].Rec.Used := True;
+      Exit;
+    end;
+end;
+
+procedure TMemoryRefreshTokenStore.Add(const AScope, AHash: string;
+  const ARecord: TRefreshTokenRecord; ACreatedAt: Int64);
+begin
   FLock.Enter;
   try
-    for I := 0 to High(FEntries) do
-      if (FEntries[I].Scope = AScope) and (FEntries[I].Hash = AHash) then
-        raise EArgumentException.Create('TMemoryRefreshTokenStore.Add: the hash is already stored');
-    SetLength(FEntries, Length(FEntries) + 1);
-    FEntries[High(FEntries)].Scope := AScope;
-    FEntries[High(FEntries)].Hash := AHash;
-    FEntries[High(FEntries)].Rec := ARecord;
+    AddLocked(AScope, AHash, ARecord);
   finally
     FLock.Leave;
   end;
@@ -290,19 +349,10 @@ begin
 end;
 
 function TMemoryRefreshTokenStore.MarkUsed(const AScope, AId: string; AAt: Int64): Boolean;
-var
-  I: Integer;
 begin
-  Result := False;
   FLock.Enter;
   try
-    for I := 0 to High(FEntries) do
-      if (FEntries[I].Scope = AScope) and (FEntries[I].Rec.Id = AId) then
-      begin
-        Result := not FEntries[I].Rec.Used and not FEntries[I].Rec.Revoked;
-        FEntries[I].Rec.Used := True;
-        Exit;
-      end;
+    Result := MarkUsedLocked(AScope, AId);
   finally
     FLock.Leave;
   end;
@@ -343,6 +393,20 @@ begin
         FEntries[I].Rec.Revoked := True;
         Inc(Result);
       end;
+  finally
+    FLock.Leave;
+  end;
+end;
+
+function TMemoryRefreshTokenStore.MarkUsedAndAdd(const AScope, AUsedId: string;
+  AAt: Int64; const ANextHash: string; const ANext: TRefreshTokenRecord): Boolean;
+begin
+  // One hold of the lock: nobody sees the token used without its next one.
+  FLock.Enter;
+  try
+    Result := MarkUsedLocked(AScope, AUsedId);
+    if Result then
+      AddLocked(AScope, ANextHash, ANext);
   finally
     FLock.Leave;
   end;
@@ -394,6 +458,28 @@ begin
   end;
 end;
 
+procedure TDbRefreshTokenStore.BindInsert(const AQuery: IQuery; const AScope, AHash: string;
+  const ARecord: TRefreshTokenRecord; ACreatedAt: Int64);
+begin
+  AQuery.Sql := FFactory.SqlLoader[FInsertSql].SQL;
+  AQuery.Params.Strings['TENANT_ID'] := AScope;
+  AQuery.Params.Strings['ID'] := ARecord.Id;
+  AQuery.Params.Strings['TOKEN_HASH'] := AHash;
+  AQuery.Params.Strings['USER_ID'] := ARecord.UserId;
+  AQuery.Params.Strings['FAMILY_ID'] := ARecord.FamilyId;
+  AQuery.Params.Int64s['CREATED_AT'] := ACreatedAt;
+  AQuery.Params.Int64s['EXPIRES_AT'] := ARecord.ExpiresAt;
+end;
+
+procedure TDbRefreshTokenStore.BindMarkUsed(const AQuery: IQuery; const AScope, AId: string;
+  AAt: Int64);
+begin
+  AQuery.Sql := FFactory.SqlLoader[FMarkUsedSql].SQL;
+  AQuery.Params.Strings['TENANT_ID'] := AScope;
+  AQuery.Params.Strings['ID'] := AId;
+  AQuery.Params.Int64s['USED_AT'] := AAt;
+end;
+
 procedure TDbRefreshTokenStore.Add(const AScope, AHash: string;
   const ARecord: TRefreshTokenRecord; ACreatedAt: Int64);
 var
@@ -403,16 +489,36 @@ begin
   LTx := FFactory.GetPool.AcquireQuery(LQuery);
   LTx.StartTransaction;
   try
-    LQuery.Sql := FFactory.SqlLoader[FInsertSql].SQL;
-    LQuery.Params.Strings['TENANT_ID'] := AScope;
-    LQuery.Params.Strings['ID'] := ARecord.Id;
-    LQuery.Params.Strings['TOKEN_HASH'] := AHash;
-    LQuery.Params.Strings['USER_ID'] := ARecord.UserId;
-    LQuery.Params.Strings['FAMILY_ID'] := ARecord.FamilyId;
-    LQuery.Params.Int64s['CREATED_AT'] := ACreatedAt;
-    LQuery.Params.Int64s['EXPIRES_AT'] := ARecord.ExpiresAt;
+    BindInsert(LQuery, AScope, AHash, ARecord, ACreatedAt);
     LQuery.ExecSql;
     LTx.Commit;
+  except
+    LTx.Rollback;
+    raise;
+  end;
+end;
+
+function TDbRefreshTokenStore.MarkUsedAndAdd(const AScope, AUsedId: string; AAt: Int64;
+  const ANextHash: string; const ANext: TRefreshTokenRecord): Boolean;
+var
+  LQuery: IQuery;
+  LTx: IScopeTransaction;
+begin
+  LTx := FFactory.GetPool.AcquireQuery(LQuery);
+  LTx.StartTransaction;
+  try
+    // The UPDATE takes the row's lock until the commit: a request racing on
+    // the same token waits here, then matches no row.
+    BindMarkUsed(LQuery, AScope, AUsedId, AAt);
+    Result := LQuery.ExecSql = 1;
+    if Result then
+    begin
+      BindInsert(LQuery, AScope, ANextHash, ANext, AAt);
+      LQuery.ExecSql;
+      LTx.Commit;
+    end
+    else
+      LTx.Rollback;
   except
     LTx.Rollback;
     raise;
@@ -539,24 +645,28 @@ begin
   Result := LowerCase(PcBytesToHex(PcDigestToBytes(PcSha256(PcStringToUtf8Bytes(AToken)))));
 end;
 
-function TRefreshTokens.Issue(const AScope, AUserId, AFamilyId: string): string;
-var
-  LRecord: TRefreshTokenRecord;
-  LNow: Int64;
+function TRefreshTokens.NextRecord(const AScope, AUserId, AFamilyId: string;
+  out AToken: string): TRefreshTokenRecord;
 begin
   if AUserId = '' then
     raise EArgumentException.Create('TRefreshTokens.Issue: AUserId is empty');
-  Result := NewToken(AScope);
-  LNow := TJwt.UnixNow;
-  LRecord.Id := NewId;
-  LRecord.UserId := AUserId;
-  LRecord.FamilyId := AFamilyId;
-  if LRecord.FamilyId = '' then
-    LRecord.FamilyId := NewId;
-  LRecord.ExpiresAt := LNow + FLifetime;
-  LRecord.Used := False;
-  LRecord.Revoked := False;
-  FStore.Add(AScope, Hash(Result), LRecord, LNow);
+  AToken := NewToken(AScope);
+  Result.Id := NewId;
+  Result.UserId := AUserId;
+  Result.FamilyId := AFamilyId;
+  if Result.FamilyId = '' then
+    Result.FamilyId := NewId;
+  Result.ExpiresAt := TJwt.UnixNow + FLifetime;
+  Result.Used := False;
+  Result.Revoked := False;
+end;
+
+function TRefreshTokens.Issue(const AScope, AUserId, AFamilyId: string): string;
+var
+  LRecord: TRefreshTokenRecord;
+begin
+  LRecord := NextRecord(AScope, AUserId, AFamilyId, Result);
+  FStore.Add(AScope, Hash(Result), LRecord, TJwt.UnixNow);
 end;
 
 function TRefreshTokens.Find(const AToken: string; out AScope: string;
@@ -579,7 +689,8 @@ function TRefreshTokens.Rotate(const AToken: string;
   const ACheckUser: TRefreshUserCheck): TRotatedRefreshToken;
 var
   LScope: string;
-  LRecord: TRefreshTokenRecord;
+  LRecord, LNext: TRefreshTokenRecord;
+  LAtomic: IRefreshTokenAtomicRotation;
 begin
   if not TryParse(AToken, LScope) then
     raise ERefreshTokenRejected.Create(rrMalformed);
@@ -599,6 +710,21 @@ begin
     RevokeFamilyOf(LScope, LRecord.FamilyId, 'the user is gone or inactive');
     raise ERefreshTokenRejected.Create(rrUserGone);
   end;
+  Result.Scope := LScope;
+  Result.UserId := LRecord.UserId;
+  Result.FamilyId := LRecord.FamilyId;
+  if Supports(FStore, IRefreshTokenAtomicRotation, LAtomic) then
+  begin
+    // Marked and the next stored together: a request that lost waited for
+    // this commit, so its revoke (below, in that request) sees the next one.
+    LNext := NextRecord(LScope, LRecord.UserId, LRecord.FamilyId, Result.Token);
+    if not LAtomic.MarkUsedAndAdd(LScope, LRecord.Id, TJwt.UnixNow, Hash(Result.Token), LNext) then
+    begin
+      RevokeFamilyOf(LScope, LRecord.FamilyId, 'two refreshes raced on one token');
+      raise ERefreshTokenRejected.Create(rrRaced);
+    end;
+    Exit;
+  end;
   if not FStore.MarkUsed(LScope, LRecord.Id, TJwt.UnixNow) then
   begin
     // Another request used it between the read and here.
@@ -606,9 +732,6 @@ begin
     raise ERefreshTokenRejected.Create(rrRaced);
   end;
   Result.Token := Issue(LScope, LRecord.UserId, LRecord.FamilyId);
-  Result.Scope := LScope;
-  Result.UserId := LRecord.UserId;
-  Result.FamilyId := LRecord.FamilyId;
   // The request that lost MarkUsed revokes the family, and its revoke can
   // land before Issue stored the next token, which would then survive it
   // (0.19.0 returned it). Read the spent token again: revoked means the

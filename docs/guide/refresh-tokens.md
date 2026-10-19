@@ -194,10 +194,18 @@ and only the request whose `UPDATE` changed one row wins. The database serialize
 revokes the family (`rrRaced`).
 
 The loser's revoke can land before the winner has stored its next token; that token would then
-survive the revoke. So after storing it, the winner reads the spent token again, and when it
-finds it revoked, it revokes the family again and is refused too (`rrRaced`). No token of a
-revoked family is ever handed out (`Rotate_Raced_LoserRevokedBeforeTheNextWasStored`; 0.19.0
-returned that token: found while writing sample 01). Over HTTP the scenarios send the two
+survive the revoke. Since 0.20.1 both stores here mark the token and store the next one in **one
+transaction** (`IRefreshTokenAtomicRotation.MarkUsedAndAdd`, used by `Rotate` when the store has
+it): the loser's `UPDATE` waits for the winner's row lock, matches no row once the winner
+commits, and its revoke, a later statement, sees the next token. A store of your own without
+that interface gets the older guard: after storing the next token the winner reads the spent
+token again, and when it finds it revoked, it revokes the family again and is refused too
+(`rrRaced`; `Rotate_Raced_LoserRevokedBeforeTheNextWasStored`; 0.19.0 returned that token: found
+while writing sample 01). That guard holds on SQLite (one writer at a time) but not on
+PostgreSQL: under `READ COMMITTED` the loser's revoke takes its snapshot when it starts, so it
+can miss a next token committed while it runs and commit after the winner's re-read.
+pascal-agenda-faa's race scenario saw the winner's next token survive in 4 of 7 runs on Linux
+with 0.20.0. Implement `MarkUsedAndAdd` in your store if it runs on such a database. Over HTTP the scenarios send the two
 requests in parallel with curl and accept one 200 and one 401, or two 401s; never two 200s, and
 the winner's next token is refused. Measured on FPC Windows (2026-10-19): the second request
 often arrives after the first has finished, and the log then says "came back" instead of

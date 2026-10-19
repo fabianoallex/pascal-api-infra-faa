@@ -6,6 +6,27 @@ may change the API; each such change is listed here.
 
 ## [Unreleased]
 
+## [0.20.1] - 2026-10-19
+
+### Fixed
+
+- Two refreshes racing on one token could leave the winner's next token alive on PostgreSQL. The
+  0.19.1 guard (the winner reads its spent token again after storing the next one) relied on the
+  loser's family revoke either seeing the next token or committing before that re-read. Under
+  PostgreSQL's `READ COMMITTED` the revoke takes its snapshot when it starts, so it can miss a
+  token committed while it runs and still commit after the re-read. pascal-agenda-faa's race
+  scenario, on its new PostgreSQL run, saw it in 4 of 7 runs on Linux (FPC, SQLdb, PostgreSQL 17);
+  SQLite, one writer at a time, never.
+
+### Added
+
+- `IRefreshTokenAtomicRotation.MarkUsedAndAdd`: marks the token used and stores the next one in
+  one transaction. `TDbRefreshTokenStore` (its `MARK_USED` and `INSERT` SQL in one transaction)
+  and `TMemoryRefreshTokenStore` (one hold of its lock) implement it, and `TRefreshTokens.Rotate`
+  uses it when the store has it: the loser's `MarkUsed` waits for the winner's commit, and its
+  revoke sees the next token. Optional: a store of your own keeps compiling and keeps the 0.19.1
+  guard.
+
 ## [0.20.0] - 2026-10-19
 
 Validation, phase F2 of `docs/validation-design.md`: what the OpenAPI document declares is
