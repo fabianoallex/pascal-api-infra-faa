@@ -324,8 +324,13 @@ replaced) and `docs/guide/multitenancy.md`.
 
 - Asymmetric signatures (RS256, ES256) and a JWKS endpoint: they would let other systems verify
   without the secret, but need RSA or ECDSA on both compilers.
-- Refresh tokens: they make short access tokens practical, which shortens `MaxTokenLifetime`,
-  but they are an application's flow.
+- ~~Refresh tokens: they make short access tokens practical, which shortens `MaxTokenLifetime`,
+  but they are an application's flow.~~ **Reopened 2026-10-19** (the user): pascal-agenda-faa
+  wrote the flow and proved it over HTTP on both compilers; its core came here in 0.19.0 as
+  `PascalApi.RefreshTokens` (format, SHA-256 at rest, one use, a reuse or a race revoking the
+  family, the application's user check, logout, revoke a user; a pluggable store with a
+  database implementation). Login, passwords, users and the access token's claims stay in the
+  application.
 - Envelope encryption with an external KMS or Vault: possible behind `IJwtSecretCipher`, not
   shipped.
 - Announcing a new key through Redis Pub/Sub: the propagation delay (decision 4) already covers

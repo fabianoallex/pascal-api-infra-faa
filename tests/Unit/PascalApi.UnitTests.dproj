@@ -120,6 +120,7 @@
         <DCCReference Include="..\..\src\PascalApi.Pagination.pas"/>
         <DCCReference Include="..\..\src\PascalApi.QueryParams.pas"/>
         <DCCReference Include="..\..\src\PascalApi.PagedQuery.pas"/>
+        <DCCReference Include="..\..\src\PascalApi.RefreshTokens.pas"/>
         <DCCReference Include="..\..\src\PascalApi.RateLimitState.pas"/>
         <DCCReference Include="..\..\src\PascalApi.FileLog.pas"/>
         <DCCReference Include="..\..\src\PascalApi.Dto.pas"/>
@@ -138,6 +139,7 @@
         <DCCReference Include="PascalApi.PaginationTests.pas"/>
         <DCCReference Include="PascalApi.QueryParamsTests.pas"/>
         <DCCReference Include="PascalApi.PagedQueryTests.pas"/>
+        <DCCReference Include="PascalApi.RefreshTokensTests.pas"/>
         <DCCReference Include="PascalApi.RateLimitStateTests.pas"/>
         <DCCReference Include="PascalApi.FileLogTests.pas"/>
         <DCCReference Include="PascalApi.DtoTests.pas"/>

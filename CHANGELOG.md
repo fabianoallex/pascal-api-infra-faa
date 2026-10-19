@@ -29,6 +29,16 @@ pascal-jsonmapper-faa 0.7.0.
   both, each row read by a plain function (`TPageRowFunc<T>`). `TQueryArgs` is a value with
   `IParams`' setter names, each returning a changed copy. Sample 02's repository uses it;
   `PascalApi.PagedQueryTests` on pascal-db-faa's mock.
+- `PascalApi.RefreshTokens`: refresh tokens used once. `TRefreshTokens` issues
+  `<scope>.<secret>` tokens (the scope a tenant id, or none), stores only their SHA-256,
+  rotates them (the next token in the same family), and revokes the family when a used token
+  comes back, when two rotations race on one token (the store's `MarkUsed` is True for one) or
+  when the application's `TRefreshUserCheck` refuses the user; `OnSecurity` hears of each.
+  `Revoke` (logout) and `RevokeUser` (a new password, a user deactivated). Every refusal is an
+  `ERefreshTokenRejected` with a `Reason` for logs. Stores: `IRefreshTokenStore`,
+  `TDbRefreshTokenStore` on the application's named SQL (`REFRESH.*`, `TENANT_ID` = the scope),
+  `TMemoryRefreshTokenStore`. The core of pascal-agenda-faa's flow, at the user's choice;
+  `docs/jwt-keys-design.md` had left refresh tokens to the application.
 - `TApiMessages.InvalidQueryNumber` and `InvalidQueryBoolean` (English and Portuguese).
 - `TUtcDateTime` members (pascal-jsonmapper-faa 0.7.0) are `date-time` in the document.
 

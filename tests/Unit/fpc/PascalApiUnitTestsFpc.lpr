@@ -30,6 +30,7 @@ uses
   PascalApi.PaginationTests,
   PascalApi.QueryParamsTests,
   PascalApi.PagedQueryTests,
+  PascalApi.RefreshTokensTests,
   PascalApi.RateLimitStateTests,
   PascalApi.FileLogTests,
   PascalApi.DtoTests,
