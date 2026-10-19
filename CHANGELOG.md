@@ -6,6 +6,12 @@ may change the API; each such change is listed here.
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-10-18
+
+Found by pascal-agenda-faa, the library's first application: an HTTP exception built with
+`CreateFmt` answered `HTTP/1.1 0`, and a handler had no way to send a 401 with its scheme or a
+machine-readable code.
+
 ### Fixed
 
 - **`EValidationException.CreateFmt` answered `HTTP/1.1 0`.** The constructors the HTTP

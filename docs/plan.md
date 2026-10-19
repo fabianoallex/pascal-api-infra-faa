@@ -329,5 +329,5 @@ here (opt-in) only after it works there and turns out generic, by the user's dec
 | Scheduler with a lease | pascal-common-faa | needs a second case |
 | RFC 9457 errors | `TErrorHandlerMiddleware` option | needs a second case |
 | Typed HTTP client (refresh, retry, trace) | to be decided | needs a second case |
-| **Bug**: `EValidationException.CreateFmt` (any `EHttpException` subclass) leaves `StatusCode` 0, answered as `HTTP/1.1 0` | `PascalApi.Http` | found 2026-10-18 by pascal-agenda-faa (measured on FPC Windows); **fixed** (unreleased): `AfterConstruction` + `DefaultStatusCode`, and `MapException` answers a status outside 100-599 with 500 |
-| A handler's 401 with `WWW-Authenticate`, and a `code` member in error bodies | `PascalApi.Http` / error handler | found 2026-10-18 by pascal-agenda-faa (its login writes both by hand); **added** (unreleased): `EUnauthorizedException`, `Code`, `TErrorResponse.Challenge` |
+| **Bug**: `EValidationException.CreateFmt` (any `EHttpException` subclass) leaves `StatusCode` 0, answered as `HTTP/1.1 0` | `PascalApi.Http` | found 2026-10-18 by pascal-agenda-faa (measured on FPC Windows); **fixed in 0.17.0**: `AfterConstruction` + `DefaultStatusCode`, and `MapException` answers a status outside 100-599 with 500 |
+| A handler's 401 with `WWW-Authenticate`, and a `code` member in error bodies | `PascalApi.Http` / error handler | found 2026-10-18 by pascal-agenda-faa (its login writes both by hand); **added in 0.17.0**: `EUnauthorizedException`, `Code`, `TErrorResponse.Challenge` |
