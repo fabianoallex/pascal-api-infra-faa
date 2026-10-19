@@ -55,6 +55,15 @@
   JWT_KEYS_MASTER_KEY, by default a development key (DEFAULT_MASTER_KEY);
   JWT_KEYS_REQUIRE_SEALED=true refuses a secret stored in plain text.
 
+  Refresh tokens (PascalApi.RefreshTokens): kept in the control database
+  (TDbRefreshTokenStore, table REFRESH_TOKENS), so every instance on it
+  rotates them; the scope is the tenant, in clear in the token
+  ("acme.<secret>"), checked against the catalog before any lookup. The
+  access token lives ACCESS_TOKEN_SECONDS (default and at most 3600, the
+  key ring's MaxTokenSeconds), the refresh token REFRESH_TOKEN_SECONDS
+  (default 30 days). No users table: any name logs in, and a name starting
+  with "blocked" stands for a user deactivated after the login.
+
   Rate limit: one window per tenant, 1000 requests a minute, 5 for the plan
   "free" (hooli). Each access line and server span carries tenant.id
   (TLoggerMiddleware.AddField); spans go to an OpenTelemetry collector when
@@ -70,9 +79,14 @@
   "code":"tenant_suspended".
 
   Routes:
-    POST   /auth/login     public; {"tenant":"acme","user":"ana"} -> {"token":"..."}
-                           (HS256, 1 hour, no password: a sample). 404 for an
-                           unknown tenant, the same for every name; 403 suspended
+    POST   /auth/login     public; {"tenant":"acme","user":"ana"} -> {"token",
+                           "expiresIn","refreshToken","refreshExpiresIn"} (no
+                           password: a sample). 404 for an unknown tenant, the
+                           same for every name; 403 suspended
+    POST   /auth/refresh   public; {"refreshToken":"acme.<secret>"} -> the next
+                           pair. 401 invalid_refresh_token for any reason (an
+                           unknown tenant too); 403 suspended
+    POST   /auth/logout    public; {"refreshToken":"..."} -> 204, whatever the token
     GET    /tenant         the caller's tenant and its mode
     GET    /cities         the tenant's cities, by name
     GET    /cities/:code   404 when the tenant has none with this code
@@ -129,8 +143,10 @@ uses
   PascalApi.Otlp,
   PascalApi.Tenancy,
   PascalApi.Horse.Tenancy,
+  PascalApi.RefreshTokens,
   TenantApiSample.Cities in 'TenantApiSample.Cities.pas',
-  TenantApiSample.Control in 'TenantApiSample.Control.pas';
+  TenantApiSample.Control in 'TenantApiSample.Control.pas',
+  TenantApiSample.Auth in 'TenantApiSample.Auth.pas';
 
 const
   DEFAULT_TENANTS =
@@ -153,6 +169,8 @@ var
   GControl: IDBFactory;
   GCatalog: ITenantCatalog;
   GResolver: ITenantDataResolver;
+  GRefresh: TRefreshTokens;
+  GAccessSeconds, GRefreshSeconds: Int64;
 
 { Tenancy }
 
@@ -168,6 +186,10 @@ type
     function RateKey(AReq: THorseRequest): string;
     /// TRateLimitOptions.LimitFor: the tenant's plan.
     function PlanLimit(AReq: THorseRequest): Integer;
+    /// TRefreshUserCheck: may this user of the tenant still refresh? Here
+    /// every name is a user, and one starting with "blocked" was deactivated
+    /// after its login. A real API looks the user up in the tenant.
+    function UserActive(const AScope, AUserId: string): Boolean;
   end;
 
 function NewSqliteFactory(const AFile, APoolName: string; const ASource: ISqlSource): IDBFactory;
@@ -228,6 +250,14 @@ begin
     Result := FREE_LIMIT;
 end;
 
+function TSampleHooks.UserActive(const AScope, AUserId: string): Boolean;
+begin
+  Result := Copy(AUserId, 1, 7) <> 'blocked';
+end;
+
+var
+  GHooks: TSampleHooks;
+
 function CitiesOf(AReq: THorseRequest): TCityRepository;
 begin
   Result := TCityRepository.Create(GResolver.ScopeFor(TTenantMiddleware.Current(AReq)));
@@ -245,11 +275,63 @@ begin
   Result := LValue.AsString;
 end;
 
+// The access token: the user and the tenant, signed as the middleware
+// verifies (the ring's signing key, its kid).
+function AccessToken(const ATenant, AUser: string): string;
+var
+  LWriter: TJsonWriter;
+begin
+  LWriter := TJsonWriter.Create;
+  try
+    LWriter.BeginObject;
+    LWriter.Name('sub');
+    LWriter.WriteString(AUser);
+    LWriter.Name(GClaim);
+    LWriter.WriteString(ATenant);
+    LWriter.Name('exp');
+    LWriter.WriteInt64(TJwt.UnixNow + GAccessSeconds);
+    LWriter.EndObject;
+    Result := TJwtMiddleware.Sign(LWriter.ToString);
+  finally
+    LWriter.Free;
+  end;
+end;
+
+procedure SendTokens(ARes: THorseResponse; const ATenant, AUser, ARefreshToken: string);
+var
+  LTokens: TTokens;
+  LResult: ITokens;
+begin
+  LTokens := TTokens.Create;
+  LResult := LTokens;
+  LTokens.Token := AccessToken(ATenant, AUser);
+  LTokens.ExpiresIn := GAccessSeconds;
+  LTokens.RefreshToken := ARefreshToken;
+  LTokens.RefreshExpiresIn := GRefreshSeconds;
+  // Tokens are credentials: no cache may keep them (RFC 6749, section 5.1).
+  ARes.AddHeader('Cache-Control', 'no-store');
+  TJsonSend.Send(ARes, TJsonMapper.Shared.ToJson<ITokens>(LResult));
+end;
+
+// One answer for every refusal, an unknown tenant included: the reason is
+// for the log, not the client.
+function InvalidRefreshToken: EUnauthorizedException;
+begin
+  Result := EUnauthorizedException.Create('Invalid or expired refresh token.',
+    'invalid_refresh_token');
+end;
+
+function RefreshTokenOf(AReq: THorseRequest): string;
+begin
+  Result := TJsonMapper.Shared.FromJson<IRefreshRequest>(AReq.Body).RefreshToken;
+  if Result = '' then
+    raise EValidationException.Create('"refreshToken" is required.');
+end;
+
 procedure PostLogin(AReq: THorseRequest; ARes: THorseResponse; ANext: TNextProc);
 var
   LBody: TJsonValue;
-  LWriter: TJsonWriter;
-  LTenant, LUser, LClaims: string;
+  LTenant, LUser: string;
   LInfo: TTenantInfo;
   LStatus: Integer;
 begin
@@ -274,31 +356,53 @@ begin
   else
     raise ENotFoundException.Create('Tenant not found.');
   end;
-  LWriter := TJsonWriter.Create;
-  try
-    LWriter.BeginObject;
-    LWriter.Name('sub');
-    LWriter.WriteString(LUser);
-    LWriter.Name(GClaim);
-    LWriter.WriteString(LInfo.Id);
-    LWriter.Name('exp');
-    LWriter.WriteInt64(TJwt.UnixNow + TOKEN_SECONDS);
-    LWriter.EndObject;
-    LClaims := LWriter.ToString;
-  finally
-    LWriter.Free;
+  // The refresh token's scope is the tenant: "acme.<secret>".
+  SendTokens(ARes, LInfo.Id, LUser, GRefresh.Issue(LInfo.Id, LUser));
+end;
+
+procedure PostRefresh(AReq: THorseRequest; ARes: THorseResponse; ANext: TNextProc);
+var
+  LToken, LTenant: string;
+  LInfo: TTenantInfo;
+  LNext: TRotatedRefreshToken;
+  LStatus: Integer;
+begin
+  LToken := RefreshTokenOf(AReq);
+  // The tenant is in the token, in clear: checked against the catalog
+  // before any lookup. Every token here names one (no scope '').
+  if not TRefreshTokens.TryParse(LToken, LTenant) then
+    raise InvalidRefreshToken;
+  case CheckTenant(GCatalog, LTenant, LInfo) of
+    tcOk: ;
+    tcSuspended:
+      begin
+        TJsonSend.Send(ARes, TenantRejection(tcSuspended, LStatus), LStatus);
+        Exit;
+      end;
+  else
+    raise InvalidRefreshToken; // no tenant, or one the catalog doesn't have
   end;
-  LWriter := TJsonWriter.Create;
   try
-    LWriter.BeginObject;
-    LWriter.Name('token');
-    // Signed as the middleware verifies: the ring's signing key, its kid.
-    LWriter.WriteString(TJwtMiddleware.Sign(LClaims));
-    LWriter.EndObject;
-    TJsonSend.Send(ARes, LWriter.ToString);
-  finally
-    LWriter.Free;
+    LNext := GRefresh.Rotate(LToken, GHooks.UserActive);
+  except
+    on E: ERefreshTokenRejected do
+      raise InvalidRefreshToken;
   end;
+  SendTokens(ARes, LInfo.Id, LNext.UserId, LNext.Token);
+end;
+
+procedure PostLogout(AReq: THorseRequest; ARes: THorseResponse; ANext: TNextProc);
+var
+  LToken, LTenant: string;
+  LInfo: TTenantInfo;
+begin
+  LToken := RefreshTokenOf(AReq);
+  // A suspended tenant's user may still log out; the answer is the same
+  // for any token.
+  if TRefreshTokens.TryParse(LToken, LTenant) and
+    (CheckTenant(GCatalog, LTenant, LInfo) in [tcOk, tcSuspended]) then
+    GRefresh.Revoke(LToken);
+  ARes.Status(204).Send('');
 end;
 
 procedure GetTenant(AReq: THorseRequest; ARes: THorseResponse; ANext: TNextProc);
@@ -404,11 +508,19 @@ type
   public
     procedure Error(const ALine: string);
     procedure Migration(const AEvent: TMigrationEvent);
+    /// TRefreshTokens' OnSecurity: a family revoked for a reuse, a race or
+    /// a user gone.
+    procedure Security(const ALine: string);
   end;
 
 procedure TSampleLog.Error(const ALine: string);
 begin
   SafeWriteln('ERROR ' + ALine);
+end;
+
+procedure TSampleLog.Security(const ALine: string);
+begin
+  SafeWriteln('SECURITY ' + ALine);
 end;
 
 procedure TSampleLog.Migration(const AEvent: TMigrationEvent);
@@ -595,7 +707,6 @@ end;
 
 var
   GLog: TSampleLog;
-  GHooks: TSampleHooks;
   GSpec: ITenantCatalog;
   GRateLimit: TRateLimitOptions;
   GPort, I: Integer;
@@ -640,6 +751,14 @@ begin
       Exit;
     end;
     GKeys := OpenKeys(GControl, GLog);
+    GAccessSeconds := SecondsSetting('ACCESS_TOKEN_SECONDS', TOKEN_SECONDS);
+    if (GAccessSeconds < 1) or (GAccessSeconds > TOKEN_SECONDS) then
+      raise EArgumentException.CreateFmt('ACCESS_TOKEN_SECONDS: 1 to %d (the key ring''s ' +
+        'MaxTokenSeconds)', [TOKEN_SECONDS]);
+    GRefreshSeconds := SecondsSetting('REFRESH_TOKEN_SECONDS', REFRESH_DEFAULT_LIFETIME_SECONDS);
+    // In the control database: every instance on it rotates the tokens.
+    GRefresh := TRefreshTokens.Create(TDbRefreshTokenStore.Create(GControl), GRefreshSeconds,
+      GLog.Security);
     GResolver := TTenantDataResolver.Create(GHooks.NewFactory,
       StrToIntDef(TAppConfig.Get('DB_IDLE_SECONDS', '600'), 600));
     MigrateAll(GLog);
@@ -652,7 +771,8 @@ begin
     TLoggerMiddleware.AddField('tenant.id', TenantIdOf);
     THorse.Use(TLoggerMiddleware.New(nil, alfJson));
     THorse.Use(TMetricsMiddleware.New);
-    THorse.Use(TJwtMiddleware.New(GKeys, ['/health', '/metrics', '/auth/login', '/swagger']));
+    THorse.Use(TJwtMiddleware.New(GKeys, ['/health', '/metrics', '/auth/login', '/auth/refresh',
+      '/auth/logout', '/swagger']));
     THorse.Use(TTenantMiddleware.New(GCatalog, GClaim));
     // After the tenant: one window per tenant, its limit by plan.
     GRateLimit := TRateLimitOptions.Default;
@@ -662,11 +782,26 @@ begin
     GRateLimit.LimitFor := GHooks.PlanLimit;
     THorse.Use(TRateLimitMiddleware.New(GRateLimit));
     TRouteDoc.Post('/auth/login').Summary('Get a token for one tenant (1 hour)').Tag('public')
-      .NoContent(200, '{"token": "..."}')
+      .Response<ITokens>(200, 'An access token and a refresh token')
       .Error(400, '"tenant" or "user" is missing')
       .Error(403, 'The tenant is suspended')
       .Error(404, 'No such tenant')
       .Register(PostLogin);
+    TRouteDoc.Post('/auth/refresh').Summary('The next tokens; the refresh token is spent')
+      .Tag('public')
+      .Body<IRefreshRequest>
+      .Response<ITokens>(200, 'The next access token and refresh token')
+      .Error(400, '"refreshToken" is missing')
+      .Error(401, 'invalid_refresh_token: malformed, unknown (its tenant too), expired, ' +
+        'revoked or already used (a spent token that comes back revokes every token of ' +
+        'its login)')
+      .Error(403, 'The tenant is suspended')
+      .Register(PostRefresh);
+    TRouteDoc.Post('/auth/logout').Summary('Revoke a refresh token and its login').Tag('public')
+      .Body<IRefreshRequest>
+      .NoContent(204, 'Done (the same for any token)')
+      .Error(400, '"refreshToken" is missing')
+      .Register(PostLogout);
     TRouteDoc.Get('/tenant').Summary('The caller''s tenant and its mode').Tag('tenant')
       .NoContent(200, '{"tenant": "acme", "mode": "dedicated"}')
       .Error(401, 'No token, or its tenant no longer exists')
@@ -717,6 +852,7 @@ begin
     SafeWriteln('TenantApiSample listening on port %d', [GPort]);
     THorse.Listen(GPort);
   finally
+    GRefresh.Free;
     GResolver := nil;
     GCatalog := nil;
     GSpec := nil;

@@ -205,6 +205,23 @@ Redis store, done; 3: one ring per tenant, the tenant inside the `kid`, done).
   only for the catalog's tenants and tenants that sign: never create one, or query anything,
   for the tenant a kid names.
 
+### Refresh tokens
+
+`PascalApi.RefreshTokens` (pure, tested in `PascalApi.RefreshTokensTests`); samples 01 (memory,
+scope '') and 03 (control database, the tenant as the scope); guide
+`docs/guide/refresh-tokens.md`.
+
+- Every refusal is one 401 (`invalid_refresh_token`), whatever the `Reason`; with tenants, the
+  scope is checked against the catalog before `Rotate` (the routes are open paths, so
+  `TTenantMiddleware` doesn't run there).
+- `Rotate` never returns a token of a revoked family: after storing the next token it reads the
+  spent one again (a race's loser can revoke first; measured with a store that does, 0.19.0
+  returned the token). Keep that re-read.
+- The race over HTTP: the scenarios accept one 200 and one 401, or two 401s, never two 200s; the
+  second request often arrives after the first finished and logs a reuse, not a race (measured
+  on FPC Windows). The runners set `REFRESH_TOKEN_SECONDS=3` for the expiry check; run the
+  Delphi builds with it too.
+
 ### Horse
 
 The core package (`src/`) doesn't use Horse; only `src/horse/PascalApi.Horse.Middlewares` does,
@@ -343,7 +360,7 @@ keys). Non-ASCII test data used in an expression goes in a typed `string` consta
 | Delphi | open `PascalApi.groupproj`, build `PascalApi.UnitTests`, `ApiSample`, `DbApiSample` and `TenantApiSample` (Win32 and Win64); run the tests; start `ApiSample.exe` and run `sh tools/http_scenarios.sh 9310`; start `DbApiSample.exe 9330 --reset` and run `sh tools/http_scenarios_db.sh 9330`; start `TenantApiSample.exe 9350 --reset` and run `sh tools/http_scenarios_tenants.sh 9350` |
 
 The middlewares are tested in two layers: their decisions in `PascalApi.HttpTests` (no server),
-and over real HTTP by `tools/http_scenarios.sh` (curl, 195 checks) against `samples/01-api`,
+and over real HTTP by `tools/http_scenarios.sh` (curl, 253 checks) against `samples/01-api`,
 which uses every middleware. In-process servers aren't used: on FPC, Horse's `Listen` blocks in
 `THTTPApplication.Run` and there is no `StopListen`.
 

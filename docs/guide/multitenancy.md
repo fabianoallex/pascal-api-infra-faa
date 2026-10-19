@@ -269,9 +269,14 @@ else
   // The same answer for every unknown name, so the answers don't list your customers.
   raise ENotFoundException.Create('Tenant not found.');
 end;
-// ... claims: {"sub": user, "tenant_id": LInfo.Id, "exp": now + 3600}
-TJwtMiddleware.Sign(LClaims)   // signed as the JWT middleware verifies
+// The refresh token's scope is the tenant: "acme.<secret>".
+SendTokens(ARes, LInfo.Id, LUser, GRefresh.Issue(LInfo.Id, LUser));
+// AccessToken, in SendTokens: claims {"sub": user, "tenant_id": tenant, "exp": ...}, signed by
+// TJwtMiddleware.Sign, as the JWT middleware verifies
 ```
+
+The refresh route checks the tenant the same way, from the refresh token's prefix, before the
+token is exchanged: [Refresh tokens](refresh-tokens.md), step 6.
 
 **A signing key per tenant** (optional): with `TTenantJwtKeyRing` each tenant has its own
 rotating keys, and a token verifies only when its `tenant_id` names the tenant whose key signed
@@ -292,7 +297,8 @@ tenant.
 TLoggerMiddleware.AddField('tenant.id', TenantIdOf);   // step 8
 THorse.Use(TLoggerMiddleware.New(nil, alfJson));
 THorse.Use(TMetricsMiddleware.New);
-THorse.Use(TJwtMiddleware.New(GSecret, ['/health', '/metrics', '/auth/login', '/swagger']));
+THorse.Use(TJwtMiddleware.New(GSecret, ['/health', '/metrics', '/auth/login', '/auth/refresh',
+  '/auth/logout', '/swagger']));
 THorse.Use(TTenantMiddleware.New(GCatalog));
 THorse.Use(TRateLimitMiddleware.New(GRateLimit));     // step 8
 ```

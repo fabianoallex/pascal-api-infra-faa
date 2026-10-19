@@ -8,7 +8,17 @@
 
   Routes:
     GET  /health              public
-    POST /auth/login          public; {"user":"..."} -> {"token":"..."} (HS256, 1 hour)
+    POST /auth/login          public; {"user":"..."} -> {"token","expiresIn",
+                              "refreshToken","refreshExpiresIn"}: an access token
+                              (HS256, ACCESS_TOKEN_SECONDS, default 3600) and a
+                              refresh token (REFRESH_TOKEN_SECONDS, default 30 days)
+    POST /auth/refresh        public; {"refreshToken":"..."} -> the next pair; the
+                              token is spent. 401 invalid_refresh_token for any
+                              reason; a spent token that comes back revokes its
+                              login (a SECURITY line in the log)
+    POST /auth/logout         public; {"refreshToken":"..."} -> 204, whatever the token
+    POST /auth/logout-all     every refresh token of the caller (the access
+                              token's "sub") revoked; 204
     GET  /me                  the token's "sub"
     GET  /cities              paged: ?page=&limit=&orderBy=name|-name|state
     GET  /cities/:id          404 when it doesn't exist
@@ -36,13 +46,19 @@
 
   Middlewares, in order: request log (console), metrics, CORS for
   https://app.example.com, rate limit (only on /limited, keyed by the
-  X-Client header), JWT (all but /health, /metrics, /auth/login and
-  /swagger), and the error
+  X-Client header), JWT (all but /health, /metrics, /auth/login,
+  /auth/refresh, /auth/logout and /swagger), and the error
   handler (THorse.OnError). tools/http_scenarios.sh checks all of this over
   HTTP with curl.
 
   The JWT secret comes from JWT_SECRET (environment or .env), with a
   development default.
+
+  Refresh tokens (PascalApi.RefreshTokens) live in this process
+  (TMemoryRefreshTokenStore, scope '': no tenants): a restart ends every
+  login. There are no passwords and no user table: any name logs in, and
+  a name starting with "blocked" stands for a user deactivated after the
+  login, refused by the refresh's user check (TRefreshUserCheck).
 
   Tracing: when OTEL_EXPORTER_OTLP_ENDPOINT is set (e.g.
   http://localhost:4318), every request's span goes to that OpenTelemetry
@@ -79,7 +95,9 @@ uses
   PascalCommon.Tracing,
   PascalCommon.SafeLog,
   PascalApi.Otlp,
-  ApiSample.Cities in 'ApiSample.Cities.pas';
+  PascalApi.RefreshTokens,
+  ApiSample.Cities in 'ApiSample.Cities.pas',
+  ApiSample.Auth in 'ApiSample.Auth.pas';
 
 type
   // A Currency read and written by the mapper: tools/http_scenarios.sh sends
@@ -121,6 +139,8 @@ var
   GPort: Integer;
   GSecret: string;
   GMaintenance: Boolean;
+  GRefresh: TRefreshTokens;
+  GAccessSeconds, GRefreshSeconds: Int64;
 
 { Handlers }
 
@@ -129,33 +149,136 @@ begin
   TJsonSend.Send(ARes, '{"status":"ok"}');
 end;
 
+{ Refresh tokens: the user check and the security log, methods (the
+  portable callback form: "of object" on FPC) }
+
+type
+  TRefreshHooks = class
+  public
+    /// TRefreshUserCheck: may this user still refresh? Here every name is a
+    /// user, and one starting with "blocked" was deactivated after its login.
+    /// A real API looks the user up (exists, active).
+    function UserActive(const AScope, AUserId: string): Boolean;
+    /// TRefreshTokens' OnSecurity: a family revoked for a reuse, a race or
+    /// a user gone.
+    procedure Security(const ALine: string);
+  end;
+
+function TRefreshHooks.UserActive(const AScope, AUserId: string): Boolean;
+begin
+  Result := Copy(AUserId, 1, 7) <> 'blocked';
+end;
+
+procedure TRefreshHooks.Security(const ALine: string);
+begin
+  SafeWriteln('SECURITY ' + ALine);
+end;
+
+var
+  GRefreshHooks: TRefreshHooks;
+
+// The access token: short-lived, so a stolen one is useful only for
+// minutes; the refresh token gets the next one.
+function AccessToken(const AUser: string): string;
+var
+  LWriter: TJsonWriter;
+begin
+  LWriter := TJsonWriter.Create;
+  try
+    LWriter.BeginObject;
+    LWriter.Name('sub');
+    LWriter.WriteString(AUser);
+    LWriter.Name('exp');
+    LWriter.WriteInt64(TJwt.UnixNow + GAccessSeconds);
+    LWriter.EndObject;
+    Result := TJwt.SignHS256(LWriter.ToString, GSecret);
+  finally
+    LWriter.Free;
+  end;
+end;
+
+procedure SendTokens(ARes: THorseResponse; const AUser, ARefreshToken: string);
+var
+  LTokens: TTokens;
+  LResult: ITokens;
+begin
+  LTokens := TTokens.Create;
+  LResult := LTokens;
+  LTokens.Token := AccessToken(AUser);
+  LTokens.ExpiresIn := GAccessSeconds;
+  LTokens.RefreshToken := ARefreshToken;
+  LTokens.RefreshExpiresIn := GRefreshSeconds;
+  // Tokens are credentials: no cache may keep them (RFC 6749, section 5.1).
+  ARes.AddHeader('Cache-Control', 'no-store');
+  TJsonSend.Send(ARes, TJsonMapper.Shared.ToJson<ITokens>(LResult));
+end;
+
+// One answer for every refusal (malformed, unknown, expired, revoked,
+// reused, raced, user gone): the reason is for the log, not the client.
+function InvalidRefreshToken: EUnauthorizedException;
+begin
+  Result := EUnauthorizedException.Create('Invalid or expired refresh token.',
+    'invalid_refresh_token');
+end;
+
+function RefreshTokenOf(AReq: THorseRequest): string;
+begin
+  Result := TJsonMapper.Shared.FromJson<IRefreshRequest>(AReq.Body).RefreshToken;
+  if Result = '' then
+    raise EValidationException.Create('"refreshToken" is required.');
+end;
+
 procedure PostLogin(AReq: THorseRequest; ARes: THorseResponse; ANext: TNextProc);
 var
   LBody, LUser: TJsonValue;
-  LWriter: TJsonWriter;
-  LClaims: string;
+  LName: string;
 begin
   LBody := ParseJson(AReq.Body);
   try
     LUser := LBody.Find('user');
     if (LUser = nil) or (LUser.Kind <> jkString) or (LUser.AsString = '') then
       raise EValidationException.Create('"user" is required.');
-    LWriter := TJsonWriter.Create;
-    try
-      LWriter.BeginObject;
-      LWriter.Name('sub');
-      LWriter.WriteString(LUser.AsString);
-      LWriter.Name('exp');
-      LWriter.WriteInt64(TJwt.UnixNow + 3600);
-      LWriter.EndObject;
-      LClaims := LWriter.ToString;
-    finally
-      LWriter.Free;
-    end;
+    LName := LUser.AsString;
   finally
     LBody.Free;
   end;
-  TJsonSend.Send(ARes, JsonMember('token', TJwt.SignHS256(LClaims, GSecret)));
+  // A sample: no password. A real login checks it first, and answers the
+  // same 401 for every wrong part.
+  SendTokens(ARes, LName, GRefresh.Issue('', LName));
+end;
+
+procedure PostRefresh(AReq: THorseRequest; ARes: THorseResponse; ANext: TNextProc);
+var
+  LNext: TRotatedRefreshToken;
+begin
+  try
+    LNext := GRefresh.Rotate(RefreshTokenOf(AReq), GRefreshHooks.UserActive);
+  except
+    on E: ERefreshTokenRejected do
+      raise InvalidRefreshToken;
+  end;
+  SendTokens(ARes, LNext.UserId, LNext.Token);
+end;
+
+procedure PostLogout(AReq: THorseRequest; ARes: THorseResponse; ANext: TNextProc);
+begin
+  // The same answer for any token: a logout tells nothing about it.
+  GRefresh.Revoke(RefreshTokenOf(AReq));
+  ARes.Status(204).Send('');
+end;
+
+// Sign out everywhere: what a new password or a deactivated user does too.
+procedure PostLogoutAll(AReq: THorseRequest; ARes: THorseResponse; ANext: TNextProc);
+var
+  LClaims: TJsonValue;
+begin
+  LClaims := TJwtMiddleware.Claims(AReq);
+  try
+    GRefresh.RevokeUser('', LClaims.Find('sub').AsString);
+  finally
+    LClaims.Free;
+  end;
+  ARes.Status(204).Send('');
 end;
 
 procedure GetMe(AReq: THorseRequest; ARes: THorseResponse; ANext: TNextProc);
@@ -347,6 +470,13 @@ begin
   GPort := StrToIntDef(ParamStr(1), 9310);
   GSecret := TAppConfig.Get('JWT_SECRET', 'development-secret-change-me');
   GCallbacks := TSampleCallbacks.Create;
+  // Short lifetimes from the environment let tools/http_scenarios.sh see a
+  // refresh token expire without a long wait.
+  GAccessSeconds := TAppConfig.GetInt('ACCESS_TOKEN_SECONDS', 3600);
+  GRefreshSeconds := TAppConfig.GetInt('REFRESH_TOKEN_SECONDS', REFRESH_DEFAULT_LIFETIME_SECONDS);
+  GRefreshHooks := TRefreshHooks.Create;
+  GRefresh := TRefreshTokens.Create(TMemoryRefreshTokenStore.Create, GRefreshSeconds,
+    GRefreshHooks.Security);
 
   if TAppConfig.Get('OTEL_EXPORTER_OTLP_ENDPOINT', '') <> '' then
     TPcTracing.Start(TPcTracingOptions.FromEnvironment('pascal-api-sample-01', '1.0.0', ReadAppConfig),
@@ -355,7 +485,8 @@ begin
   THorse.Use(TLoggerMiddleware.New);
   THorse.Use(TMetricsMiddleware.New);
   THorse.Use(TCorsMiddleware.New('https://app.example.com'));
-  THorse.Use(TJwtMiddleware.New(GSecret, ['/health', '/metrics', '/auth/login', '/swagger']));
+  THorse.Use(TJwtMiddleware.New(GSecret, ['/health', '/metrics', '/auth/login', '/auth/refresh',
+    '/auth/logout', '/swagger']));
 
   GRateLimit := TRateLimitOptions.Default;
   GRateLimit.Limit := 3;
@@ -367,7 +498,27 @@ begin
   // samples/02-db documents full schemas.
   TRouteDoc.Get('/health').Summary('Liveness').Tag('public').NoContent(200, 'Up').Register(GetHealth);
   TRouteDoc.Post('/auth/login').Summary('Get a token (1 hour)').Tag('public')
-    .NoContent(200, '{"token": "..."}').Error(400, '"user" is missing').Register(PostLogin);
+    .Response<ITokens>(200, 'An access token and a refresh token')
+    .Error(400, '"user" is missing').Register(PostLogin);
+  // Not MCP tools: a model has no use for a refresh token, and one in its
+  // context could be replayed.
+  TRouteDoc.Post('/auth/refresh').Summary('The next tokens; the refresh token is spent')
+    .Tag('public').NoMcp
+    .Body<IRefreshRequest>
+    .Response<ITokens>(200, 'The next access token and refresh token')
+    .Error(400, '"refreshToken" is missing')
+    .Error(401, 'invalid_refresh_token: malformed, unknown, expired, revoked or already ' +
+      'used (a spent token that comes back revokes every token of its login)')
+    .Register(PostRefresh);
+  TRouteDoc.Post('/auth/logout').Summary('Revoke a refresh token and its login').Tag('public')
+    .NoMcp
+    .Body<IRefreshRequest>
+    .NoContent(204, 'Done (the same for any token)').Error(400, '"refreshToken" is missing')
+    .Register(PostLogout);
+  TRouteDoc.Post('/auth/logout-all').Summary('Revoke every refresh token of the caller')
+    .Tag('auth').NoMcp
+    .NoContent(204, 'Done').Error(401, 'No or invalid token')
+    .Register(PostLogoutAll);
   TRouteDoc.Get('/me').Summary('The token''s subject').Tag('auth')
     .NoContent(200, '{"sub": "..."}').Error(401, 'No or invalid token').Register(GetMe);
   TRouteDoc.Get('/cities').Summary('List cities').Tag('cities')
@@ -417,5 +568,7 @@ begin
 
   SafeWriteln('ApiSample listening on port %d', [GPort]);
   THorse.Listen(GPort);
+  GRefresh.Free;
+  GRefreshHooks.Free;
   GCallbacks.Free;
 end.

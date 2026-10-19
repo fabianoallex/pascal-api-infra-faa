@@ -61,7 +61,7 @@ end.
 
 ```
 GET  /me                                     401  {"error":"Authorization token missing."}
-POST /auth/login {"user":"ana"}              200  {"token":"eyJhbGciOiJIUzI1NiIs..."}
+POST /auth/login {"user":"ana"}              200  {"token":"eyJhbGciOiJIUzI1NiIs...", ...}
 GET  /me  Authorization: Bearer eyJhbGci...  200  {"sub":"ana"}
 ```
 
@@ -95,7 +95,8 @@ prefixes you list.
 ```pascal
 THorse.Use(TLoggerMiddleware.New);                                  // first
 THorse.Use(TCorsMiddleware.New('https://app.example.com'));          // before JWT
-THorse.Use(TJwtMiddleware.New(GSecret, ['/health', '/metrics', '/auth/login', '/swagger']));
+THorse.Use(TJwtMiddleware.New(GSecret, ['/health', '/metrics', '/auth/login', '/auth/refresh',
+  '/auth/logout', '/swagger']));
 ```
 
 How a prefix matches (tested: `PathMatches_*`):
@@ -129,22 +130,30 @@ any user name gets a token; your check of a password or of another system goes t
 signs the claims. From `samples/01-api/ApiSample.dpr`:
 
 ```pascal
-LWriter := TJsonWriter.Create;
-try
-  LWriter.BeginObject;
-  LWriter.Name('sub');
-  LWriter.WriteString(LUser.AsString);
-  LWriter.Name('exp');
-  LWriter.WriteInt64(TJwt.UnixNow + 3600);      // one hour
-  LWriter.EndObject;
-  LClaims := LWriter.ToString;
-finally
-  LWriter.Free;
+function AccessToken(const AUser: string): string;
+var
+  LWriter: TJsonWriter;
+begin
+  LWriter := TJsonWriter.Create;
+  try
+    LWriter.BeginObject;
+    LWriter.Name('sub');
+    LWriter.WriteString(AUser);
+    LWriter.Name('exp');
+    LWriter.WriteInt64(TJwt.UnixNow + GAccessSeconds);  // ACCESS_TOKEN_SECONDS, 3600 by default
+    LWriter.EndObject;
+    Result := TJwt.SignHS256(LWriter.ToString, GSecret);
+  finally
+    LWriter.Free;
+  end;
 end;
-...
-TJsonSend.Send(ARes, JsonMember('token', TJwt.SignHS256(LClaims, GSecret)));
 ```
 
+The login answers it as `token`, with a refresh token beside it (`SendTokens`):
+
+- **A short access token and a refresh token**: the client exchanges the refresh token for the
+  next pair at `/auth/refresh`, each refresh token once, so the access token can live minutes:
+  [Refresh tokens](refresh-tokens.md).
 - `sub` is the subject, the user's id. Any other claim is yours to add: sample 03 adds the
   tenant (`tenant_id`, see [Multi-tenancy](multitenancy.md), step 5).
 - `exp` is the expiry, in seconds since 1970 (UTC). `TJwt.UnixNow` is the current time in those
@@ -243,9 +252,10 @@ database or Redis, one ring per tenant, sealed under a master key. The middlewar
 instead of the secret, and the login signs through it:
 
 ```pascal
-THorse.Use(TJwtMiddleware.New(GKeys, ['/health', '/metrics', '/auth/login', '/swagger']));
+THorse.Use(TJwtMiddleware.New(GKeys, ['/health', '/metrics', '/auth/login', '/auth/refresh',
+  '/auth/logout', '/swagger']));
 ...
-LWriter.WriteString(TJwtMiddleware.Sign(LClaims));
+Result := TJwtMiddleware.Sign(LWriter.ToString);   // in sample 03's AccessToken
 ```
 
 All of it, with the procedures for a key that leaked or a master key to change:

@@ -47,7 +47,7 @@ docker volume create "$NAME" >/dev/null
 MSYS_NO_PATHCONV=1 docker run -d --name "$NAME" --network "$NAME" --user 0   -v "$NAME:/otel" -v "$MOUNT:/src:ro" "$COLLECTOR_IMAGE" --config /src/tools/otelcol.yaml >/dev/null
 docker run -d --name "$NAME-redis" --network "$NAME" "$REDIS_IMAGE" >/dev/null
 
-MSYS_NO_PATHCONV=1 docker run --rm --network "$NAME" -v "$NAME:/otel:ro" -v "$MOUNT:/src:ro"   -e OTEL_EXPORTER_OTLP_ENDPOINT="http://$NAME:4318" -e OTEL_BSP_SCHEDULE_DELAY=200 -e REDIS_HOST="$NAME-redis"   "$IMAGE" sh -c '
+MSYS_NO_PATHCONV=1 docker run --rm --network "$NAME" -v "$NAME:/otel:ro" -v "$MOUNT:/src:ro"   -e OTEL_EXPORTER_OTLP_ENDPOINT="http://$NAME:4318" -e OTEL_BSP_SCHEDULE_DELAY=200 -e REDIS_HOST="$NAME-redis" -e REFRESH_TOKEN_SECONDS=3   "$IMAGE" sh -c '
   set -e
   mkdir -p /t/uApiSample /t/uDbApiSample /t/uTenantApiSample && cp -r /src/src /src/samples /src/tools /src/external /t/
   E=/t/external

@@ -10,7 +10,8 @@ when one leaks. The code comes from `samples/03-tenants`, which runs every mode
 one store. The decisions behind it: `docs/jwt-keys-design.md`.
 
 Verifying tokens, the open routes and the login are in [Authentication](authentication.md);
-this guide starts where one secret is no longer enough.
+this guide starts where one secret is no longer enough. Short access tokens with refresh tokens,
+which keep `MaxTokenSeconds` small: [Refresh tokens](refresh-tokens.md).
 
 ## What it solves
 
@@ -39,8 +40,8 @@ login:
 GKeys := TStaticJwtKeyRing.Parse(TAppConfig.Get('JWT_KEYS'), TAppConfig.Get('JWT_SECRET'), 3600);
 THorse.Use(TJwtMiddleware.New(GKeys, ['/health', '/auth/login']));
 ...
-// in the login route: sign as the middleware verifies
-TJsonSend.Send(ARes, JsonMember('token', TJwtMiddleware.Sign(LClaims)));
+// the login's access token: sign as the middleware verifies
+Result := TJwtMiddleware.Sign(LWriter.ToString);
 ```
 
 ```
@@ -82,9 +83,10 @@ previous key, an unknown `kid`, a key past its date, a `kid` signed with another
 ### 2. Sign through the middleware
 
 ```pascal
-THorse.Use(TJwtMiddleware.New(GKeys, ['/health', '/metrics', '/auth/login', '/swagger']));
+THorse.Use(TJwtMiddleware.New(GKeys, ['/health', '/metrics', '/auth/login', '/auth/refresh',
+  '/auth/logout', '/swagger']));
 ...
-LWriter.WriteString(TJwtMiddleware.Sign(LClaims));
+Result := TJwtMiddleware.Sign(LWriter.ToString);   // AccessToken, for the login and the refresh
 ```
 
 `TJwtMiddleware.Sign` signs with whatever the middleware verifies with (the ring's signing key,

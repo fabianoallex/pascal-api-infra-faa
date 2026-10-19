@@ -209,6 +209,25 @@ if [ -n "$PORT2" ]; then
   same_key "$BEFORE"
   [ "$KID_A" = "$KID_B" ] && ok || fail "after racing, one key again (first '$KID_A', second '$KID_B')"
   [ "$KID_A" != "$BEFORE" ] && ok || fail "they kept rotating (still '$BEFORE')"
+
+  # Refresh tokens live in the control database (TDbRefreshTokenStore),
+  # whatever JWT_KEY_STORE says: one instance issues, the other rotates, and
+  # a spent token shown to the instance that didn't spend it is still a reuse.
+  refresh() { req POST /auth/refresh "{\"refreshToken\":\"$1\"}"; }
+  rfield()  { sed -n 's/.*"'"$1"'":"\([^"]*\)".*/\1/p' "$T/body"; }
+  login acme ana >/dev/null
+  R1="$(rfield refreshToken)"
+  on2 refresh "$R1"
+  status_is 200 "the second instance rotates the first's refresh token"
+  R2="$(rfield refreshToken)"
+  req GET /tenant "" -H "Authorization: Bearer $(rfield token)"
+  body_is '{"tenant":"acme","mode":"dedicated"}' "the first instance takes the second's new access token"
+  refresh "$R1"
+  status_is 401 "the first instance sees the token spent on the second: a reuse"
+  on2 refresh "$R2"
+  status_is 401 "the reuse on one instance ends the login on the other"
+  refresh "$R2"
+  status_is 401 "and on the first"
 fi
 
 rm -rf "$T"

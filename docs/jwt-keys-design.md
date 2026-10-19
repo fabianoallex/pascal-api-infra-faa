@@ -330,7 +330,7 @@ replaced) and `docs/guide/multitenancy.md`.
   `PascalApi.RefreshTokens` (format, SHA-256 at rest, one use, a reuse or a race revoking the
   family, the application's user check, logout, revoke a user; a pluggable store with a
   database implementation). Login, passwords, users and the access token's claims stay in the
-  application.
+  application. Samples 01 and 03 and `docs/guide/refresh-tokens.md` show the flow here.
 - Envelope encryption with an external KMS or Vault: possible behind `IJwtSecretCipher`, not
   shipped.
 - Announcing a new key through Redis Pub/Sub: the propagation delay (decision 4) already covers

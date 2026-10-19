@@ -111,6 +111,132 @@ status_is 404 "unknown route"
 [ "$(tr -d '\r' < "$T/headers" | grep -ci '^X-Request-Id:')" = 1 ] && ok \
   || fail "unknown route: one X-Request-Id (Horse runs the middlewares twice there)"
 
+# --- refresh tokens (PascalApi.RefreshTokens, in memory, scope ''): rotation,
+# a spent token coming back, two refreshes racing, logout, logout everywhere,
+# a user the check refuses, expiry. Every refusal is the same 401.
+field()     { sed -n 's/.*"'"$1"'":"\([^"]*\)".*/\1/p' "$T/body"; }
+num_field() { sed -n 's/.*"'"$1"'":\([0-9][0-9]*\).*/\1/p' "$T/body"; }
+login()     { req POST /auth/login "{\"user\":\"$1\"}"; }
+refresh()   { req POST /auth/refresh "{\"refreshToken\":\"$1\"}"; }
+logout()    { req POST /auth/logout "{\"refreshToken\":\"$1\"}"; }
+INVALID_REFRESH='{"error":"Invalid or expired refresh token.","code":"invalid_refresh_token"}'
+refused()   { status_is 401 "$1"; body_is "$INVALID_REFRESH" "$1"; header_is WWW-Authenticate 'Bearer' "$1"; }
+login rita
+header_is Cache-Control 'no-store' "login: tokens are not cached"
+REFRESH1="$(field refreshToken)"
+REFRESH_SECONDS="$(num_field refreshExpiresIn)"
+[ "$(printf %s "$REFRESH1" | wc -c | tr -d ' ')" = 43 ] && ok || fail "login: a 43-character refresh token ($REFRESH1)"
+[ -n "$(num_field expiresIn)" ] && [ -n "$REFRESH_SECONDS" ] && ok || fail "login: expiresIn and refreshExpiresIn ($(cat "$T/body"))"
+refresh "$REFRESH1"
+status_is 200 "refresh"
+header_is Cache-Control 'no-store' "refresh: tokens are not cached"
+REFRESH2="$(field refreshToken)"
+[ -n "$REFRESH2" ] && [ "$REFRESH2" != "$REFRESH1" ] && ok || fail "refresh: a new refresh token"
+req GET /me "" -H "Authorization: Bearer $(field token)"
+body_is '{"sub":"rita"}' "refresh: the new access token is the same user's"
+# A spent token comes back: someone kept a copy. Its whole login ends.
+refresh "$REFRESH1"
+refused "a spent refresh token"
+refresh "$REFRESH2"
+refused "after a reuse, the newest token of the login is revoked too"
+# Two refreshes of one token at once: never two winners, and the login
+# ends (the loser can't tell a race from a copy). Usually one 200 and one
+# 401; both 401 when the loser revoked before the winner stored its next
+# token (PascalApi.RefreshTokens refuses the winner then).
+login rita
+RACE="$(field refreshToken)"
+for N in 1 2; do
+  curl -s -o "$T/race$N" -w '%{http_code}' -H 'Content-Type: application/json' \
+    --data-binary "{\"refreshToken\":\"$RACE\"}" "$BASE/auth/refresh" > "$T/race$N.status" &
+done
+wait
+STATUSES="$(cat "$T/race1.status") $(cat "$T/race2.status")"
+case "$STATUSES" in "200 401"|"401 200"|"401 401") ok ;; *) fail "race: statuses $STATUSES, expected one 200 at most and a 401" ;; esac
+for N in 1 2; do
+  if [ "$(cat "$T/race$N.status")" = 200 ]; then
+    refresh "$(sed -n 's/.*"refreshToken":"\([^"]*\)".*/\1/p' "$T/race$N")"
+    refused "race: the winner's next token is revoked with its login"
+  else
+    [ "$(cat "$T/race$N")" = "$INVALID_REFRESH" ] && ok || fail "race: the loser's body $(cat "$T/race$N")"
+  fi
+done
+# Logout: the same answer for any token.
+login rita
+REFRESH3="$(field refreshToken)"
+logout "$REFRESH3"
+status_is 204 "logout"
+refresh "$REFRESH3"
+refused "refresh after logout"
+logout "$REFRESH3"
+status_is 204 "logout again: the same answer"
+logout "garbage"
+status_is 204 "logout of garbage: the same answer"
+req POST /auth/logout '{}'
+status_is 400 "logout without a token"
+# Malformed and moved tokens.
+refresh "garbage"
+refused "refresh: garbage"
+login rita
+REFRESH4="$(field refreshToken)"
+refresh "acme.$REFRESH4"
+refused "refresh: the secret under a scope it wasn't issued for"
+refresh "$REFRESH4"
+status_is 200 "refresh: the real one still works after the attempts"
+req POST /auth/refresh '{}'
+status_is 400 "refresh without a token"
+body_is '{"error":"\"refreshToken\" is required."}' "refresh without a token"
+req POST /auth/refresh '{"refreshToken":"x","user":"admin"}'
+status_is 400 "refresh with an unknown member"
+# A user deactivated after the login: the check refuses, the login ends.
+login blocked-1
+BLOCKED="$(field refreshToken)"
+refresh "$BLOCKED"
+refused "a user the check refuses"
+# Sign out everywhere: every login of the caller, nobody else's.
+login rita
+RITA_A="$(field refreshToken)"
+RITA_ACCESS="$(field token)"
+login rita
+RITA_B="$(field refreshToken)"
+login bob
+BOB="$(field refreshToken)"
+req POST /auth/logout-all "" -H "Authorization: Bearer $RITA_ACCESS"
+status_is 204 "logout-all"
+refresh "$RITA_A"
+refused "logout-all: the first login"
+refresh "$RITA_B"
+refused "logout-all: the second login"
+refresh "$BOB"
+status_is 200 "logout-all: another user keeps theirs"
+req POST /auth/logout-all ""
+status_is 401 "logout-all needs an access token (only /auth/logout is public)"
+# Expiry, when the runner set a short REFRESH_TOKEN_SECONDS (tools/test_http.sh).
+if [ "$REFRESH_SECONDS" -le 10 ] 2>/dev/null; then
+  login rita
+  EXPIRING="$(field refreshToken)"
+  sleep $((REFRESH_SECONDS + 1))
+  refresh "$EXPIRING"
+  refused "an expired refresh token"
+else
+  echo "skipped: refresh token expiry (refreshExpiresIn $REFRESH_SECONDS; set REFRESH_TOKEN_SECONDS=3)"
+fi
+if [ -n "$SERVER_LOG" ]; then
+  sleep 1
+  grep -q "^SECURITY refresh token family [0-9a-f]* revoked: a used refresh token came back" \
+    "$SERVER_LOG" && ok || fail "log: the reuse"
+  # The race's loser logs "raced" when both read the token before either
+  # marked it, and "came back" when the first had finished (often, measured
+  # 2026-10-19): two reuse lines, or one of each.
+  SECURITY_LINES="$(grep -c '^SECURITY .*revoked: \(a used refresh token came back\|two refreshes raced\)' "$SERVER_LOG")"
+  [ "$SECURITY_LINES" -ge 2 ] && ok || fail "log: the reuse and the race ($SECURITY_LINES lines)"
+  grep -q "^SECURITY refresh token family [0-9a-f]* revoked: the user is gone or inactive" \
+    "$SERVER_LOG" && ok || fail "log: the user refused"
+  # A logout, logout-all or an expiry is not a security event.
+  grep '^SECURITY' "$SERVER_LOG" | grep -v 'came back\|raced on one token\|gone or inactive' | grep -q . \
+    && fail "log: an unexpected SECURITY line" || ok
+  grep -q "$REFRESH2\|$RACE" "$SERVER_LOG" && fail "log: a refresh token reached the log" || ok
+fi
+
 # --- what the handler sees: X-Request-Id and its own span in traceparent
 req GET /trace "" -H "$AUTH" -H "traceparent: 00-$TRACE_ID-$PARENT_ID-01" -H 'tracestate: vendor=1'
 status_is 200 "trace"
@@ -293,6 +419,9 @@ status_is 200 "MCP tools/list"
 body_has '{"name":"get_citie","description":"One city","inputSchema":{"type":"object","properties":{"id":{"type":"integer","description":"City id"}},"required":["id"],"additionalProperties":false}}' "MCP tool with a path parameter"
 body_has '"name":"create_citie"' "MCP tool with a body"
 body_lacks 'fail' "MCP: NoMcp routes left out"
+body_lacks '"name":"create_refresh' "MCP: no refresh tool (NoMcp)"
+body_lacks '"name":"create_logout' "MCP: no logout tools (NoMcp)"
+body_has '"name":"create_login"' "MCP: the login is still a tool"
 call list_citie '{"limit":1,"orderBy":"-name"}'
 status_is 200 "MCP call, GET with a query string"
 body_has '\"limit\":1,\"total\":' "MCP call: query arguments reach the route"

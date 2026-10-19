@@ -24,7 +24,10 @@ unit PascalApi.RefreshTokens;
     included, and OnSecurity hears of it. Two rotations racing on one token
     are the same case: the store's MarkUsed is True for one of them only
     (an UPDATE ... WHERE USED_AT IS NULL that must match one row), and the
-    other revokes the family.
+    other revokes the family. The winner reads its spent token again after
+    storing the next one: when the loser's revoke came first, the winner
+    revokes the family too and is refused (rrRaced), so no token of a
+    revoked family is ever handed out; both answers can then be refusals.
   - Before a token is marked used, the application's check says whether the
     user may still have one (TRefreshUserCheck); a user gone or inactive
     revokes the family.
@@ -186,7 +189,8 @@ type
     function Issue(const AScope, AUserId: string; const AFamilyId: string = ''): string;
     /// AToken exchanged for the next one of its family. ERefreshTokenRejected
     /// for anything wrong; a reuse, a race or ACheckUser saying False
-    /// revoke the family first.
+    /// revoke the family first. Never returns a token whose family is
+    /// revoked: a race lost after the next token was stored is rrRaced too.
     function Rotate(const AToken: string; const ACheckUser: TRefreshUserCheck): TRotatedRefreshToken;
     /// Logout: revokes AToken's family; nothing, and no error, for anything
     /// else.
@@ -564,8 +568,11 @@ end;
 procedure TRefreshTokens.RevokeFamilyOf(const AScope, AFamilyId, AReason: string);
 begin
   if (FStore.RevokeFamily(AScope, AFamilyId, TJwt.UnixNow) > 0) and (AReason <> '') then
-    Security(Format('refresh token family %s of scope %s revoked: %s',
-      [AFamilyId, AScope, AReason]));
+    if AScope = '' then
+      Security(Format('refresh token family %s revoked: %s', [AFamilyId, AReason]))
+    else
+      Security(Format('refresh token family %s of scope %s revoked: %s',
+        [AFamilyId, AScope, AReason]));
 end;
 
 function TRefreshTokens.Rotate(const AToken: string;
@@ -602,6 +609,15 @@ begin
   Result.Scope := LScope;
   Result.UserId := LRecord.UserId;
   Result.FamilyId := LRecord.FamilyId;
+  // The request that lost MarkUsed revokes the family, and its revoke can
+  // land before Issue stored the next token, which would then survive it
+  // (0.19.0 returned it). Read the spent token again: revoked means the
+  // race was lost after all; revoke what Issue added and refuse.
+  if FStore.FindByHash(LScope, Hash(AToken), LRecord) and LRecord.Revoked then
+  begin
+    RevokeFamilyOf(LScope, Result.FamilyId, 'two refreshes raced on one token');
+    raise ERefreshTokenRejected.Create(rrRaced);
+  end;
 end;
 
 procedure TRefreshTokens.Revoke(const AToken: string);

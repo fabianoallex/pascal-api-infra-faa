@@ -31,12 +31,15 @@ type
     function Date: TDateTime;
   end;
 
-  // The memory store, with MarkUsed refused once: another request won.
+  // The memory store, with MarkUsed refused once: another request won; or
+  // with the family revoked just before the next Add: the request that lost
+  // the race revoked it before the winner stored its next token.
   TRacingStore = class(TInterfacedObject, IRefreshTokenStore)
   private
     FInner: IRefreshTokenStore;
   public
     LoseNextMark: Boolean;
+    RevokeBeforeNextAdd: Boolean;
     constructor Create;
     procedure Add(const AScope, AHash: string; const ARecord: TRefreshTokenRecord;
       ACreatedAt: Int64);
@@ -66,12 +69,14 @@ type
     [Test] procedure Rotate_IssuesTheNextInTheFamily;
     [Test] procedure Rotate_Reused_RevokesTheFamily;
     [Test] procedure Rotate_Raced_RevokesTheFamily;
+    [Test] procedure Rotate_Raced_LoserRevokedBeforeTheNextWasStored;
     [Test] procedure Rotate_UserGone_RevokesTheFamily;
     [Test] procedure Rotate_Expired;
     [Test] procedure Rotate_UnknownAndMalformed;
     [Test] procedure Rotate_AnotherScopeIsUnknown;
     [Test] procedure Revoke_EndsTheLogin_AnyTokenIsFine;
     [Test] procedure RevokeUser_EndsEveryLogin;
+    [Test] procedure Security_WithoutScope;
     [Test] procedure DbStore_SqlAndParameters;
   end;
 
@@ -114,6 +119,11 @@ end;
 procedure TRacingStore.Add(const AScope, AHash: string; const ARecord: TRefreshTokenRecord;
   ACreatedAt: Int64);
 begin
+  if RevokeBeforeNextAdd then
+  begin
+    RevokeBeforeNextAdd := False;
+    FInner.RevokeFamily(AScope, ARecord.FamilyId, ACreatedAt);
+  end;
   FInner.Add(AScope, AHash, ARecord, ACreatedAt);
 end;
 
@@ -288,6 +298,40 @@ begin
   end;
 end;
 
+// Found reading the unit for sample 01 (2026-10-19): the winner's MarkUsed, then
+// the loser's revoke, then the winner's Add left the next token alive, and
+// the winner was answered with it.
+procedure TRefreshTokensTests.Rotate_Raced_LoserRevokedBeforeTheNextWasStored;
+var
+  LRacing: TRacingStore;
+  LStore: IRefreshTokenStore;
+  LTokens: TRefreshTokens;
+  LToken, LReason: string;
+  LRecord: TRefreshTokenRecord;
+begin
+  LRacing := TRacingStore.Create;
+  LStore := LRacing;
+  LTokens := TRefreshTokens.Create(LStore, 3600, Log);
+  try
+    LToken := LTokens.Issue('acme', 'u1');
+    TAssert.AssertTrue(LStore.FindByHash('acme', TRefreshTokens.Hash(LToken), LRecord));
+    LRacing.RevokeBeforeNextAdd := True;
+    LReason := '';
+    try
+      LTokens.Rotate(LToken, UserActive);
+    except
+      on E: ERefreshTokenRejected do
+        LReason := RefreshRejectionName(E.Reason);
+    end;
+    TAssert.AssertEquals('the winner is refused too', 'raced', LReason);
+    TAssert.AssertEquals('no token of the family left unrevoked', 0,
+      LStore.RevokeFamily('acme', LRecord.FamilyId, T0));
+    TAssert.AssertTrue(Pos('revoked: two refreshes raced on one token', FLog) > 0);
+  finally
+    LTokens.Free;
+  end;
+end;
+
 procedure TRefreshTokensTests.Rotate_UserGone_RevokesTheFamily;
 var
   LToken: string;
@@ -354,6 +398,18 @@ begin
   TAssert.AssertEquals('revoked', Rejection(B));
   TAssert.AssertEquals('another user keeps theirs', '', Rejection(C));
   TAssert.AssertEquals(0, FTokens.RevokeUser('acme', 'u1'));
+end;
+
+procedure TRefreshTokensTests.Security_WithoutScope;
+var
+  LFirst: string;
+begin
+  LFirst := FTokens.Issue('', 'u1');
+  FTokens.Rotate(LFirst, UserActive);
+  TAssert.AssertEquals('reused', Rejection(LFirst));
+  // No "of scope " with nothing after it.
+  TAssert.AssertEquals(0, Pos('scope', FLog));
+  TAssert.AssertTrue(Pos(' revoked: a used refresh token came back', FLog) > 0);
 end;
 
 procedure TRefreshTokensTests.DbStore_SqlAndParameters;

@@ -6,7 +6,11 @@
   and the JWT signing keys when JWT_KEY_STORE=db, read and written by
   PascalApi.JwtKeys' TDbJwtKeyStore through JWT_KEY.BY_TENANT, JWT_KEY.INSERT
   and JWT_KEY.DELETE (the unique key on TENANT_ID and GENERATION is what
-  settles two instances rotating at once).
+  settles two instances rotating at once); and the refresh tokens of every
+  tenant, read and written by PascalApi.RefreshTokens' TDbRefreshTokenStore
+  through REFRESH.* (TENANT_ID is the token's scope; the UPDATE of
+  REFRESH.MARK_USED matches a row only while USED_AT and REVOKED_AT are
+  NULL, so the rows it changed decide two refreshes of one token).
 
   The sample has no admin API: on startup, SeedTenants replaces the table's
   rows with the TENANTS configuration, standing in for whatever provisions
@@ -25,7 +29,7 @@ uses
 
 function ControlSqlSource: ISqlSource;
 
-/// SCHEMA_MIGRATIONS, TENANTS and JWT_KEYS.
+/// SCHEMA_MIGRATIONS, TENANTS, JWT_KEYS and REFRESH_TOKENS.
 function ControlMigrations: TArray<TMigrationItem>;
 
 /// The TENANTS rows become ASource's tenants, in one transaction.
@@ -58,6 +62,31 @@ begin
       'KID VARCHAR(128) NOT NULL, SECRET VARCHAR(255) NOT NULL, CREATED_AT BIGINT NOT NULL, ' +
       'ACTIVE_FROM BIGINT NOT NULL, CONSTRAINT PK_JWT_KEYS PRIMARY KEY (TENANT_ID, GENERATION), ' +
       'CONSTRAINT UQ_JWT_KEYS_KID UNIQUE (KID));')
+    // Only the token's SHA-256 is stored (TOKEN_HASH, 64 hex digits).
+    .Add(DIR, 'MIG.0004',
+      'CREATE TABLE REFRESH_TOKENS (ID VARCHAR(32) NOT NULL PRIMARY KEY, ' +
+      'TENANT_ID VARCHAR(64) NOT NULL, TOKEN_HASH CHAR(64) NOT NULL, ' +
+      'USER_ID VARCHAR(128) NOT NULL, FAMILY_ID VARCHAR(32) NOT NULL, ' +
+      'CREATED_AT BIGINT NOT NULL, EXPIRES_AT BIGINT NOT NULL, USED_AT BIGINT, REVOKED_AT BIGINT, ' +
+      'CONSTRAINT UQ_REFRESH_TOKENS_HASH UNIQUE (TENANT_ID, TOKEN_HASH));' +
+      'CREATE INDEX IX_REFRESH_TOKENS_FAMILY ON REFRESH_TOKENS (TENANT_ID, FAMILY_ID);' +
+      'CREATE INDEX IX_REFRESH_TOKENS_USER ON REFRESH_TOKENS (TENANT_ID, USER_ID);')
+    .Add(DIR, 'REFRESH.INSERT',
+      'INSERT INTO REFRESH_TOKENS (ID, TENANT_ID, TOKEN_HASH, USER_ID, FAMILY_ID, CREATED_AT, ' +
+      'EXPIRES_AT) VALUES (:ID, :TENANT_ID, :TOKEN_HASH, :USER_ID, :FAMILY_ID, :CREATED_AT, ' +
+      ':EXPIRES_AT)')
+    .Add(DIR, 'REFRESH.BY_HASH',
+      'SELECT ID, USER_ID, FAMILY_ID, EXPIRES_AT, USED_AT, REVOKED_AT FROM REFRESH_TOKENS ' +
+      'WHERE TENANT_ID = :TENANT_ID AND TOKEN_HASH = :TOKEN_HASH')
+    .Add(DIR, 'REFRESH.MARK_USED',
+      'UPDATE REFRESH_TOKENS SET USED_AT = :USED_AT WHERE TENANT_ID = :TENANT_ID AND ID = :ID ' +
+      'AND USED_AT IS NULL AND REVOKED_AT IS NULL')
+    .Add(DIR, 'REFRESH.REVOKE_FAMILY',
+      'UPDATE REFRESH_TOKENS SET REVOKED_AT = :REVOKED_AT WHERE TENANT_ID = :TENANT_ID ' +
+      'AND FAMILY_ID = :FAMILY_ID AND REVOKED_AT IS NULL')
+    .Add(DIR, 'REFRESH.REVOKE_USER',
+      'UPDATE REFRESH_TOKENS SET REVOKED_AT = :REVOKED_AT WHERE TENANT_ID = :TENANT_ID ' +
+      'AND USER_ID = :USER_ID AND REVOKED_AT IS NULL')
     .Add(DIR, 'JWT_KEY.BY_TENANT',
       'SELECT KID, SECRET, GENERATION, CREATED_AT, ACTIVE_FROM FROM JWT_KEYS ' +
       'WHERE TENANT_ID = :TENANT_ID')
@@ -85,10 +114,11 @@ function ControlMigrations: TArray<TMigrationItem>;
 
 begin
   Result := nil;
-  SetLength(Result, 3);
+  SetLength(Result, 4);
   Result[0] := Item(1, 'MIG.0001');
   Result[1] := Item(2, 'MIG.0002');
   Result[2] := Item(3, 'MIG.0003');
+  Result[3] := Item(4, 'MIG.0004');
 end;
 
 procedure SeedTenants(const AFactory: IDBFactory; const ASource: ITenantCatalog);

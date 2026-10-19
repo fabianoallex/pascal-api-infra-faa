@@ -16,8 +16,13 @@
 # the executable; without either, it skips samples 02 and 03.
 #
 # For a Delphi build, skip the build: start the .exe from samples\0N-*\Win32
-# (or Win64)\Debug and run the matching scenarios script with its port.
+# (or Win64)\Debug and run the matching scenarios script with its port, with
+# REFRESH_TOKEN_SECONDS=3 in the server's environment (the scenarios check a
+# refresh token's expiry only when it is that short).
 set -e
+# The refresh tokens of samples 01 and 03 expire in seconds, so the
+# scenarios see one expire without a long wait.
+export REFRESH_TOKEN_SECONDS=3
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 LAZBUILD="${LAZBUILD:-lazbuild}"
 command -v "$LAZBUILD" >/dev/null 2>&1 || LAZBUILD=/c/lazarus4.0/lazbuild.exe

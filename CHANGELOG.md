@@ -6,6 +6,48 @@ may change the API; each such change is listed here.
 
 ## [Unreleased]
 
+## [0.19.1] - 2026-10-19
+
+`PascalApi.RefreshTokens` gets a tested sample and a guide; writing them found a race that
+handed out a live token of a revoked family.
+Verified on FPC 3.2.2 Windows and Linux and Delphi 12 Win32 and Win64: 382 tests, 0 leaks;
+HTTP 253 + 95 + 160 + 36 + 30 checks.
+
+### Fixed
+
+- `TRefreshTokens.Rotate`: when two refreshes of one token raced, the loser's revoke could land
+  before the winner stored its next token, which then survived the revoke and was returned (a
+  live token of a revoked family). The winner now reads the spent token again after storing the
+  next one, and when it was revoked meanwhile, revokes the family again and raises `rrRaced`:
+  both requests can be refused, never two winners and no live token left
+  (`Rotate_Raced_LoserRevokedBeforeTheNextWasStored`). Found while writing sample 01.
+- The `OnSecurity` line for scope `''` no longer says "of scope  revoked" (two spaces):
+  "refresh token family <id> revoked: <reason>"; with a scope it is unchanged.
+
+### Added
+
+- Samples 01 and 03: `POST /auth/login` also answers a refresh token (`ITokens`: `token`,
+  `expiresIn`, `refreshToken`, `refreshExpiresIn`, with `Cache-Control: no-store`);
+  `POST /auth/refresh` and `POST /auth/logout`, open paths, documented in OpenAPI with their
+  DTOs and the 401, left out of MCP (`NoMcp`). `ACCESS_TOKEN_SECONDS` and
+  `REFRESH_TOKEN_SECONDS` set the lifetimes. Sample 01 keeps the tokens in memory and has
+  `POST /auth/logout-all` (`RevokeUser` for the caller); sample 03 keeps them in its control
+  database (`REFRESH_TOKENS`, migration 4, the `REFRESH.*` SQL), the tenant as the scope,
+  checked against the catalog before the token is exchanged.
+- HTTP scenarios: rotation, a spent token that comes back revoking the newest one and the
+  `SECURITY` line, two refreshes at once (never two 200s), expiry (`tools/test_http.sh` and
+  `tools/test_http_docker.sh` set `REFRESH_TOKEN_SECONDS=3`), malformed tokens, logout
+  answering the same for any token, a secret under another tenant's prefix, an unknown or
+  suspended tenant, a user the check refuses, sign out everywhere, no token in the log, no MCP
+  tool for the routes; with two instances of sample 03, a token issued by one rotated by the
+  other and the reuse seen by the first. Sample 01: 253 checks (195 before), sample 03: 160
+  (107), two instances: 36 (31) on the database and 30 (25) on Redis.
+- `docs/guide/refresh-tokens.md`: why, the format and the hash, the family and reuse, the race
+  and the conditional `UPDATE`, the user and tenant checks, logout and `RevokeUser`, the table
+  for SQLite and PostgreSQL, purging, your own store's contract, the pitfalls. Linked from the
+  index, the README, `authentication.md`, `jwt-keys.md`, `multitenancy.md` and `mcp.md`; the
+  guides that quoted the samples' old login follow the new code.
+
 ## [0.19.0] - 2026-10-19
 
 Two pieces every list route of pascal-agenda-faa, the library's first application, wrote by hand

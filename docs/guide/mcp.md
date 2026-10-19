@@ -91,7 +91,8 @@ TRouteDoc.Get('/fail/server').Summary('Always 500').Tag('errors').NoMcp
 ```
 
 `NoMcp` keeps an operation documented in OpenAPI but out of the tools (checked: sample 01's
-`tools/list` has no `fail`). Leave out what a model should never call. `OperationId('find_cities')`
+`tools/list` has no `fail`, and none of its refresh and logout routes: a refresh token has no
+place in a model's context, [Refresh tokens](refresh-tokens.md)). Leave out what a model should never call. `OperationId('find_cities')`
 names the tool, and the operation in the OpenAPI document too.
 
 ### 4. One endpoint per group of tools: tags

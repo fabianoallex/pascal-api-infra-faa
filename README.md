@@ -13,8 +13,9 @@ properties, because FPC 3.2.2's RTTI sees nothing else.
 Version **0.16.0** (see the [changelog](CHANGELOG.md)): the core, the Horse middlewares, OpenAPI, an MCP
 server (protocol 2026-07-28), W3C trace context, metrics (Prometheus), health endpoints,
 spans exported to an OpenTelemetry collector (OTLP), opt-in multi-tenancy
-([docs/multitenancy-design.md](docs/multitenancy-design.md)), and JWT signing keys that rotate
-by themselves, per tenant, sealed in their store ([guide](docs/guide/jwt-keys.md)).
+([docs/multitenancy-design.md](docs/multitenancy-design.md)), JWT signing keys that rotate
+by themselves, per tenant, sealed in their store ([guide](docs/guide/jwt-keys.md)), and refresh
+tokens used once, a copy that comes back ending its login ([guide](docs/guide/refresh-tokens.md)).
 Observability plan: [docs/observability-design.md](docs/observability-design.md). See [docs/plan.md](docs/plan.md).
 
 ## Guides
@@ -43,6 +44,7 @@ and what was measured.
 | `PascalApi.Crypto` | SHA-256, HMAC-SHA256, Base64url (FPC 3.2.2 has no SHA-256): wrappers of pascal-common-faa's `PascalCommon.Crypto` |
 | `PascalApi.Jwt` | HS256 JSON Web Tokens: sign, verify (alg, signature, exp, nbf), claims; a key id (`kid`) in the header |
 | `PascalApi.JwtKeys` | signing keys named by `kid` ([guide](docs/guide/jwt-keys.md)): a static ring (`JWT_KEYS`), a ring that generates and rotates its keys in a store every instance shares (`TDbJwtKeyStore`; Redis in `src/redis`), secrets sealed with AES-256-GCM under a master key (`TSealedJwtKeyStore`) |
+| `PascalApi.RefreshTokens` | refresh tokens used once ([guide](docs/guide/refresh-tokens.md)): `<scope>.<secret>`, only the SHA-256 stored, rotation in a family, a spent token that comes back or two refreshes at once revoking the family, your user check, logout and `RevokeUser`; stores in a database (`TDbRefreshTokenStore`, your named SQL) or in memory |
 | `PascalApi.Redis.JwtKeys` (`src/redis`) | `TRedisJwtKeyStore`: the keys in Redis, on pascal-redis-faa (outside the package) |
 | `PascalApi.Horse.Middlewares` (`src/horse`) | Horse middlewares: error handler, CORS, request log (with your own fields: `AddField`), Bearer auth, JWT, rate limit (key and limit per request: `KeyExtractor`, `LimitFor`) |
 | `PascalApi.OpenApi` | OpenAPI 3.0.3 document from routes and DTO types; `TApiSchema.Describe` for metadata |
@@ -111,9 +113,9 @@ process, spans, a server that is down): [docs/guide/messaging.md](docs/guide/mes
 
 | Sample | Shows | Checked by |
 |---|---|---|
-| [01-api](samples/01-api/ApiSample.dpr) | every middleware (errors, CORS, log, metrics, JWT, rate limit), health, paging and validation, in memory | `tools/http_scenarios.sh` (190 checks) |
-| [02-db](samples/02-db/DbApiSample.dpr) | SQLite through pascal-db-faa (SQLdb on FPC, FireDAC on Delphi): migrations, paging and ordering in SQL, filters, 409 from a unique key, NULL as `null` | `tools/http_scenarios_db.sh` (93 checks, including a PATCH with absent/null/value; also the pool metrics pascal-db-faa records) |
-| [03-tenants](samples/03-tenants/TenantApiSample.dpr) | multi-tenant with `PascalApi.Tenancy`: the tenant from a JWT claim, a database per tenant and a shared one with `TENANT_ID`, 401/403 for a removed or suspended tenant; JWT signing keys static (`JWT_KEYS`) or generated per tenant, sealed, in the control database or Redis (`JWT_KEY_STORE`) | `tools/http_scenarios_tenants.sh` (107 checks, most of them one tenant trying another's rows, also through a JOIN; also rate limit by plan, `tenant.id` in the log, the static keys); `tools/http_scenarios_jwt_rotation.sh` (two instances on one key store, rotating every 3 s: 31 checks on the database, 25 on Redis) |
+| [01-api](samples/01-api/ApiSample.dpr) | every middleware (errors, CORS, log, metrics, JWT, rate limit), health, paging and validation, refresh tokens, in memory | `tools/http_scenarios.sh` (253 checks) |
+| [02-db](samples/02-db/DbApiSample.dpr) | SQLite through pascal-db-faa (SQLdb on FPC, FireDAC on Delphi): migrations, paging and ordering in SQL, filters, 409 from a unique key, NULL as `null` | `tools/http_scenarios_db.sh` (95 checks, including a PATCH with absent/null/value; also the pool metrics pascal-db-faa records) |
+| [03-tenants](samples/03-tenants/TenantApiSample.dpr) | multi-tenant with `PascalApi.Tenancy`: the tenant from a JWT claim, a database per tenant and a shared one with `TENANT_ID`, 401/403 for a removed or suspended tenant; JWT signing keys static (`JWT_KEYS`) or generated per tenant, sealed, in the control database or Redis (`JWT_KEY_STORE`); refresh tokens per tenant in the control database | `tools/http_scenarios_tenants.sh` (160 checks, most of them one tenant trying another's rows, also through a JOIN; also rate limit by plan, `tenant.id` in the log, the static keys, refresh tokens under another tenant's prefix); `tools/http_scenarios_jwt_rotation.sh` (two instances on one key store, rotating every 3 s, and a refresh token issued by one and rotated by the other: 36 checks on the database, 30 on Redis) |
 | [04-messaging](samples/04-messaging/MessagingSample.lpr) | Redis (a shared `TRedisClient`, cache-aside, a fallback when Redis is down) and RabbitMQ (JSON orders published with and without confirms, a consumer that rejects what it can't read) inside an API, with spans; [PipesJsonSample](samples/04-messaging/PipesJsonSample.lpr): JSON DTOs between processes over pascal-pipes-faa. FPC only, built by hand (`build_fpc.sh`) against your clones of the sibling libraries | not by CI: measured by hand for [docs/guide/messaging.md](docs/guide/messaging.md) and [docs/guide/dtos-json.md](docs/guide/dtos-json.md) |
 
 Samples 01-03 run with one source on Delphi and Lazarus/FPC. On FPC for Windows, samples 02 and 03 need

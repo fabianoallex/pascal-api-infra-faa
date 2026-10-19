@@ -280,6 +280,111 @@ body_has '"stateName":"Santa Catarina"' "join: acme's state (dedicated)"
 req GET /cities/4205407/details "" -H "Authorization: Bearer $GLOBEX"
 body_has '"stateName":null' "join: globex has no SC (dedicated)"
 
+# --- refresh tokens (PascalApi.RefreshTokens in the control database, the
+# tenant as the scope): rotation, a spent token coming back, two refreshes
+# racing, logout, a token moved to another tenant, an unknown or suspended
+# tenant, a user the check refuses, expiry. Every refusal is the same 401.
+field()     { sed -n 's/.*"'"$1"'":"\([^"]*\)".*/\1/p' "$T/body"; }
+num_field() { sed -n 's/.*"'"$1"'":\([0-9][0-9]*\).*/\1/p' "$T/body"; }
+refresh()   { req POST /auth/refresh "{\"refreshToken\":\"$1\"}"; }
+logout()    { req POST /auth/logout "{\"refreshToken\":\"$1\"}"; }
+INVALID_REFRESH='{"error":"Invalid or expired refresh token.","code":"invalid_refresh_token"}'
+refused()   { status_is 401 "$1"; body_is "$INVALID_REFRESH" "$1"; header_is WWW-Authenticate 'Bearer' "$1"; }
+login acme ana > /dev/null
+header_is Cache-Control 'no-store' "login: tokens are not cached"
+REFRESH1="$(field refreshToken)"
+REFRESH_SECONDS="$(num_field refreshExpiresIn)"
+case "$REFRESH1" in acme.*) ok ;; *) fail "login: the refresh token names its tenant ($REFRESH1)" ;; esac
+SECRET1="${REFRESH1#acme.}"
+refresh "$REFRESH1"
+status_is 200 "refresh"
+header_is Cache-Control 'no-store' "refresh: tokens are not cached"
+REFRESH2="$(field refreshToken)"
+case "$REFRESH2" in acme.*) [ "$REFRESH2" != "$REFRESH1" ] && ok || fail "refresh: a new token" ;; *) fail "refresh: acme's next token ($REFRESH2)" ;; esac
+req GET /tenant "" -H "Authorization: Bearer $(field token)"
+body_is '{"tenant":"acme","mode":"dedicated"}' "refresh: the new access token is acme's"
+# A spent token comes back: its whole login ends.
+refresh "$REFRESH1"
+refused "a spent refresh token"
+refresh "$REFRESH2"
+refused "after a reuse, the newest token of the login is revoked too"
+# Two refreshes of one token at once (a shared tenant): never two winners,
+# and the login ends.
+login initech ana > /dev/null
+RACE="$(field refreshToken)"
+for N in 1 2; do
+  curl -s -o "$T/race$N" -w '%{http_code}' -H 'Content-Type: application/json' \
+    --data-binary "{\"refreshToken\":\"$RACE\"}" "$BASE/auth/refresh" > "$T/race$N.status" &
+done
+wait
+STATUSES="$(cat "$T/race1.status") $(cat "$T/race2.status")"
+case "$STATUSES" in "200 401"|"401 200"|"401 401") ok ;; *) fail "race: statuses $STATUSES, expected one 200 at most and a 401" ;; esac
+for N in 1 2; do
+  if [ "$(cat "$T/race$N.status")" = 200 ]; then
+    refresh "$(sed -n 's/.*"refreshToken":"\([^"]*\)".*/\1/p' "$T/race$N")"
+    refused "race: the winner's next token is revoked with its login"
+  fi
+done
+# Another tenant's prefix on a real secret: the hash is acme's, not theirs.
+login acme bia > /dev/null
+REFRESH3="$(field refreshToken)"
+refresh "globex.${REFRESH3#acme.}"
+refused "refresh: acme's secret under globex"
+refresh "initech.${REFRESH3#acme.}"
+refused "refresh: acme's secret under a shared tenant"
+refresh "nowhere.${REFRESH3#acme.}"
+refused "refresh: a tenant the catalog doesn't have, the same answer"
+refresh "${REFRESH3#acme.}"
+refused "refresh: the secret without its tenant"
+refresh "soylent.${REFRESH3#acme.}"
+status_is 403 "refresh: a suspended tenant"
+body_has '"code":"tenant_suspended"' "refresh: a suspended tenant"
+refresh "garbage"
+refused "refresh: garbage"
+refresh "$REFRESH3"
+status_is 200 "refresh: the real one still works after the attempts"
+REFRESH3="$(field refreshToken)"
+req POST /auth/refresh '{}'
+status_is 400 "refresh without a token"
+# Logout: the same answer for any token.
+logout "$REFRESH3"
+status_is 204 "logout"
+refresh "$REFRESH3"
+refused "refresh after logout"
+logout "$REFRESH3"
+status_is 204 "logout again: the same answer"
+logout "nowhere.$SECRET1"
+status_is 204 "logout under an unknown tenant: the same answer"
+logout "garbage"
+status_is 204 "logout of garbage: the same answer"
+# A user deactivated after the login: the check refuses, the login ends.
+login umbrella blocked-1 > /dev/null
+refresh "$(field refreshToken)"
+refused "a user the check refuses"
+# Expiry, when the runner set a short REFRESH_TOKEN_SECONDS (tools/test_http.sh).
+if [ "$REFRESH_SECONDS" -le 10 ] 2>/dev/null; then
+  login globex ana > /dev/null
+  EXPIRING="$(field refreshToken)"
+  sleep $((REFRESH_SECONDS + 1))
+  refresh "$EXPIRING"
+  refused "an expired refresh token"
+else
+  echo "skipped: refresh token expiry (refreshExpiresIn $REFRESH_SECONDS; set REFRESH_TOKEN_SECONDS=3)"
+fi
+if [ -n "$SERVER_LOG" ]; then
+  sleep 1
+  grep -q "^SECURITY refresh token family [0-9a-f]* of scope acme revoked: a used refresh token came back" \
+    "$SERVER_LOG" && ok || fail "log: acme's reuse"
+  # The race's loser logs "raced", or "came back" when the first had finished.
+  grep -q "^SECURITY refresh token family [0-9a-f]* of scope initech revoked: \(a used refresh token came back\|two refreshes raced\)" \
+    "$SERVER_LOG" && ok || fail "log: initech's race"
+  grep -q "^SECURITY refresh token family [0-9a-f]* of scope umbrella revoked: the user is gone or inactive" \
+    "$SERVER_LOG" && ok || fail "log: the user refused"
+  grep '^SECURITY' "$SERVER_LOG" | grep -v 'came back\|raced on one token\|gone or inactive' | grep -q . \
+    && fail "log: an unexpected SECURITY line" || ok
+  grep -q "$SECRET1" "$SERVER_LOG" && fail "log: a refresh token reached the log" || ok
+fi
+
 # --- rate limit: one window per tenant, its limit by the tenant's plan
 # (TRateLimitOptions.KeyExtractor and LimitFor)
 curl -s -D "$T/headers" -o /dev/null -H "Authorization: Bearer $ACME" "$BASE/tenant"

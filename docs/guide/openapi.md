@@ -267,7 +267,8 @@ TRouteDoc.Serve('/swagger', 'Cities API (pascal-api-infra-faa sample 02)', '1.0.
   document without a token:
 
   ```pascal
-  THorse.Use(TJwtMiddleware.New(GSecret, ['/health', '/metrics', '/auth/login', '/swagger']));
+  THorse.Use(TJwtMiddleware.New(GSecret, ['/health', '/metrics', '/auth/login', '/auth/refresh',
+    '/auth/logout', '/swagger']));
   ```
 
 ### 7. Authentication in the document comes from the middleware
@@ -295,12 +296,12 @@ protected path keeps the requirement. With `TAuthMiddleware.Bearer` (your own ch
 
 ### 8. Routes without DTOs
 
-A response written by hand (`TJsonSend.Send(ARes, '{"token":"..."}')`) has no type to derive a
-schema from. Sample 01 documents only its status and a description:
+A response written by hand (`TJsonSend.Send(ARes, JsonMember('sub', ...))`) has no type to
+derive a schema from. Sample 01 documents only its status and a description:
 
 ```pascal
-TRouteDoc.Post('/auth/login').Summary('Get a token (1 hour)').Tag('public')
-  .NoContent(200, '{"token": "..."}').Error(400, '"user" is missing').Register(PostLogin);
+TRouteDoc.Get('/me').Summary('The token''s subject').Tag('auth')
+  .NoContent(200, '{"sub": "..."}').Error(401, 'No or invalid token').Register(GetMe);
 ```
 
 The description is free text. A client generator gets no type for it, and no check compares it

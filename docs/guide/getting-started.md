@@ -3,7 +3,7 @@
 From an empty folder to a Horse API that answers JSON, turns exceptions into HTTP statuses, logs
 every request and checks a token, on Delphi and on Lazarus/FPC from one source. The code comes
 from `samples/01-api`, which compiles on both compilers and is checked over HTTP by
-`tools/http_scenarios.sh` (190 checks), except the smallest program below, which says where it
+`tools/http_scenarios.sh` (253 checks), except the smallest program below, which says where it
 was checked.
 
 ## What it solves
@@ -395,7 +395,8 @@ TErrorHandlerMiddleware.Register(GCallbacks.LogError);
 THorse.Use(TLoggerMiddleware.New);
 THorse.Use(TMetricsMiddleware.New);
 THorse.Use(TCorsMiddleware.New('https://app.example.com'));
-THorse.Use(TJwtMiddleware.New(GSecret, ['/health', '/metrics', '/auth/login', '/swagger']));
+THorse.Use(TJwtMiddleware.New(GSecret, ['/health', '/metrics', '/auth/login', '/auth/refresh',
+  '/auth/logout', '/swagger']));
 
 GRateLimit := TRateLimitOptions.Default;
 GRateLimit.Limit := 3;
@@ -414,16 +415,17 @@ Horse runs global middlewares in the order of the `THorse.Use` calls. Why this o
 |---|---|---|
 | logger first | it times the whole request, sets `X-Request-Id`, which the others and the handler read, and answers an exception raised by a middleware after it ([Errors and validation](errors.md), step 5) | the handler sees the trace id (`GET /trace`); `/fail/middleware` answers JSON |
 | CORS before JWT | a browser's preflight (`OPTIONS`) carries no token | preflight answered 204 with the CORS headers, no token |
-| JWT, with the public paths excluded | login, health and metrics must work without a token | 401 without a token; `/auth/login` and `/health` open; `/auth/login-admin` is **not** excluded by `/auth/login` (whole segments) |
+| JWT, with the public paths excluded | login, refresh, logout, health and metrics must work without a token | 401 without a token; `/auth/login` and `/health` open; `/auth/login-admin` is **not** excluded by `/auth/login` (whole segments) |
 | the rate limit on a path | `THorse.Use('/limited', ...)` limits only that path | `/cities/1` still 200 when `/limited` answers 429 |
 
 `TAppConfig.Get('JWT_SECRET', default)` reads the environment first, then a `.env` file in the
 executable's folder, then the default. The development default is for the sample: give the real secret through the
 environment in production. More in [Configuration](configuration.md).
 
-The login route signs a token with `TJwt.SignHS256(LClaims, GSecret)`, and a handler reads the
-verified claims with `TJwtMiddleware.Claims(AReq)` (the caller frees the result). Both are in
-sample 01 (`PostLogin`, `GetMe`); [Authentication](authentication.md) covers them.
+The login route signs an access token with `TJwt.SignHS256` and answers a refresh token beside
+it, and a handler reads the verified claims with `TJwtMiddleware.Claims(AReq)` (the caller frees
+the result). All are in sample 01 (`PostLogin`, `PostRefresh`, `GetMe`);
+[Authentication](authentication.md) and [Refresh tokens](refresh-tokens.md) cover them.
 
 ### 8. Callbacks are methods
 
