@@ -18,7 +18,7 @@ unit PascalApi.PagedQuery;
     if HasSearch then
       LArgs := LArgs.Strings('SEARCH', PdbLikeContains(LKey));
     if AFind.Active.HasValue then
-      LArgs := LArgs.Integers('ACTIVE', Ord(AFind.Active.Value));
+      LArgs := LArgs.Flags('ACTIVE', AFind.Active.Value);
     Result := TTenantPagedQuery.Run<IService>(FScope,
       Filtered(FScope.Factory.SqlLoader['SERVICE.COUNT']),
       Filtered(FScope.Factory.SqlLoader['SERVICE.PAGE']),
@@ -27,7 +27,11 @@ unit PascalApi.PagedQuery;
   - The parameters are a value (TQueryArgs), bound to both statements, not
     a callback: FPC 3.2.2 has no anonymous methods, and a bind method per
     repository would need its own object to carry the filter. The setters
-    have IParams' names and return a changed copy, so they chain.
+    have IParams' names and return a changed copy, so they chain. A flag
+    stored in an integer column goes through Flags (the Integer 1/0);
+    Booleans is for the database's Boolean type: PostgreSQL refuses a
+    Boolean parameter for an integer column (pascal-db-faa's gotcha 54,
+    found by pascal-agenda-faa).
   - The row reader is a plain function (TPageRowFunc<T>), the same function
     a FindById uses: ReadService(AResult): IService.
   - The page SQL marks the order and the clause with ${ORDER} and ${PAGE}
@@ -52,7 +56,7 @@ uses
   PascalApi.Tenancy;
 
 type
-  TQueryArgKind = (qakString, qakInteger, qakInt64, qakBoolean, qakDouble);
+  TQueryArgKind = (qakString, qakInteger, qakInt64, qakBoolean, qakDouble, qakFlag);
 
   TQueryArg = record
     Name: string;
@@ -73,8 +77,12 @@ type
     function Strings(const AName, AValue: string): TQueryArgs;
     function Integers(const AName: string; AValue: Integer): TQueryArgs;
     function Int64s(const AName: string; AValue: Int64): TQueryArgs;
+    /// For a column of the database's Boolean type (BOOLEAN, BIT).
     function Booleans(const AName: string; AValue: Boolean): TQueryArgs;
     function Doubles(const AName: string; AValue: Double): TQueryArgs;
+    /// For a flag stored in a SMALLINT/INTEGER column: bound as the Integer
+    /// 1/0 (IParams.Flags).
+    function Flags(const AName: string; AValue: Boolean): TQueryArgs;
     function Count: Integer;
     /// Binds every value to AQuery.Params (after its SQL is set).
     procedure ApplyTo(const AQuery: IQuery);
@@ -184,6 +192,15 @@ begin
   Result := Add(LArg);
 end;
 
+function TQueryArgs.Flags(const AName: string; AValue: Boolean): TQueryArgs;
+var
+  LArg: TQueryArg;
+begin
+  LArg := NewArg(AName, qakFlag);
+  LArg.I := Ord(AValue);
+  Result := Add(LArg);
+end;
+
 function TQueryArgs.Count: Integer;
 begin
   Result := Length(FItems);
@@ -200,6 +217,7 @@ begin
       qakInt64: AQuery.Params.Int64s[FItems[K].Name] := FItems[K].I;
       qakBoolean: AQuery.Params.Booleans[FItems[K].Name] := FItems[K].I <> 0;
       qakDouble: AQuery.Params.Doubles[FItems[K].Name] := FItems[K].D;
+      qakFlag: AQuery.Params.Flags[FItems[K].Name] := FItems[K].I <> 0;
     end;
 end;
 

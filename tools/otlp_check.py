@@ -131,6 +131,9 @@ def main():
           "sample 02: a transaction span is a child of a server span")
     check(any(any(s.get("parentSpanId") == t["spanId"] for s in stmts) for t in commits),
           "sample 02: statements inside a transaction are its children")
+    # tools/test_http_docker.sh runs sample 02 on PostgreSQL too.
+    pg = [s for s in s02 if s["kind"] == 3 and s["_attrs"].get("db.system.name") == "postgresql"]
+    check(len(pg) > 0, "sample 02 on PostgreSQL: db statement spans (db.system.name postgresql)")
 
     # Sample 03: tenant.id on the server spans (TLoggerMiddleware.AddField
     # with TenantIdOf), only on requests the tenant middleware let through.

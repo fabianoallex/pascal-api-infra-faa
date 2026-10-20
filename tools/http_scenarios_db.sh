@@ -8,8 +8,11 @@
 #                                          running, started with --reset)
 #
 # Same script for every build of the sample (FPC Windows/Linux, Delphi
-# Win32/Win64). Exit code 0 only if every check passed.
+# Win32/Win64). DB_ENGINE=postgresql when the sample runs on PostgreSQL: two
+# checks differ (where NULL sorts, the pool's name). Exit code 0 only if
+# every check passed.
 PORT="${1:-9330}"
+ENGINE="${DB_ENGINE:-sqlite}"
 BASE="http://127.0.0.1:$PORT"
 T="$(mktemp -d)"
 FAILS=0
@@ -45,10 +48,22 @@ body_has '"items":[{"code":"1501402","name":"Belém","state":"PA","population":1
 req GET '/cities?page=3&limit=2' ""
 body_has '"hasNext":false,"hasPrev":true' "page 3"
 body_has '"name":"São Paulo"' "page 3 by name"
-req GET '/cities?limit=1&orderBy=-population' ""
-body_has '"name":"São Paulo"' "most populous first"
-req GET '/cities?limit=1&orderBy=population' ""
-body_has '"name":"Florianópolis","state":"SC","population":null' "NULL population sorts first in SQLite, and is JSON null"
+# Where the city without a population goes is each database's default for
+# NULL: the smallest value on SQLite, the largest on PostgreSQL (first when
+# descending, last when ascending).
+if [ "$ENGINE" = postgresql ]; then
+  req GET '/cities?limit=1&orderBy=-population' ""
+  body_has '"name":"Florianópolis","state":"SC","population":null' "NULL population sorts first descending in PostgreSQL, and is JSON null"
+  req GET '/cities?page=2&limit=1&orderBy=-population' ""
+  body_has '"name":"São Paulo"' "then the most populous"
+  req GET '/cities?limit=1&orderBy=population' ""
+  body_has '"name":"Campinas","state":"SP","population":1139047' "NULL population sorts last ascending in PostgreSQL"
+else
+  req GET '/cities?limit=1&orderBy=-population' ""
+  body_has '"name":"São Paulo"' "most populous first"
+  req GET '/cities?limit=1&orderBy=population' ""
+  body_has '"name":"Florianópolis","state":"SC","population":null' "NULL population sorts first in SQLite, and is JSON null"
+fi
 req GET '/cities?limit=500' ""
 body_has '"limit":50' "limit clamped to the maximum"
 # Only digits, within Integer: anything else is a 400 naming the parameter.
@@ -231,7 +246,7 @@ status_is 200 "metrics"
 grep -qF 'http_route="/cities/:code"' "$T/body" && ok || fail "metrics: route template"
 grep -qF 'http_route="/cities/3550308"' "$T/body" && fail "metrics: raw path" || ok
 # Pool metrics (pascal-db-faa): the pool isn't named, so it is the db.system.name.
-grep '^db_client_connection_count{' "$T/body" | grep 'state="idle"' | grep -qF 'pool_name="sqlite"'   && ok || fail "metrics: pool connections, state idle, pool sqlite"
+grep '^db_client_connection_count{' "$T/body" | grep 'state="idle"' | grep -qF "pool_name=\"$ENGINE\""   && ok || fail "metrics: pool connections, state idle, pool $ENGINE"
 grep '^db_client_connection_count{' "$T/body" | grep -qF 'state="used"'   && ok || fail "metrics: pool connections, state used"
 grep '^db_client_connection_max{' "$T/body" | grep -q ' 5$'   && ok || fail "metrics: db_client_connection_max is the sample's PoolMaxConnections (5)"
 WAIT_COUNT=$(metric_sum db_client_connection_wait_time_seconds_count "$T/body")

@@ -1,7 +1,7 @@
 #!/bin/sh
 # Everything CI runs (.github/workflows/ci.yml), also runnable locally with
 # Docker: the unit suite on Linux FPC 3.2.2, then samples/01-api,
-# samples/02-db (SQLite) and samples/03-tenants (multi-tenant) over HTTP
+# samples/02-db (SQLite, then PostgreSQL) and samples/03-tenants (multi-tenant) over HTTP
 # (tools/test_http_docker.sh). Delphi Community Edition can't
 # build headless, so the Delphi side is validated in the IDE (see CLAUDE.md,
 # "Tests").
@@ -16,7 +16,7 @@ if [ -z "${FPC_IMAGE:-}" ]; then
   FPC_IMAGE=pascalapi-fpc322
   docker build -q -t "$FPC_IMAGE" - <<'DOCKERFILE' >/dev/null
 FROM debian:bookworm
-RUN apt-get update && apt-get install -y --no-install-recommends fpc curl ca-certificates libsqlite3-0 python3-pip && rm -rf /var/lib/apt/lists/* && pip3 install --no-cache-dir --break-system-packages openapi-spec-validator==0.7.1 mcp==2.0.0
+RUN apt-get update && apt-get install -y --no-install-recommends fpc curl ca-certificates libsqlite3-0 libpq5 python3-pip && rm -rf /var/lib/apt/lists/* && pip3 install --no-cache-dir --break-system-packages openapi-spec-validator==0.7.1 mcp==2.0.0
 RUN curl -fsSL https://github.com/prometheus/prometheus/releases/download/v2.53.0/prometheus-2.53.0.linux-amd64.tar.gz | tar -xz -C /usr/local/bin --strip-components=1 prometheus-2.53.0.linux-amd64/promtool
 DOCKERFILE
 fi
@@ -24,5 +24,5 @@ export FPC_IMAGE
 
 echo "== unit suite"
 sh tools/test_fpc_docker.sh
-echo "== HTTP scenarios (samples/01-api, samples/02-db, samples/03-tenants)"
+echo "== HTTP scenarios (samples/01-api, samples/02-db on SQLite and PostgreSQL, samples/03-tenants)"
 sh tools/test_http_docker.sh

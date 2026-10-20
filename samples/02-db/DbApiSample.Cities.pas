@@ -1,6 +1,7 @@
 ﻿unit DbApiSample.Cities;
 
-{ The cities of sample 02 in a real database (SQLite through pascal-db-faa):
+{ The cities of sample 02 in a real database (SQLite or PostgreSQL through
+  pascal-db-faa):
   DTOs, migrations, and a repository that pages and orders in SQL.
 
   Everything that reaches the SQL text from the client goes through an
@@ -11,9 +12,11 @@
   violation, which the error handler answers with 409; nothing here checks
   for duplicates first.
 
-  The SQL is registered in code (TMemorySqlSource, directory SQLITE) to keep
-  the sample in two files; an application would usually embed .sql files as
-  resources (pascal-db-faa's tools/build_sql_res.py). }
+  The SQL is registered in code (TMemorySqlSource) to keep the sample in two
+  files; an application would usually embed .sql files as resources
+  (pascal-db-faa's tools/build_sql_res.py). It is the same on SQLite and
+  PostgreSQL, so it lives in one directory, COMMON, which the program's
+  TFallbackSqlSource asks after the database's own (SQLITE, PG). }
 
 {$IFDEF FPC}{$MODE DELPHI}{$H+}{$ENDIF}
 
@@ -163,7 +166,11 @@ type
 /// documentation, through DocHint).
 function CityOrderSpec: TOrderBySpec;
 
-/// Every SQL of the sample, under the SQLITE directory.
+const
+  /// The directory of the SQL every database runs.
+  CITY_SQL_COMMON_DIR = 'COMMON';
+
+/// Every SQL of the sample, under CITY_SQL_COMMON_DIR.
 function CitySqlSource: ISqlSource;
 
 /// The migrations: SCHEMA_MIGRATIONS, CITIES, seed rows.
@@ -184,7 +191,7 @@ uses
   DbApiSample.Validators;
 
 const
-  DIR = 'SQLITE';
+  DIR = CITY_SQL_COMMON_DIR;
 
 function CitySqlSource: ISqlSource;
 var

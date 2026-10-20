@@ -100,8 +100,8 @@ creates a DTO fills it through the class while an interface variable holds it
 normalizer factories, unit `PascalCommon.Normalizers`, `TNorm = class(TPcStringNormalizers)` in `DbApiSample.Normalizers`; the samples turn on 1.10.0's
 `PcSetSafeLogUtf8` and log only through `SafeWriteln`, never plain `Writeln`),
 pascal-jsonmapper-faa `v0.7.0` (refuses duplicate members; `EJsonInputError` = 400; exact
-`Currency` on FPC; `TUtcDateTime`, which `PascalApi.OpenApi` documents as `date-time`), pascal-db-faa `v0.16.0` (`TSQLResult`'s operations
-return a copy), pascal-redis-faa `v0.2.0` (only `src/redis` and sample 03's Redis key store
+`Currency` on FPC; `TUtcDateTime`, which `PascalApi.OpenApi` documents as `date-time`), pascal-db-faa `v0.17.0` (`IParams.Flags`, which `TQueryArgs.Flags` binds, and
+`TFallbackSqlSource`, which sample 02 uses; 0.15.0: `TSQLResult`'s operations return a copy), pascal-redis-faa `v0.2.0` (only `src/redis` and sample 03's Redis key store
 use it), Horse `3.3.12` (`fda6fed`; until 0.4.0
 this repository used 3.3.2, `72cc45f`; pascal-dfe-broker moved to 3.3.12 on 2026-10-09, delphi-api-starter is still on 3.3.2). They are **only for this
 repository's tests**: a consumer provides its own single copy of each (submodule + search path),
@@ -114,10 +114,14 @@ never `pascal-api-infra-faa/external/...`. Clone with `git submodule update --in
 - Delphi search path of a test project: `src`, `external/pascal-common-faa/src`,
   `external/pascal-common-faa/bridges/jsonmapper`, `external/pascal-jsonmapper-faa/src`,
   `external/pascal-db-faa/src`.
-- Minimum pascal-db-faa version checked in `PascalApi.Http` (`PASCALDB_VERSION`, 0.15.0).
+- Minimum pascal-db-faa version checked in `PascalApi.Http` (`PASCALDB_VERSION`, 0.17.0).
   pascal-jsonmapper-faa has no version constant: its minimum (0.6.0: `EJsonInputError` from 0.5.0,
   exact `Currency` on FPC) is only in the `.lpk`; on Delphi an older one fails on
   `EJsonInputError` (before 0.5.0) or compiles silently (0.5.0).
+- **A flag in an integer column is bound with `Flags`, never `Booleans`** (`TQueryArgs.Flags`,
+  `IParams.Flags`): PostgreSQL refuses a Boolean parameter for a `SMALLINT`/`INTEGER` column,
+  and SQLite takes it, so only a PostgreSQL run shows it (pascal-db-faa's gotcha 54).
+  `Booleans` only for the database's Boolean type.
 - Lazarus: `packages/pascal_api_infra_faa.lpk` requires `pascal_common_faa`, `pascaljsonmapper_pkg`
   and `pascal_db_faa` with `DefaultFilename ... Prefer="True"` pointing at `external/`. The test
   project also requires `pascal_common_faa_jsonmapper` (the bridge).
@@ -354,10 +358,10 @@ keys). Non-ASCII test data used in an expression goes in a typed `string` consta
 |---|---|
 | `sh tools/test_fpc.sh` | regenerate mirrors, `lazbuild` + run the FPCUnit suite (Windows) |
 | `sh tools/test_fpc_docker.sh` | the same suite with plain `fpc` on Linux (Docker, `FPC_IMAGE`) |
-| `sh tools/test_http.sh` | build the three samples with lazbuild, start each, run `tools/http_scenarios.sh` / `tools/http_scenarios_db.sh` / `tools/http_scenarios_tenants.sh` (Windows; samples 02 and 03 need sqlite.org's `sqlite3.dll` in `SQLITE_DLL` or `.deps/`) |
-| `sh tools/test_http_docker.sh` | the same on Linux with plain `fpc` (Docker; image needs curl and libsqlite3-0) |
+| `sh tools/test_http.sh` | build the three samples with lazbuild, start each, run `tools/http_scenarios.sh` / `tools/http_scenarios_db.sh` / `tools/http_scenarios_tenants.sh` (Windows; samples 02 and 03 need sqlite.org's `sqlite3.dll` in `SQLITE_DLL` or `.deps/`); sample 02 again on PostgreSQL (a throwaway `postgres:17` container on 55434, libpq from `C:\Program Files\PostgreSQL` or `PG_CLIENT`) when Docker is there |
+| `sh tools/test_http_docker.sh` | the same on Linux with plain `fpc` (Docker; image needs curl, libsqlite3-0 and libpq5), sample 02 on SQLite and on a `postgres:17` container |
 | `sh tools/ci-test.sh` | what CI runs: unit suite + HTTP scenarios on Linux (builds the image if needed) |
-| Delphi | open `PascalApi.groupproj`, build `PascalApi.UnitTests`, `ApiSample`, `DbApiSample` and `TenantApiSample` (Win32 and Win64); run the tests; start `ApiSample.exe` and run `sh tools/http_scenarios.sh 9310`; start `DbApiSample.exe 9330 --reset` and run `sh tools/http_scenarios_db.sh 9330`; start `TenantApiSample.exe 9350 --reset` and run `sh tools/http_scenarios_tenants.sh 9350` |
+| Delphi | open `PascalApi.groupproj`, build `PascalApi.UnitTests`, `ApiSample`, `DbApiSample` and `TenantApiSample` (Win32 and Win64); run the tests; start `ApiSample.exe` and run `sh tools/http_scenarios.sh 9310`; start `DbApiSample.exe 9330 --reset` and run `sh tools/http_scenarios_db.sh 9330` (Win64 also on PostgreSQL: `DB_ENGINE=postgresql` and the `DB_*`/`PG_CLIENT` settings for the server, `DB_ENGINE=postgresql` for the script); start `TenantApiSample.exe 9350 --reset` and run `sh tools/http_scenarios_tenants.sh 9350` |
 
 The middlewares are tested in two layers: their decisions in `PascalApi.HttpTests` (no server),
 and over real HTTP by `tools/http_scenarios.sh` (curl, 253 checks) against `samples/01-api`,

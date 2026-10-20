@@ -151,7 +151,7 @@ end;
 
 procedure TPagedQueryTests.Args_EveryKindIsBound;
 const
-  SQL = 'DELETE FROM T WHERE A = :A AND B = :B AND C = :C AND D = :D AND E = :E';
+  SQL = 'DELETE FROM T WHERE A = :A AND B = :B AND C = :C AND D = :D AND E = :E AND F = :F';
 var
   LQuery: IQuery;
   LTx: IScopeTransaction;
@@ -159,12 +159,14 @@ begin
   LTx := FScope.Factory.GetPool.AcquireQuery(LQuery);
   LQuery.Sql := SQL;
   TQueryArgs.New.Strings('A', 'x').Integers('B', 7).Int64s('C', 9000000000)
-    .Booleans('D', True).Doubles('E', 1.5).ApplyTo(LQuery);
+    .Booleans('D', True).Doubles('E', 1.5).Flags('F', True).ApplyTo(LQuery);
   LQuery.ExecSql;
   TAssert.AssertEquals('x', FMock.LastExecution(SQL).AsString('A'));
   TAssert.AssertEquals(7, FMock.LastExecution(SQL).AsInteger('B'));
   TAssert.AssertEquals(Int64(9000000000), FMock.LastExecution(SQL).AsInt64('C'));
   TAssert.AssertTrue(FMock.LastExecution(SQL).AsBoolean('D'));
+  TAssert.AssertEquals('A flag is bound as the Integer 1 (PostgreSQL refuses a Boolean for an integer column)',
+    1, FMock.LastExecution(SQL).AsInteger('F'));
 end;
 
 procedure TPagedQueryTests.Args_SettersReturnACopy;

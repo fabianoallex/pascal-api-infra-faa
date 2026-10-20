@@ -2,7 +2,11 @@
 # Builds the samples with lazbuild (FPC on Windows), starts each one and runs
 # its HTTP scenarios against it:
 #   samples/01-api  -> tools/http_scenarios.sh     (middlewares)
-#   samples/02-db   -> tools/http_scenarios_db.sh  (SQLite through pascal-db-faa)
+#   samples/02-db   -> tools/http_scenarios_db.sh  (SQLite through pascal-db-faa;
+#                      then PostgreSQL: a throwaway postgres:17 container on
+#                      port 55434 (PG_PORT) when Docker is there, and the
+#                      64-bit libpq.dll of the newest install under
+#                      C:\Program Files\PostgreSQL (PG_CLIENT to choose another))
 #   samples/03-tenants -> tools/http_scenarios_tenants.sh (multi-tenant, SQLite)
 #   samples/03-tenants with JWT_KEY_STORE=db, then redis, two instances each
 #                      -> tools/http_scenarios_jwt_rotation.sh (generated signing
@@ -61,6 +65,36 @@ fi
 build samples/02-db DbApiSample.lpi
 cp "$DLL" samples/02-db/sqlite3.dll
 run samples/02-db DbApiSample.exe 9330 http_scenarios_db.sh --reset
+
+echo "== samples/02-db on PostgreSQL"
+if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+  if [ -z "$PG_CLIENT" ]; then
+    PG_CLIENT="$(ls -d "/c/Program Files/PostgreSQL/"*/bin/libpq.dll 2>/dev/null | sort -V | tail -1)"
+    [ -n "$PG_CLIENT" ] && PG_CLIENT="$(cygpath -w "$PG_CLIENT")"
+  fi
+  if [ -n "$PG_CLIENT" ]; then
+    PG_CONTAINER="pascalapi-pg-$$"
+    docker run -d --rm --name "$PG_CONTAINER" -p "${PG_PORT:-55434}:5432" -e POSTGRES_PASSWORD=postgres \
+      -e POSTGRES_DB=dbapi_sample "${PG_IMAGE:-postgres:17}" >/dev/null
+    # pg_isready over TCP: during its first start the image's server listens
+    # on the socket only, then restarts.
+    for I in $(seq 1 60); do
+      docker exec "$PG_CONTAINER" pg_isready -q -h 127.0.0.1 -U postgres -d dbapi_sample && break
+      sleep 1
+    done
+    export DB_ENGINE=postgresql DB_HOST=127.0.0.1 DB_PORT="${PG_PORT:-55434}" DB_NAME=dbapi_sample
+    export DB_USER=postgres DB_PASSWORD=postgres PG_CLIENT
+    RC=0
+    ( run samples/02-db DbApiSample.exe 9332 http_scenarios_db.sh --reset ) || RC=$?
+    unset DB_ENGINE DB_HOST DB_PORT DB_NAME DB_USER DB_PASSWORD
+    docker rm -f "$PG_CONTAINER" >/dev/null 2>&1
+    [ $RC -eq 0 ] || exit $RC
+  else
+    echo "skipped: no libpq.dll under C:/Program Files/PostgreSQL (set PG_CLIENT)"
+  fi
+else
+  echo "skipped: no Docker"
+fi
 
 echo "== samples/03-tenants"
 build samples/03-tenants TenantApiSample.lpi

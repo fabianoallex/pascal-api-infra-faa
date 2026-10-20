@@ -210,7 +210,11 @@ until then: one transaction, the `COUNT` (a column named `TOTAL`), the page with
 rollback on an exception. `TTenantPagedQuery.Run` is the same on a tenant's scope, both statements
 through `TTenantFilter.Prepare` ([Multi-tenancy](multitenancy.md)). The arguments are a value,
 not a callback (FPC 3.2.2 has no anonymous methods); their setters have `IParams`' names
-(`Strings`, `Integers`, `Int64s`, `Booleans`, `Doubles`) and return a changed copy.
+(`Strings`, `Integers`, `Int64s`, `Booleans`, `Doubles`, `Flags`) and return a changed copy.
+A flag stored in a `SMALLINT`/`INTEGER` column goes through `Flags` (the Integer 1/0); `Booleans`
+only for the database's Boolean type: PostgreSQL refuses a Boolean parameter for an integer
+column, and SQLite takes it, so only a PostgreSQL run shows it (pascal-db-faa 0.17.0,
+`docs/optionals.md` "Flags", gotcha 54).
 
 - **`${ORDER}`** comes from `TOrderBySpec` (`PascalApi.OrderBy`), an allow-list from the client's
   names to columns, never the client's text:

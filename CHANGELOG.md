@@ -6,6 +6,29 @@ may change the API; each such change is listed here.
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-10-20
+
+Needs pascal-db-faa 0.17.0 (`IParams.Flags`, `TFallbackSqlSource`). Both come from
+pascal-agenda-faa's first PostgreSQL run (`docs/plan.md`, section 10).
+
+### Added
+
+- `TQueryArgs.Flags(Name, Value)`: a flag stored in a `SMALLINT`/`INTEGER` column, bound as the
+  Integer 1/0 (`IParams.Flags`). `TQueryArgs.Booleans` stays, for the database's Boolean type:
+  PostgreSQL refuses a Boolean parameter for an integer column (a filter on one answered 500),
+  and SQLite takes it, so only a PostgreSQL run shows it (pascal-db-faa's gotcha 54).
+- Sample 02 runs on PostgreSQL too: `DB_ENGINE=postgresql` with `DB_HOST`, `DB_PORT`,
+  `DB_NAME`, `DB_USER`, `DB_PASSWORD` and `PG_CLIENT` (the names pascal-agenda-faa uses);
+  `--reset` drops its tables. Its SQL moved to one directory, `COMMON`, behind
+  `TFallbackSqlSource`. `tools/test_http.sh` (a throwaway container, when Docker is there) and
+  `tools/test_http_docker.sh` (CI) run its scenarios on both; the scenarios know the two
+  differences (where a NULL sorts, the pool's name), and the span check wants PostgreSQL's
+  statements too. The CI image gains `libpq5`.
+
+### Changed
+
+- The minimum pascal-db-faa is 0.17.0 (`PascalApi.Http`, `pascal_api_infra_faa.lpk`).
+
 ## [0.20.1] - 2026-10-19
 
 ### Fixed

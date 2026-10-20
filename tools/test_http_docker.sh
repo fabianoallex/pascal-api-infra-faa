@@ -20,6 +20,13 @@
 # rotated in seconds (tools/http_scenarios_jwt_rotation.sh, two instances
 # on one store): in the control database, then in a Redis
 # (REDIS_IMAGE, redis:7.2-alpine) on the same network.
+#
+# PostgreSQL: sample 02 runs a second time on a PostgreSQL (PG_IMAGE,
+# postgres:17) on the same network (DB_ENGINE=postgresql; the image needs
+# libpq5). SQLite took statements PostgreSQL refuses (pascal-db-faa's
+# gotcha 54) and hid a race (0.20.1): a run on SQLite alone doesn't show
+# them. pg_isready over TCP: during its first start the image's server
+# listens on the socket only, then restarts.
 set -e
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 IMAGE="${FPC_IMAGE:-pascalapi-fpc322}"
@@ -33,10 +40,12 @@ done
 
 COLLECTOR_IMAGE="${OTEL_COLLECTOR_IMAGE:-otel/opentelemetry-collector-contrib:0.111.0}"
 REDIS_IMAGE="${REDIS_IMAGE:-redis:7.2-alpine}"
+PG_IMAGE="${PG_IMAGE:-postgres:17}"
 NAME="pascalapi-otel-$$"
 cleanup() {
   docker rm -f "$NAME" >/dev/null 2>&1 || true
   docker rm -f "$NAME-redis" >/dev/null 2>&1 || true
+  docker rm -f "$NAME-pg" >/dev/null 2>&1 || true
   docker network rm "$NAME" >/dev/null 2>&1 || true
   docker volume rm "$NAME" >/dev/null 2>&1 || true
 }
@@ -46,8 +55,16 @@ docker volume create "$NAME" >/dev/null
 # As root: the file exporter writes to the volume's root, which root owns.
 MSYS_NO_PATHCONV=1 docker run -d --name "$NAME" --network "$NAME" --user 0   -v "$NAME:/otel" -v "$MOUNT:/src:ro" "$COLLECTOR_IMAGE" --config /src/tools/otelcol.yaml >/dev/null
 docker run -d --name "$NAME-redis" --network "$NAME" "$REDIS_IMAGE" >/dev/null
+docker run -d --name "$NAME-pg" --network "$NAME" -e POSTGRES_PASSWORD=postgres \
+  -e POSTGRES_DB=dbapi_sample "$PG_IMAGE" >/dev/null
+PG_READY=""
+for I in $(seq 1 60); do
+  docker exec "$NAME-pg" pg_isready -q -h 127.0.0.1 -U postgres -d dbapi_sample && { PG_READY=1; break; }
+  sleep 1
+done
+[ -n "$PG_READY" ] || { echo "PostgreSQL didn't start"; docker logs "$NAME-pg" | tail -20; exit 1; }
 
-MSYS_NO_PATHCONV=1 docker run --rm --network "$NAME" -v "$NAME:/otel:ro" -v "$MOUNT:/src:ro"   -e OTEL_EXPORTER_OTLP_ENDPOINT="http://$NAME:4318" -e OTEL_BSP_SCHEDULE_DELAY=200 -e REDIS_HOST="$NAME-redis" -e REFRESH_TOKEN_SECONDS=3   "$IMAGE" sh -c '
+MSYS_NO_PATHCONV=1 docker run --rm --network "$NAME" -v "$NAME:/otel:ro" -v "$MOUNT:/src:ro"   -e OTEL_EXPORTER_OTLP_ENDPOINT="http://$NAME:4318" -e OTEL_BSP_SCHEDULE_DELAY=200 -e REDIS_HOST="$NAME-redis" -e PG_HOST="$NAME-pg" -e REFRESH_TOKEN_SECONDS=3   "$IMAGE" sh -c '
   set -e
   mkdir -p /t/uApiSample /t/uDbApiSample /t/uTenantApiSample && cp -r /src/src /src/samples /src/tools /src/external /t/
   E=/t/external
@@ -92,6 +109,10 @@ MSYS_NO_PATHCONV=1 docker run --rm --network "$NAME" -v "$NAME:/otel:ro" -v "$MO
   run 01-api ApiSample 9310 http_scenarios.sh "" 01
   echo "-- samples/02-db"
   run 02-db DbApiSample 9330 http_scenarios_db.sh --reset 02
+  echo "-- samples/02-db on PostgreSQL"
+  export DB_ENGINE=postgresql DB_HOST=$PG_HOST DB_NAME=dbapi_sample DB_USER=postgres DB_PASSWORD=postgres
+  run 02-db DbApiSample 9332 http_scenarios_db.sh --reset 02
+  unset DB_ENGINE DB_HOST DB_NAME DB_USER DB_PASSWORD
   echo "-- samples/03-tenants"
   run 03-tenants TenantApiSample 9350 http_scenarios_tenants.sh --reset ""
   # Sample 03 twice more on one key store, keys rotated in seconds (built by

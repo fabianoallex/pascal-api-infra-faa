@@ -1,17 +1,32 @@
 ﻿program DbApiSample;
 
-(* Sample 02: a Horse API over a real database, SQLite through pascal-db-faa
-  (SQLdb on FPC, FireDAC on Delphi). One source for Delphi
+(* Sample 02: a Horse API over a real database, SQLite or PostgreSQL through
+  pascal-db-faa (SQLdb on FPC, FireDAC on Delphi). One source for Delphi
   (DbApiSample.dproj) and Lazarus/FPC (DbApiSample.lpi).
 
     DbApiSample [port] [--reset]       (default port 9330)
 
-  --reset deletes the database file first, so every run starts from the
-  migrations. The file is DB_FILE (environment or .env), by default
-  dbapi_sample.sqlite next to the executable. On FPC the SQLite client
-  library is SQLITE_CLIENT, by default sqlite3.dll on Windows (it must be
-  sqlite.org's build: pascal-db-faa's gotcha 23) and libsqlite3.so.0 on
-  Linux; FireDAC links SQLite into the program.
+  DB_ENGINE (environment or .env) picks the database:
+  - sqlite (default): the file DB_FILE, by default dbapi_sample.sqlite next
+    to the executable; --reset deletes it first. On FPC the SQLite client
+    library is SQLITE_CLIENT, by default sqlite3.dll on Windows (it must be
+    sqlite.org's build: pascal-db-faa's gotcha 23) and libsqlite3.so.0 on
+    Linux; FireDAC links SQLite into the program.
+  - postgresql: DB_HOST (localhost), DB_PORT (5432), DB_NAME (dbapi_sample),
+    DB_USER (postgres), DB_PASSWORD; the database must exist (the
+    migrations create the tables). --reset drops the sample's tables first.
+    PG_CLIENT is libpq: on Windows the full path of a 64-bit libpq.dll
+    (PostgreSQL ships no 32-bit client, so a Delphi build for it is Win64);
+    on Linux libpq.so.5 is found by default.
+  Either way, every run with --reset starts from the migrations.
+
+  The SQL is the same on both (DbApiSample.Cities, directory COMMON):
+  TFallbackSqlSource asks for SQLITE/<KEY> or PG/<KEY> first, then
+  COMMON/<KEY>, so a statement that had to differ would go under its
+  database's directory only. One difference shows over HTTP: ordered by
+  population, the city without one sorts as the smallest value on SQLite
+  and as the largest on PostgreSQL (each database's default for NULL), so
+  "-population" starts with it on PostgreSQL.
 
   Routes:
     GET    /cities          paged: ?state=&page=&limit=&orderBy=name|-name|state|population
@@ -51,6 +66,7 @@ uses
   PascalJsonMapper.Mapper,
   PascalCommon.JsonMapper.Optionals,
   PascalDb.Interfaces,
+  PascalDb.SqlSources,
   PascalDb.Paging,
   PascalDb.Migrations,
   PascalDb.Adapter.Base,
@@ -152,26 +168,71 @@ begin
   Result := LQuery.Open.RecordCount = 1;
 end;
 
-function NewFactory(const ADatabaseFile: string): IDBFactory;
+function IsPostgreSQL: Boolean;
+var
+  LEngine: string;
+begin
+  LEngine := LowerCase(TAppConfig.Get('DB_ENGINE', 'sqlite'));
+  if (LEngine <> 'sqlite') and (LEngine <> 'postgresql') then
+    raise Exception.CreateFmt('DB_ENGINE must be sqlite or postgresql, not "%s"', [LEngine]);
+  Result := LEngine = 'postgresql';
+end;
+
+// The adapters' names for the same settings (pascal-db-faa's docs/adapters.md).
+procedure SetPostgreSQLParams(const AConfig: IDatabaseConfig);
+begin
+  {$IFDEF FPC}
+  AConfig.ConnectionParams.Values['ConnectorType'] := 'PostgreSQL';
+  AConfig.ConnectionParams.Values['HostName'] := TAppConfig.Get('DB_HOST', 'localhost');
+  AConfig.ConnectionParams.Values['Port'] := TAppConfig.Get('DB_PORT', '5432');
+  AConfig.ConnectionParams.Values['DatabaseName'] := TAppConfig.Get('DB_NAME', 'dbapi_sample');
+  AConfig.ConnectionParams.Values['UserName'] := TAppConfig.Get('DB_USER', 'postgres');
+  AConfig.ConnectionParams.Values['Password'] := TAppConfig.Get('DB_PASSWORD', '');
+  AConfig.ConnectionParams.Values['CharSet'] := 'UTF8';
+  AConfig.ConnectionParams.Values['ClientLibrary'] := TAppConfig.Get('PG_CLIENT', '');
+  {$ELSE}
+  AConfig.ConnectionParams.Values['DriverID'] := 'PG';
+  AConfig.ConnectionParams.Values['Server'] := TAppConfig.Get('DB_HOST', 'localhost');
+  AConfig.ConnectionParams.Values['Port'] := TAppConfig.Get('DB_PORT', '5432');
+  AConfig.ConnectionParams.Values['Database'] := TAppConfig.Get('DB_NAME', 'dbapi_sample');
+  AConfig.ConnectionParams.Values['User_Name'] := TAppConfig.Get('DB_USER', 'postgres');
+  AConfig.ConnectionParams.Values['Password'] := TAppConfig.Get('DB_PASSWORD', '');
+  AConfig.ConnectionParams.Values['CharacterSet'] := 'UTF8';
+  AConfig.ConnectionParams.Values['VendorLib'] := TAppConfig.Get('PG_CLIENT', '');
+  {$ENDIF}
+  AConfig.SQLDialect := 'PostgreSQL';
+  AConfig.SQLDirectory := 'PG';
+end;
+
+procedure SetSQLiteParams(const AConfig: IDatabaseConfig; const ADatabaseFile: string);
+begin
+  {$IFDEF FPC}
+  AConfig.ConnectionParams.Values['ConnectorType'] := 'SQLite3';
+  AConfig.ConnectionParams.Values['DatabaseName'] := ADatabaseFile;
+  {$IFDEF UNIX}
+  AConfig.ConnectionParams.Values['ClientLibrary'] := TAppConfig.Get('SQLITE_CLIENT', 'libsqlite3.so.0');
+  {$ELSE}
+  AConfig.ConnectionParams.Values['ClientLibrary'] := TAppConfig.Get('SQLITE_CLIENT', '');
+  {$ENDIF}
+  {$ELSE}
+  AConfig.ConnectionParams.Values['DriverID'] := 'SQLite';
+  AConfig.ConnectionParams.Values['Database'] := ADatabaseFile;
+  {$ENDIF}
+  AConfig.SQLDialect := 'SQLite';
+  AConfig.SQLDirectory := 'SQLITE';
+end;
+
+function NewFactory(APostgreSQL: Boolean; const ADatabaseFile: string): IDBFactory;
 var
   LConfig: IDatabaseConfig; // an interface variable, never a class one (pascal-db-faa's rule)
 begin
   LConfig := TDatabaseConfig.Create;
-  {$IFDEF FPC}
-  LConfig.ConnectionParams.Values['ConnectorType'] := 'SQLite3';
-  LConfig.ConnectionParams.Values['DatabaseName'] := ADatabaseFile;
-  {$IFDEF UNIX}
-  LConfig.ConnectionParams.Values['ClientLibrary'] := TAppConfig.Get('SQLITE_CLIENT', 'libsqlite3.so.0');
-  {$ELSE}
-  LConfig.ConnectionParams.Values['ClientLibrary'] := TAppConfig.Get('SQLITE_CLIENT', '');
-  {$ENDIF}
-  {$ELSE}
-  LConfig.ConnectionParams.Values['DriverID'] := 'SQLite';
-  LConfig.ConnectionParams.Values['Database'] := ADatabaseFile;
-  {$ENDIF}
-  LConfig.SQLDialect := 'SQLite';
-  LConfig.SQLDirectory := 'SQLITE';
-  LConfig.SqlSource := CitySqlSource;
+  if APostgreSQL then
+    SetPostgreSQLParams(LConfig)
+  else
+    SetSQLiteParams(LConfig, ADatabaseFile);
+  // The database's own directory first, then the SQL every database runs.
+  LConfig.SqlSource := TFallbackSqlSource.Create(CitySqlSource, CITY_SQL_COMMON_DIR);
   LConfig.PoolIniConnections := 1;
   LConfig.PoolMaxConnections := 5;
   LConfig.PoolWaitMaxAttemps := 50;
@@ -183,11 +244,31 @@ begin
   {$ENDIF}
 end;
 
+// --reset on PostgreSQL: the sample's tables go, so the migrations run again.
+procedure DropSampleTables(const AFactory: IDBFactory);
+var
+  LQuery: IQuery;
+  LScope: IScopeTransaction;
+begin
+  LScope := AFactory.GetPool.AcquireQuery(LQuery);
+  LScope.StartTransaction;
+  try
+    LQuery.Sql := 'DROP TABLE IF EXISTS CITIES';
+    LQuery.ExecSql;
+    LQuery.Sql := 'DROP TABLE IF EXISTS SCHEMA_MIGRATIONS';
+    LQuery.ExecSql;
+    LScope.Commit;
+  except
+    LScope.Rollback;
+    raise;
+  end;
+end;
+
 var
   GLog: TSampleLog;
   GPort, I: Integer;
-  GReset: Boolean;
-  GFile: string;
+  GReset, GPostgreSQL: Boolean;
+  GFile, GDescription: string;
   GEngine: TDBMigrationEngine;
 
 begin
@@ -208,17 +289,27 @@ begin
       GReset := True
     else
       GPort := StrToIntDef(ParamStr(I), GPort);
-  GFile := ExpandFileName(TAppConfig.Get('DB_FILE', ExtractFilePath(ParamStr(0)) + 'dbapi_sample.sqlite'));
-  if GReset and FileExists(GFile) then
-    DeleteFile(GFile);
+  GPostgreSQL := IsPostgreSQL;
+  if GPostgreSQL then
+    GDescription := Format('postgresql %s:%s/%s', [TAppConfig.Get('DB_HOST', 'localhost'),
+      TAppConfig.Get('DB_PORT', '5432'), TAppConfig.Get('DB_NAME', 'dbapi_sample')])
+  else
+  begin
+    GFile := ExpandFileName(TAppConfig.Get('DB_FILE', ExtractFilePath(ParamStr(0)) + 'dbapi_sample.sqlite'));
+    GDescription := 'sqlite ' + GFile;
+    if GReset and FileExists(GFile) then
+      DeleteFile(GFile);
+  end;
 
   GLog := TSampleLog.Create;
   try
-    GFactory := NewFactory(GFile);
+    GFactory := NewFactory(GPostgreSQL, GFile);
+    if GPostgreSQL and GReset then
+      DropSampleTables(GFactory);
     GEngine := TDBMigrationEngine.Create(GFactory, GLog.Migration);
     try
       GEngine.Execute(CityMigrations);
-      SafeWriteln('database %s at version %d', [GFile, GEngine.CurrentVersion]);
+      SafeWriteln('database %s at version %d', [GDescription, GEngine.CurrentVersion]);
     finally
       GEngine.Free;
     end;
