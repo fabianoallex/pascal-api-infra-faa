@@ -355,21 +355,18 @@ begin
 end;
 
 // The count and the page through the same filter (PascalApi.PagedQuery,
-// 0.19.0): the STATE block kept in both, its value bound to both.
+// 0.19.0; the optional as it is since 0.22.0): when the state came, its
+// STATE block is kept in both statements and its value bound to both; when
+// it didn't, the block goes and nothing is bound.
 function TCityRepository.FindPage(const AState: IOptString; const AOrderBy: string;
   const APage: TPageRequest): TPage<ICity>;
 var
   LOrder: string;
-  LArgs: TQueryArgs;
 begin
   LOrder := CityOrderSpec.Build(AOrderBy); // before touching the database: 400 if invalid
-  LArgs := TQueryArgs.New;
-  if AState.HasValue then
-    LArgs := LArgs.Strings('STATE', UpperCase(AState.Value));
-  Result := TPagedQuery.Run<ICity>(FFactory,
-    FFactory.SqlLoader['CITY.COUNT'].ProcessTag('STATE', AState.HasValue),
-    FFactory.SqlLoader['CITY.PAGE'].ProcessTag('STATE', AState.HasValue),
-    LOrder, APage, LArgs, ReadCity);
+  Result := TPagedQuery.Run<ICity>(FFactory, FFactory.SqlLoader['CITY.COUNT'],
+    FFactory.SqlLoader['CITY.PAGE'], LOrder, APage,
+    TQueryArgs.New.OptStrings('STATE', TOptionals.Upper(AState), 'STATE'), ReadCity);
 end;
 
 function TCityRepository.FindByCode(const ACode: string): ICity;

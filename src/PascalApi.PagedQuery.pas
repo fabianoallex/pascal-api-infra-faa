@@ -14,15 +14,23 @@ unit PascalApi.PagedQuery;
   changed between them was the two SQL names, the tags, the parameters and
   the row reader. With this unit a repository says only that:
 
-    LArgs := TQueryArgs.New;
-    if HasSearch then
-      LArgs := LArgs.Strings('SEARCH', PdbLikeContains(LKey));
-    if AFind.Active.HasValue then
-      LArgs := LArgs.Flags('ACTIVE', AFind.Active.Value);
+    LArgs := TQueryArgs.New
+      .OptStrings('SEARCH', LSearchPattern, 'SEARCH')
+      .OptFlags('ACTIVE', AFind.Active, 'ACTIVE');
     Result := TTenantPagedQuery.Run<IService>(FScope,
-      Filtered(FScope.Factory.SqlLoader['SERVICE.COUNT']),
-      Filtered(FScope.Factory.SqlLoader['SERVICE.PAGE']),
+      FScope.Factory.SqlLoader['SERVICE.COUNT'], FScope.Factory.SqlLoader['SERVICE.PAGE'],
       ServiceOrderSpec.Build(AFind.OrderBy.ValueOr('')), APage, LArgs, ReadService);
+
+  - An optional filter (0.22.0): OptStrings, OptFlags... take the IOptXxx as
+    it is and the SQL tag whose block holds its condition. Absent, it binds
+    nothing and its block goes; present, it binds and the block stays. Run
+    processes the tags of both statements (ProcessTags), so the filter is
+    written once instead of a HasValue for the tag and an if for the
+    parameter (pascal-agenda-faa had both in six repositories). The absent
+    ones are kept, not dropped: a block nobody processes loses its markers
+    and keeps its content (pascal-db-faa's TSQLResult.SQL), which would
+    leave the condition with no value. Processing a tag the SQL doesn't
+    have changes nothing, so SQL a caller already filtered is safe.
 
   - The parameters are a value (TQueryArgs), bound to both statements, not
     a callback: FPC 3.2.2 has no anonymous methods, and a bind method per
@@ -50,6 +58,7 @@ unit PascalApi.PagedQuery;
 interface
 
 uses
+  PascalCommon.Optionals,
   PascalDb.Interfaces,
   PascalDb.SqlLoader,
   PascalDb.Paging,
@@ -64,6 +73,10 @@ type
     S: string;
     I: Int64;
     D: Double;
+    /// False for an optional that was absent: not bound, its tag removed.
+    Present: Boolean;
+    /// The SQL tag whose block this value opens ('' for none).
+    Tag: string;
   end;
 
   /// Named parameter values, bound to a query by ApplyTo. Each setter
@@ -83,9 +96,32 @@ type
     /// For a flag stored in a SMALLINT/INTEGER column: bound as the Integer
     /// 1/0 (IParams.Flags).
     function Flags(const AName: string; AValue: Boolean): TQueryArgs;
+
+    /// An optional filter (IParams' names): AValue absent (or nil) binds
+    /// nothing and removes ATag's block; present, it binds and keeps the
+    /// block. ATag '' when the value opens no block.
+    function OptStrings(const AName: string; const AValue: IOptString;
+      const ATag: string = ''): TQueryArgs;
+    function OptIntegers(const AName: string; const AValue: IOptInteger;
+      const ATag: string = ''): TQueryArgs;
+    function OptInt64s(const AName: string; const AValue: IOptInt64;
+      const ATag: string = ''): TQueryArgs;
+    /// For a column of the database's Boolean type, as Booleans.
+    function OptBooleans(const AName: string; const AValue: IOptBoolean;
+      const ATag: string = ''): TQueryArgs;
+    function OptDoubles(const AName: string; const AValue: IOptDouble;
+      const ATag: string = ''): TQueryArgs;
+    /// For a flag in a SMALLINT/INTEGER column, as Flags: the Integer 1/0.
+    function OptFlags(const AName: string; const AValue: IOptBoolean;
+      const ATag: string = ''): TQueryArgs;
+
+    /// Every item, the absent optionals included.
     function Count: Integer;
-    /// Binds every value to AQuery.Params (after its SQL is set).
+    /// Binds every present value to AQuery.Params (after its SQL is set).
     procedure ApplyTo(const AQuery: IQuery);
+    /// ASql with the block of every item's tag kept (present) or removed
+    /// (absent). A tag ASql doesn't have changes nothing.
+    function ProcessTags(const ASql: TSQLResult): TSQLResult;
   end;
 
   /// Reads the current row into a T: the function a repository's FindById
@@ -145,6 +181,17 @@ begin
   Result.S := '';
   Result.I := 0;
   Result.D := 0;
+  Result.Present := True;
+  Result.Tag := '';
+end;
+
+// An optional's item: present when AHasValue, with its tag.
+function NewOptArg(const AName: string; AKind: TQueryArgKind; AHasValue: Boolean;
+  const ATag: string): TQueryArg;
+begin
+  Result := NewArg(AName, AKind);
+  Result.Present := AHasValue;
+  Result.Tag := ATag;
 end;
 
 function TQueryArgs.Strings(const AName, AValue: string): TQueryArgs;
@@ -201,9 +248,88 @@ begin
   Result := Add(LArg);
 end;
 
+// A nil optional counts as absent (TOptionals.Safe's rule), as IParams'
+// Opt setters treat it.
+
+function TQueryArgs.OptStrings(const AName: string; const AValue: IOptString;
+  const ATag: string): TQueryArgs;
+var
+  LArg: TQueryArg;
+begin
+  LArg := NewOptArg(AName, qakString, Assigned(AValue) and AValue.HasValue, ATag);
+  if LArg.Present then
+    LArg.S := AValue.Value;
+  Result := Add(LArg);
+end;
+
+function TQueryArgs.OptIntegers(const AName: string; const AValue: IOptInteger;
+  const ATag: string): TQueryArgs;
+var
+  LArg: TQueryArg;
+begin
+  LArg := NewOptArg(AName, qakInteger, Assigned(AValue) and AValue.HasValue, ATag);
+  if LArg.Present then
+    LArg.I := AValue.Value;
+  Result := Add(LArg);
+end;
+
+function TQueryArgs.OptInt64s(const AName: string; const AValue: IOptInt64;
+  const ATag: string): TQueryArgs;
+var
+  LArg: TQueryArg;
+begin
+  LArg := NewOptArg(AName, qakInt64, Assigned(AValue) and AValue.HasValue, ATag);
+  if LArg.Present then
+    LArg.I := AValue.Value;
+  Result := Add(LArg);
+end;
+
+function TQueryArgs.OptBooleans(const AName: string; const AValue: IOptBoolean;
+  const ATag: string): TQueryArgs;
+var
+  LArg: TQueryArg;
+begin
+  LArg := NewOptArg(AName, qakBoolean, Assigned(AValue) and AValue.HasValue, ATag);
+  if LArg.Present then
+    LArg.I := Ord(AValue.Value);
+  Result := Add(LArg);
+end;
+
+function TQueryArgs.OptDoubles(const AName: string; const AValue: IOptDouble;
+  const ATag: string): TQueryArgs;
+var
+  LArg: TQueryArg;
+begin
+  LArg := NewOptArg(AName, qakDouble, Assigned(AValue) and AValue.HasValue, ATag);
+  if LArg.Present then
+    LArg.D := AValue.Value;
+  Result := Add(LArg);
+end;
+
+function TQueryArgs.OptFlags(const AName: string; const AValue: IOptBoolean;
+  const ATag: string): TQueryArgs;
+var
+  LArg: TQueryArg;
+begin
+  LArg := NewOptArg(AName, qakFlag, Assigned(AValue) and AValue.HasValue, ATag);
+  if LArg.Present then
+    LArg.I := Ord(AValue.Value);
+  Result := Add(LArg);
+end;
+
 function TQueryArgs.Count: Integer;
 begin
   Result := Length(FItems);
+end;
+
+function TQueryArgs.ProcessTags(const ASql: TSQLResult): TSQLResult;
+var
+  K: Integer;
+begin
+  Result := ASql;
+  for K := 0 to High(FItems) do
+    if FItems[K].Tag <> '' then
+      Result := Result.ProcessTag(FItems[K].Tag, FItems[K].Present);
 end;
 
 procedure TQueryArgs.ApplyTo(const AQuery: IQuery);
@@ -211,14 +337,15 @@ var
   K: Integer;
 begin
   for K := 0 to High(FItems) do
-    case FItems[K].Kind of
-      qakString: AQuery.Params.Strings[FItems[K].Name] := FItems[K].S;
-      qakInteger: AQuery.Params.Integers[FItems[K].Name] := Integer(FItems[K].I);
-      qakInt64: AQuery.Params.Int64s[FItems[K].Name] := FItems[K].I;
-      qakBoolean: AQuery.Params.Booleans[FItems[K].Name] := FItems[K].I <> 0;
-      qakDouble: AQuery.Params.Doubles[FItems[K].Name] := FItems[K].D;
-      qakFlag: AQuery.Params.Flags[FItems[K].Name] := FItems[K].I <> 0;
-    end;
+    if FItems[K].Present then
+      case FItems[K].Kind of
+        qakString: AQuery.Params.Strings[FItems[K].Name] := FItems[K].S;
+        qakInteger: AQuery.Params.Integers[FItems[K].Name] := Integer(FItems[K].I);
+        qakInt64: AQuery.Params.Int64s[FItems[K].Name] := FItems[K].I;
+        qakBoolean: AQuery.Params.Booleans[FItems[K].Name] := FItems[K].I <> 0;
+        qakDouble: AQuery.Params.Doubles[FItems[K].Name] := FItems[K].D;
+        qakFlag: AQuery.Params.Flags[FItems[K].Name] := FItems[K].I <> 0;
+      end;
 end;
 
 { TPagedQuery }
@@ -239,13 +366,13 @@ begin
   LTx.StartTransaction;
   try
     if ATenant then
-      TTenantFilter.Prepare(LQuery, AScope, ACountSql)
+      TTenantFilter.Prepare(LQuery, AScope, AArgs.ProcessTags(ACountSql))
     else
-      LQuery.Sql := ACountSql.SQL;
+      LQuery.Sql := AArgs.ProcessTags(ACountSql).SQL;
     AArgs.ApplyTo(LQuery);
     Result.Meta := TPageMeta.Create(ARequest, LQuery.Open.Int64s['TOTAL']);
 
-    LPageSql := APageSql.ReplaceLiteral('ORDER', AOrderBy)
+    LPageSql := AArgs.ProcessTags(APageSql).ReplaceLiteral('ORDER', AOrderBy)
       .ReplaceLiteral('PAGE', PdbPagingClause(LTx, ARequest));
     if ATenant then
       TTenantFilter.Prepare(LQuery, AScope, LPageSql)

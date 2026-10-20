@@ -6,8 +6,21 @@ may change the API; each such change is listed here.
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-10-20
+
 ### Added
 
+- `TQueryArgs` takes optional filters as they are: `OptStrings`, `OptIntegers`, `OptInt64s`,
+  `OptBooleans`, `OptDoubles` and `OptFlags` (`IParams`' names), each with the `IOptXxx` and,
+  optionally, the SQL tag whose block holds its condition. An absent value (or nil) binds nothing
+  and removes the block; a present one binds and keeps it. `TPagedQuery.Run` and
+  `TTenantPagedQuery.Run` process the arguments' tags on both statements
+  (`TQueryArgs.ProcessTags`), so a repository writes each filter once instead of a `HasValue` for
+  the tag and an `if` for the parameter (pascal-agenda-faa had both in six repositories). Absent
+  filters are kept in the arguments: a block nobody processes loses its markers and keeps its
+  content (pascal-db-faa's `TSQLResult.SQL`). Callers that process their tags themselves keep
+  working: a tag already processed isn't found again. Sample 02 and `docs/guide/database.md` use
+  it.
 - Sample 03 runs on PostgreSQL too: `DB_ENGINE=postgresql`, one database per name (`control`,
   `shared`, `tenant_<id>` for each dedicated tenant), which must exist; `--reset` empties each one
   (`DROP SCHEMA public CASCADE`). Its SQL moved to `COMMON` behind `TFallbackSqlSource`, and the

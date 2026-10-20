@@ -195,13 +195,10 @@ SELECT CODE, NAME, STATE, POPULATION FROM CITIES WHERE 1 = 1
 
 ```pascal
 LOrder := CityOrderSpec.Build(AOrderBy); // before touching the database: 400 if invalid
-LArgs := TQueryArgs.New;
-if AState.HasValue then
-  LArgs := LArgs.Strings('STATE', UpperCase(AState.Value));
-Result := TPagedQuery.Run<ICity>(FFactory,
-  FFactory.SqlLoader['CITY.COUNT'].ProcessTag('STATE', AState.HasValue),
-  FFactory.SqlLoader['CITY.PAGE'].ProcessTag('STATE', AState.HasValue),
-  LOrder, APage, LArgs, ReadCity);       // ReadCity(AResult): ICity, a plain function
+Result := TPagedQuery.Run<ICity>(FFactory, FFactory.SqlLoader['CITY.COUNT'],
+  FFactory.SqlLoader['CITY.PAGE'], LOrder, APage,
+  TQueryArgs.New.OptStrings('STATE', TOptionals.Upper(AState), 'STATE'),
+  ReadCity);                             // ReadCity(AResult): ICity, a plain function
 ```
 
 `TPagedQuery.Run` (`PascalApi.PagedQuery`, 0.19.0) does what every list repository did by hand
@@ -211,6 +208,11 @@ rollback on an exception. `TTenantPagedQuery.Run` is the same on a tenant's scop
 through `TTenantFilter.Prepare` ([Multi-tenancy](multitenancy.md)). The arguments are a value,
 not a callback (FPC 3.2.2 has no anonymous methods); their setters have `IParams`' names
 (`Strings`, `Integers`, `Int64s`, `Booleans`, `Doubles`, `Flags`) and return a changed copy.
+An optional filter goes in as it is (0.22.0): `OptStrings`, `OptIntegers`, `OptInt64s`,
+`OptBooleans`, `OptDoubles`, `OptFlags` take the `IOptXxx` and the tag of the block that holds its
+condition, so the filter is written once instead of a `HasValue` for the tag and an `if` for the
+parameter. Turn it into its value first with pascal-common-faa's combinators (`TOptionals.Upper`
+above, `Normalize`, `UndefinedIfEmpty`, `Map`); they keep an absent one absent.
 A flag stored in a `SMALLINT`/`INTEGER` column goes through `Flags` (the Integer 1/0); `Booleans`
 only for the database's Boolean type: PostgreSQL refuses a Boolean parameter for an integer
 column, and SQLite takes it, so only a PostgreSQL run shows it (pascal-db-faa 0.17.0,
@@ -232,8 +234,12 @@ column, and SQLite takes it, so only a PostgreSQL run shows it (pascal-db-faa 0.
   work.
 - **`${PAGE}`** is the dialect's clause (`LIMIT/OFFSET`, `OFFSET/FETCH`, `ROWS`), from
   `PdbPagingClause`, with the numbers as integer literals.
-- **`[STATE {] ... [} STATE]`** is a block kept only when the filter came
-  (`ProcessTag('STATE', HasValue)`); set its parameter under the same condition.
+- **`[STATE {] ... [} STATE]`** is a block kept only when the filter came. `Run` processes the
+  tags its arguments name (`TQueryArgs.ProcessTags`): kept for a present value, removed for an
+  absent one. An absent filter is kept in the arguments for that reason: a block nobody
+  processes loses its markers and keeps its content, which would leave `AND STATE = :STATE`
+  with no value. Before 0.22.0 the caller wrote `ProcessTag('STATE', HasValue)` on both
+  statements and set the parameter under the same condition; that still works.
 - **One transaction for both queries**, so the total and the page see the same data.
 
 What the client may send (`PageRequestFrom`, checked by `tools/http_scenarios_db.sh` and measured
