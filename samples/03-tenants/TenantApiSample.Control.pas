@@ -1,6 +1,7 @@
 ﻿unit TenantApiSample.Control;
 
-{ The control database of sample 03 (control.sqlite): the tenants, read by
+{ The control database of sample 03 (control.sqlite, or the database
+  control on PostgreSQL): the tenants, read by
   PascalApi.Tenancy's TDbTenantCatalog through the SQL named TENANT.BY_ID and
   TENANT.ALL (the columns that catalog expects: ID, MODE, SUSPENDED, PLAN);
   and the JWT signing keys when JWT_KEY_STORE=db, read and written by
@@ -15,7 +16,12 @@
   The sample has no admin API: on startup, SeedTenants replaces the table's
   rows with the TENANTS configuration, standing in for whatever provisions
   tenants in a real application (decision 10 of docs/multitenancy-design.md:
-  the library reads the catalog, it doesn't own it). }
+  the library reads the catalog, it doesn't own it). SUSPENDED is an INTEGER
+  flag, bound with Flags (pascal-db-faa 0.17.0): PostgreSQL refuses a
+  Boolean parameter for an integer column.
+
+  The SQL is the same on SQLite and PostgreSQL: directory COMMON, which the
+  program's TFallbackSqlSource asks after the database's own. }
 
 {$IFDEF FPC}{$MODE DELPHI}{$H+}{$ENDIF}
 
@@ -41,7 +47,7 @@ uses
   PascalCommon.Optionals;
 
 const
-  DIR = 'SQLITE';
+  DIR = 'COMMON';
 
 function ControlSqlSource: ISqlSource;
 var
@@ -141,7 +147,7 @@ begin
       LQuery.Sql := AFactory.SqlLoader['TENANT.INSERT'].SQL;
       LQuery.Params.Strings['ID'] := LTenants[I].Id;
       LQuery.Params.Strings['MODE'] := MODES[LTenants[I].Mode];
-      LQuery.Params.Integers['SUSPENDED'] := Ord(LTenants[I].Suspended);
+      LQuery.Params.Flags['SUSPENDED'] := LTenants[I].Suspended;
       if LTenants[I].Plan <> '' then
         LQuery.Params.OptNullStrings['PLAN'] := TOptNullString.From(LTenants[I].Plan)
       else

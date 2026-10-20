@@ -2,17 +2,20 @@
 # Builds the samples with lazbuild (FPC on Windows), starts each one and runs
 # its HTTP scenarios against it:
 #   samples/01-api  -> tools/http_scenarios.sh     (middlewares)
-#   samples/02-db   -> tools/http_scenarios_db.sh  (SQLite through pascal-db-faa;
-#                      then PostgreSQL: a throwaway postgres:17 container on
-#                      port 55434 (PG_PORT) when Docker is there, and the
-#                      64-bit libpq.dll of the newest install under
-#                      C:\Program Files\PostgreSQL (PG_CLIENT to choose another))
+#   samples/02-db   -> tools/http_scenarios_db.sh  (SQLite through pascal-db-faa)
 #   samples/03-tenants -> tools/http_scenarios_tenants.sh (multi-tenant, SQLite)
 #   samples/03-tenants with JWT_KEY_STORE=db, then redis, two instances each
 #                      -> tools/http_scenarios_jwt_rotation.sh (generated signing
 #                         keys, rotated in seconds). Redis: REDIS_HOST/REDIS_PORT,
 #                         or a throwaway redis:7.2-alpine container when Docker
 #                         is there; neither: the redis run is skipped.
+#   then samples 02 and 03 again on PostgreSQL (DB_ENGINE=postgresql): the
+#   scenarios, --check-key-store and the rotation in the database, on a
+#   throwaway postgres:17 container on port 55434 (PG_PORT) when Docker is
+#   there, with the 64-bit libpq.dll of the newest install under
+#   C:\Program Files\PostgreSQL (PG_CLIENT to choose another). SQLite took
+#   statements PostgreSQL refuses (pascal-db-faa's gotcha 54) and hid a race
+#   (0.20.1).
 #
 # samples/02-db and 03-tenants on FPC load sqlite3.dll, and it must be sqlite.org's build
 # (pascal-db-faa's gotcha 23: Python's lacks the column metadata functions).
@@ -66,36 +69,6 @@ build samples/02-db DbApiSample.lpi
 cp "$DLL" samples/02-db/sqlite3.dll
 run samples/02-db DbApiSample.exe 9330 http_scenarios_db.sh --reset
 
-echo "== samples/02-db on PostgreSQL"
-if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
-  if [ -z "$PG_CLIENT" ]; then
-    PG_CLIENT="$(ls -d "/c/Program Files/PostgreSQL/"*/bin/libpq.dll 2>/dev/null | sort -V | tail -1)"
-    [ -n "$PG_CLIENT" ] && PG_CLIENT="$(cygpath -w "$PG_CLIENT")"
-  fi
-  if [ -n "$PG_CLIENT" ]; then
-    PG_CONTAINER="pascalapi-pg-$$"
-    docker run -d --rm --name "$PG_CONTAINER" -p "${PG_PORT:-55434}:5432" -e POSTGRES_PASSWORD=postgres \
-      -e POSTGRES_DB=dbapi_sample "${PG_IMAGE:-postgres:17}" >/dev/null
-    # pg_isready over TCP: during its first start the image's server listens
-    # on the socket only, then restarts.
-    for I in $(seq 1 60); do
-      docker exec "$PG_CONTAINER" pg_isready -q -h 127.0.0.1 -U postgres -d dbapi_sample && break
-      sleep 1
-    done
-    export DB_ENGINE=postgresql DB_HOST=127.0.0.1 DB_PORT="${PG_PORT:-55434}" DB_NAME=dbapi_sample
-    export DB_USER=postgres DB_PASSWORD=postgres PG_CLIENT
-    RC=0
-    ( run samples/02-db DbApiSample.exe 9332 http_scenarios_db.sh --reset ) || RC=$?
-    unset DB_ENGINE DB_HOST DB_PORT DB_NAME DB_USER DB_PASSWORD
-    docker rm -f "$PG_CONTAINER" >/dev/null 2>&1
-    [ $RC -eq 0 ] || exit $RC
-  else
-    echo "skipped: no libpq.dll under C:/Program Files/PostgreSQL (set PG_CLIENT)"
-  fi
-else
-  echo "skipped: no Docker"
-fi
-
 echo "== samples/03-tenants"
 build samples/03-tenants TenantApiSample.lpi
 cp "$DLL" samples/03-tenants/sqlite3.dll
@@ -112,7 +85,8 @@ rotation() {
   for I in 1 2 3 4 5 6 7 8 9 10; do curl -s -o /dev/null "http://127.0.0.1:9352/" && break; sleep 1; done
   RC=0
   CONTROL_DB=""
-  [ "$1" = db ] && CONTROL_DB="samples/03-tenants/control.sqlite"
+  # The checks that read the stored secrets open the SQLite file.
+  [ "$1" = db ] && [ "${DB_ENGINE:-sqlite}" = sqlite ] && CONTROL_DB="samples/03-tenants/control.sqlite"
   CONTROL_DB="$CONTROL_DB" sh tools/http_scenarios_jwt_rotation.sh 9351 9352 || RC=$?
   taskkill //F //IM TenantApiSample.exe >/dev/null 2>&1 || pkill -f TenantApiSample 2>/dev/null || true
   unset JWT_KEY_STORE JWT_ROTATE_SECONDS JWT_PROPAGATION_SECONDS JWT_RELOAD_SECONDS JWT_REDIS_PREFIX
@@ -143,4 +117,43 @@ else
   echo "skipped: no REDIS_HOST and no Docker"
 fi
 [ -n "$REDIS_CONTAINER" ] && docker rm -f "$REDIS_CONTAINER" >/dev/null 2>&1
+
+echo "== samples 02 and 03 on PostgreSQL"
+if ! command -v docker >/dev/null 2>&1 || ! docker info >/dev/null 2>&1; then
+  echo "skipped: no Docker"
+  exit 0
+fi
+if [ -z "$PG_CLIENT" ]; then
+  PG_CLIENT="$(ls -d "/c/Program Files/PostgreSQL/"*/bin/libpq.dll 2>/dev/null | sort -V | tail -1)"
+  [ -n "$PG_CLIENT" ] && PG_CLIENT="$(cygpath -w "$PG_CLIENT")"
+fi
+if [ -z "$PG_CLIENT" ]; then
+  echo "skipped: no libpq.dll under C:/Program Files/PostgreSQL (set PG_CLIENT)"
+  exit 0
+fi
+PG_CONTAINER="pascalapi-pg-$$"
+trap 'docker rm -f "$PG_CONTAINER" >/dev/null 2>&1 || true' EXIT
+docker run -d --rm --name "$PG_CONTAINER" -p "${PG_PORT:-55434}:5432" -e POSTGRES_PASSWORD=postgres \
+  -e POSTGRES_DB=dbapi_sample "${PG_IMAGE:-postgres:17}" >/dev/null
+# pg_isready over TCP: during its first start the image's server listens on
+# the socket only, then restarts.
+for I in $(seq 1 60); do
+  docker exec "$PG_CONTAINER" pg_isready -q -h 127.0.0.1 -U postgres -d dbapi_sample && break
+  sleep 1
+done
+# Sample 03's databases (the sample creates the tables, not the databases).
+for D in control shared tenant_acme tenant_globex; do
+  docker exec "$PG_CONTAINER" psql -q -U postgres -c "CREATE DATABASE $D" >/dev/null
+done
+export DB_ENGINE=postgresql DB_HOST=127.0.0.1 DB_PORT="${PG_PORT:-55434}" DB_NAME=dbapi_sample
+export DB_USER=postgres DB_PASSWORD=postgres PG_CLIENT
+echo "-- samples/02-db"
+run samples/02-db DbApiSample.exe 9332 http_scenarios_db.sh --reset
+echo "-- samples/03-tenants"
+run samples/03-tenants TenantApiSample.exe 9353 http_scenarios_tenants.sh --reset
+echo "-- samples/03-tenants, generated JWT keys in the database"
+(cd samples/03-tenants && ./TenantApiSample.exe --check-key-store > check.log 2>&1) ||
+  { cat samples/03-tenants/check.log; exit 1; }
+tail -1 samples/03-tenants/check.log
+rotation db
 true

@@ -1,9 +1,9 @@
 ﻿program TenantApiSample;
 
 (* Sample 03: a multi-tenant Horse API, the first step of
-  docs/multitenancy-design.md. SQLite through pascal-db-faa (SQLdb on FPC,
-  FireDAC on Delphi). One source for Delphi (TenantApiSample.dproj) and
-  Lazarus/FPC (TenantApiSample.lpi).
+  docs/multitenancy-design.md. SQLite or PostgreSQL through pascal-db-faa
+  (SQLdb on FPC, FireDAC on Delphi). One source for Delphi
+  (TenantApiSample.dproj) and Lazarus/FPC (TenantApiSample.lpi).
 
     TenantApiSample [port] [--reset]       (default port 9350)
     TenantApiSample --check-key-store      (checks the key store's race, exits)
@@ -24,6 +24,17 @@
   before the server listens (never on a tenant's first request). A database
   no request asked for in DB_IDLE_SECONDS (default 600) is closed, and
   opened again when needed. --reset deletes the files first.
+
+  DB_ENGINE=postgresql (default sqlite) puts each of those databases on a
+  PostgreSQL server instead, one database per name: control, shared and
+  tenant_<id> for each dedicated tenant (tenant_acme, tenant_globex by
+  default). They must exist (the migrations create the tables, not the
+  databases: the stand-in for provisioning stops at the rows); --reset
+  empties each one (DROP SCHEMA public CASCADE). DB_HOST (localhost),
+  DB_PORT (5432), DB_USER (postgres), DB_PASSWORD; PG_CLIENT is libpq (on
+  Windows the full path of a 64-bit libpq.dll, so a Delphi build for it is
+  Win64; on Linux libpq.so.5 is found by default). The SQL is the same on
+  both, in one directory, COMMON, behind TFallbackSqlSource.
 
   Signing keys: a key ring from JWT_KEYS (PascalApi.JwtKeys, phase 1 of
   docs/jwt-keys-design.md), by default three keys with development secrets
@@ -165,6 +176,7 @@ const
 
 var
   GSecret, GClaim, GDataDir: string;
+  GPostgreSQL: Boolean;
   GKeys: IJwtKeyRing;
   GControl: IDBFactory;
   GCatalog: ITenantCatalog;
@@ -192,28 +204,66 @@ type
     function UserActive(const AScope, AUserId: string): Boolean;
   end;
 
-function NewSqliteFactory(const AFile, APoolName: string; const ASource: ISqlSource): IDBFactory;
+function IsPostgreSQL: Boolean;
+var
+  LEngine: string;
+begin
+  LEngine := LowerCase(TAppConfig.Get('DB_ENGINE', 'sqlite'));
+  if (LEngine <> 'sqlite') and (LEngine <> 'postgresql') then
+    raise Exception.CreateFmt('DB_ENGINE must be sqlite or postgresql, not "%s"', [LEngine]);
+  Result := LEngine = 'postgresql';
+end;
+
+// The database AKey (control, shared, tenant_<id>): a file in DATA_DIR on
+// SQLite, a database of that name on PostgreSQL.
+function NewDatabaseFactory(const AKey, APoolName: string; const ASource: ISqlSource): IDBFactory;
 var
   LConfig: IDatabaseConfig; // an interface variable, never a class one (pascal-db-faa's rule)
-  LFile: string;
 begin
-  LFile := AFile;
   LConfig := TDatabaseConfig.Create;
-  {$IFDEF FPC}
-  LConfig.ConnectionParams.Values['ConnectorType'] := 'SQLite3';
-  LConfig.ConnectionParams.Values['DatabaseName'] := LFile;
-  {$IFDEF UNIX}
-  LConfig.ConnectionParams.Values['ClientLibrary'] := TAppConfig.Get('SQLITE_CLIENT', 'libsqlite3.so.0');
-  {$ELSE}
-  LConfig.ConnectionParams.Values['ClientLibrary'] := TAppConfig.Get('SQLITE_CLIENT', '');
-  {$ENDIF}
-  {$ELSE}
-  LConfig.ConnectionParams.Values['DriverID'] := 'SQLite';
-  LConfig.ConnectionParams.Values['Database'] := LFile;
-  {$ENDIF}
-  LConfig.SQLDialect := 'SQLite';
-  LConfig.SQLDirectory := 'SQLITE';
-  LConfig.SqlSource := ASource;
+  if GPostgreSQL then
+  begin
+    {$IFDEF FPC}
+    LConfig.ConnectionParams.Values['ConnectorType'] := 'PostgreSQL';
+    LConfig.ConnectionParams.Values['HostName'] := TAppConfig.Get('DB_HOST', 'localhost');
+    LConfig.ConnectionParams.Values['Port'] := TAppConfig.Get('DB_PORT', '5432');
+    LConfig.ConnectionParams.Values['DatabaseName'] := AKey;
+    LConfig.ConnectionParams.Values['UserName'] := TAppConfig.Get('DB_USER', 'postgres');
+    LConfig.ConnectionParams.Values['Password'] := TAppConfig.Get('DB_PASSWORD', '');
+    LConfig.ConnectionParams.Values['CharSet'] := 'UTF8';
+    LConfig.ConnectionParams.Values['ClientLibrary'] := TAppConfig.Get('PG_CLIENT', '');
+    {$ELSE}
+    LConfig.ConnectionParams.Values['DriverID'] := 'PG';
+    LConfig.ConnectionParams.Values['Server'] := TAppConfig.Get('DB_HOST', 'localhost');
+    LConfig.ConnectionParams.Values['Port'] := TAppConfig.Get('DB_PORT', '5432');
+    LConfig.ConnectionParams.Values['Database'] := AKey;
+    LConfig.ConnectionParams.Values['User_Name'] := TAppConfig.Get('DB_USER', 'postgres');
+    LConfig.ConnectionParams.Values['Password'] := TAppConfig.Get('DB_PASSWORD', '');
+    LConfig.ConnectionParams.Values['CharacterSet'] := 'UTF8';
+    LConfig.ConnectionParams.Values['VendorLib'] := TAppConfig.Get('PG_CLIENT', '');
+    {$ENDIF}
+    LConfig.SQLDialect := 'PostgreSQL';
+    LConfig.SQLDirectory := 'PG';
+  end
+  else
+  begin
+    {$IFDEF FPC}
+    LConfig.ConnectionParams.Values['ConnectorType'] := 'SQLite3';
+    LConfig.ConnectionParams.Values['DatabaseName'] := GDataDir + AKey + '.sqlite';
+    {$IFDEF UNIX}
+    LConfig.ConnectionParams.Values['ClientLibrary'] := TAppConfig.Get('SQLITE_CLIENT', 'libsqlite3.so.0');
+    {$ELSE}
+    LConfig.ConnectionParams.Values['ClientLibrary'] := TAppConfig.Get('SQLITE_CLIENT', '');
+    {$ENDIF}
+    {$ELSE}
+    LConfig.ConnectionParams.Values['DriverID'] := 'SQLite';
+    LConfig.ConnectionParams.Values['Database'] := GDataDir + AKey + '.sqlite';
+    {$ENDIF}
+    LConfig.SQLDialect := 'SQLite';
+    LConfig.SQLDirectory := 'SQLITE';
+  end;
+  // The database's own directory first, then the SQL both run.
+  LConfig.SqlSource := TFallbackSqlSource.Create(ASource, 'COMMON');
   LConfig.PoolName := APoolName;
   LConfig.PoolIniConnections := 1;
   LConfig.PoolMaxConnections := 5;
@@ -228,7 +278,7 @@ end;
 
 function TSampleHooks.NewFactory(const ADatabaseKey, APoolName: string): IDBFactory;
 begin
-  Result := NewSqliteFactory(GDataDir + ADatabaseKey + '.sqlite', APoolName, CitySqlSource);
+  Result := NewDatabaseFactory(ADatabaseKey, APoolName, CitySqlSource);
 end;
 
 function TSampleHooks.RateKey(AReq: THorseRequest): string;
@@ -558,13 +608,34 @@ end;
 
 // --reset. A file another process holds open (another instance on the same
 // DATA_DIR) can't be deleted on Windows: stop instead of starting on old data
-// (seen: a second Delphi Win64 instance kept the first one's rows).
+// (seen: a second Delphi Win64 instance kept the first one's rows). On
+// PostgreSQL the database stays and its tables go.
 procedure DeleteDatabases(const ASpec: ITenantCatalog);
 
   procedure DeleteDatabase(const AKey: string);
   var
     LFile: string;
+    LFactory: IDBFactory;
+    LQuery: IQuery;
+    LScope: IScopeTransaction;
   begin
+    if GPostgreSQL then
+    begin
+      LFactory := NewDatabaseFactory(AKey, 'reset', TMemorySqlSource.Create);
+      LScope := LFactory.GetPool.AcquireQuery(LQuery);
+      LScope.StartTransaction;
+      try
+        LQuery.Sql := 'DROP SCHEMA public CASCADE';
+        LQuery.ExecSql;
+        LQuery.Sql := 'CREATE SCHEMA public';
+        LQuery.ExecSql;
+        LScope.Commit;
+      except
+        LScope.Rollback;
+        raise;
+      end;
+      Exit;
+    end;
     LFile := GDataDir + AKey + '.sqlite';
     if FileExists(LFile) and not DeleteFile(LFile) then
       raise Exception.CreateFmt('--reset: can''t delete %s (another instance using it?)', [LFile]);
@@ -589,7 +660,7 @@ var
   LControl: IDBFactory;
   LEngine: TDBMigrationEngine;
 begin
-  LControl := NewSqliteFactory(GDataDir + 'control.sqlite', 'control', ControlSqlSource);
+  LControl := NewDatabaseFactory('control', 'control', ControlSqlSource);
   LEngine := TDBMigrationEngine.Create(LControl, ALog.Migration);
   try
     LEngine.Execute(ControlMigrations);
@@ -735,6 +806,7 @@ begin
       GPort := StrToIntDef(ParamStr(I), GPort);
   GDataDir := IncludeTrailingPathDelimiter(ExpandFileName(
     TAppConfig.Get('DATA_DIR', ExtractFilePath(ParamStr(0)))));
+  GPostgreSQL := IsPostgreSQL;
   GSecret := TAppConfig.Get('JWT_SECRET', 'development-secret-change-me');
   GClaim := TAppConfig.Get('TENANT_CLAIM', TENANT_DEFAULT_CLAIM);
 

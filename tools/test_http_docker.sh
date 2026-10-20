@@ -21,9 +21,10 @@
 # on one store): in the control database, then in a Redis
 # (REDIS_IMAGE, redis:7.2-alpine) on the same network.
 #
-# PostgreSQL: sample 02 runs a second time on a PostgreSQL (PG_IMAGE,
+# PostgreSQL: samples 02 and 03 run again on a PostgreSQL (PG_IMAGE,
 # postgres:17) on the same network (DB_ENGINE=postgresql; the image needs
-# libpq5). SQLite took statements PostgreSQL refuses (pascal-db-faa's
+# libpq5): their scenarios, sample 03's --check-key-store and its rotation
+# in the database (two instances on one control database). SQLite took statements PostgreSQL refuses (pascal-db-faa's
 # gotcha 54) and hid a race (0.20.1): a run on SQLite alone doesn't show
 # them. pg_isready over TCP: during its first start the image's server
 # listens on the socket only, then restarts.
@@ -63,6 +64,10 @@ for I in $(seq 1 60); do
   sleep 1
 done
 [ -n "$PG_READY" ] || { echo "PostgreSQL didn't start"; docker logs "$NAME-pg" | tail -20; exit 1; }
+# Sample 03's databases (the sample creates the tables, not the databases).
+for D in control shared tenant_acme tenant_globex; do
+  docker exec "$NAME-pg" psql -q -U postgres -c "CREATE DATABASE $D" >/dev/null
+done
 
 MSYS_NO_PATHCONV=1 docker run --rm --network "$NAME" -v "$NAME:/otel:ro" -v "$MOUNT:/src:ro"   -e OTEL_EXPORTER_OTLP_ENDPOINT="http://$NAME:4318" -e OTEL_BSP_SCHEDULE_DELAY=200 -e REDIS_HOST="$NAME-redis" -e PG_HOST="$NAME-pg" -e REFRESH_TOKEN_SECONDS=3   "$IMAGE" sh -c '
   set -e
@@ -109,10 +114,6 @@ MSYS_NO_PATHCONV=1 docker run --rm --network "$NAME" -v "$NAME:/otel:ro" -v "$MO
   run 01-api ApiSample 9310 http_scenarios.sh "" 01
   echo "-- samples/02-db"
   run 02-db DbApiSample 9330 http_scenarios_db.sh --reset 02
-  echo "-- samples/02-db on PostgreSQL"
-  export DB_ENGINE=postgresql DB_HOST=$PG_HOST DB_NAME=dbapi_sample DB_USER=postgres DB_PASSWORD=postgres
-  run 02-db DbApiSample 9332 http_scenarios_db.sh --reset 02
-  unset DB_ENGINE DB_HOST DB_NAME DB_USER DB_PASSWORD
   echo "-- samples/03-tenants"
   run 03-tenants TenantApiSample 9350 http_scenarios_tenants.sh --reset ""
   # Sample 03 twice more on one key store, keys rotated in seconds (built by
@@ -129,7 +130,8 @@ MSYS_NO_PATHCONV=1 docker run --rm --network "$NAME" -v "$NAME:/otel:ro" -v "$MO
     for I in 1 2 3 4 5 6 7 8 9 10; do curl -s -o /dev/null http://127.0.0.1:9352/ && break; sleep 1; done
     RC=0
     CONTROL_DB=""
-    [ "$1" = db ] && CONTROL_DB=/t/control.sqlite
+    # The checks that read the stored secrets open the SQLite file.
+    [ "$1" = db ] && [ "${DB_ENGINE:-sqlite}" = sqlite ] && CONTROL_DB=/t/control.sqlite
     CONTROL_DB="$CONTROL_DB" sh /t/tools/http_scenarios_jwt_rotation.sh 9351 9352 || RC=$?
     sleep 1
     kill $PID1 $PID2 2>/dev/null || true
@@ -144,6 +146,17 @@ MSYS_NO_PATHCONV=1 docker run --rm --network "$NAME" -v "$NAME:/otel:ro" -v "$MO
   rotation db
   echo "-- samples/03-tenants, generated JWT keys in Redis"
   rotation redis
+  export DB_ENGINE=postgresql DB_HOST=$PG_HOST DB_NAME=dbapi_sample DB_USER=postgres DB_PASSWORD=postgres
+  echo "-- samples/02-db on PostgreSQL"
+  run 02-db DbApiSample 9332 http_scenarios_db.sh --reset 02
+  echo "-- samples/03-tenants on PostgreSQL"
+  run 03-tenants TenantApiSample 9353 http_scenarios_tenants.sh --reset ""
+  echo "-- samples/03-tenants on PostgreSQL, generated JWT keys in the database"
+  /t/TenantApiSample --check-key-store > /t/check-key-store-pg.log 2>&1 ||
+    { cat /t/check-key-store-pg.log; exit 1; }
+  tail -1 /t/check-key-store-pg.log
+  rotation db
+  unset DB_ENGINE DB_HOST DB_NAME DB_USER DB_PASSWORD
   echo "-- spans received by the collector"
   sleep 1
   python3 /t/tools/otlp_check.py /otel/traces.json'

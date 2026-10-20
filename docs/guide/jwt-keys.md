@@ -152,8 +152,9 @@ DELETE FROM JWT_KEYS WHERE TENANT_ID = :TENANT_ID AND KID = :KID
 
 `TENANT_ID` is `''` without tenants. The primary key settles two instances rotating at once: the
 second insert of a generation is a unique violation, which `TryAdd` turns into "someone else
-won". Sample 03's `--check-key-store` checks it on the adapter it was built with: on SQLite,
-SQLdb (FPC) and FireDAC (Delphi) both answered False and kept one row. A row is only ever added or deleted, never
+won". Sample 03's `--check-key-store` checks it on the adapter it was built with: on SQLite and
+on PostgreSQL 17 (`DB_ENGINE=postgresql`), SQLdb (FPC) and FireDAC (Delphi) both answered False
+and kept one row. A row is only ever added or deleted, never
 updated.
 
 **Redis** (`TRedisJwtKeyStore`, `src/redis/PascalApi.Redis.JwtKeys`, outside the package as

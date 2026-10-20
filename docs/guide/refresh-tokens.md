@@ -296,8 +296,8 @@ are short.
 
 `TDbRefreshTokenStore.Create(AFactory)` runs five statements by name from the factory's
 `SqlLoader` (the names are parameters of the constructor, with these defaults), each in a
-transaction of its own; `TENANT_ID` is the scope (`''` without tenants). Sample 03's, on SQLite
-(`TenantApiSample.Control`, in the control database: every instance on it rotates the tokens):
+transaction of its own; `TENANT_ID` is the scope (`''` without tenants). Sample 03's, the same on
+SQLite and PostgreSQL (`TenantApiSample.Control`, in the control database: every instance on it rotates the tokens):
 
 ```sql
 -- MIG.0004

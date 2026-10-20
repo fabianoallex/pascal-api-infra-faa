@@ -193,7 +193,9 @@ type
     function InsertState(const AState: IStateInsert): IState;
   end;
 
-/// Every SQL of the sample, under the SQLITE directory.
+/// Every SQL of the sample, under the COMMON directory (the same on SQLite
+/// and PostgreSQL; the program's TFallbackSqlSource asks the database's own
+/// directory first).
 function CitySqlSource: ISqlSource;
 
 /// The migrations of every database: SCHEMA_MIGRATIONS, CITIES, STATES.
@@ -210,7 +212,7 @@ uses
   PascalApi.Text;
 
 const
-  DIR = 'SQLITE';
+  DIR = 'COMMON';
 
 /// True when AText is exactly ALength ASCII digits. StrToIntDef would also
 /// take '+123456' or '-000001'.

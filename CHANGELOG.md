@@ -6,6 +6,17 @@ may change the API; each such change is listed here.
 
 ## [Unreleased]
 
+### Added
+
+- Sample 03 runs on PostgreSQL too: `DB_ENGINE=postgresql`, one database per name (`control`,
+  `shared`, `tenant_<id>` for each dedicated tenant), which must exist; `--reset` empties each one
+  (`DROP SCHEMA public CASCADE`). Its SQL moved to `COMMON` behind `TFallbackSqlSource`, and the
+  catalog's `SUSPENDED` flag is bound with `Flags`. `tools/test_http.sh` and
+  `tools/test_http_docker.sh` (CI) run its scenarios, `--check-key-store` and the rotation with two
+  instances on PostgreSQL after SQLite; the rotation's checks that open the SQLite file are skipped
+  there. Six runs of the scenarios on PostgreSQL (FPC, Windows) were clean, three of them through
+  the refresh race (the 0.20.1 fix).
+
 ## [0.21.0] - 2026-10-20
 
 Needs pascal-db-faa 0.17.0 (`IParams.Flags`, `TFallbackSqlSource`). Both come from
