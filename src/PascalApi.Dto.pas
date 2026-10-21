@@ -82,9 +82,10 @@ uses
 // the MCP executor; it replaced PascalApi.Tracing); 1.8.1: SafeWriteln flushes on Delphi (the
 // access log, with stdout in a file or a pipe); 1.15.0: PascalCommon.Random (PascalApi.JwtKeys'
 // generated keys); 1.16.0: PascalCommon.AesGcm (PascalApi.JwtKeys' sealed secrets);
-// 1.17.0: PascalCommon.Crypto (SHA-256, HMAC, Base64url: PascalApi.Crypto wraps it).
-{$IF PASCALCOMMON_VERSION < 12100}
-  {$MESSAGE FATAL 'pascal-api-infra-faa needs pascal-common-faa 1.21.0 or later'}
+// 1.17.0: PascalCommon.Crypto (SHA-256, HMAC, Base64url: PascalApi.Crypto wraps it);
+// 1.21.0: PascalCommon.Validators; 1.24.0: PcBase64UrlDecodeStrict (PascalApi.Jwt).
+{$IF PASCALCOMMON_VERSION < 12400}
+  {$MESSAGE FATAL 'pascal-api-infra-faa needs pascal-common-faa 1.24.0 or later'}
 {$IFEND}
 
 type

@@ -169,7 +169,8 @@ DELETE FROM IDEMPOTENCY_KEYS WHERE TENANT_ID = :TENANT_ID AND IDEM_KEY = :IDEM_K
 `THorseIdempotentRequest` is a record on the handler's stack (the code above):
 
 - `Start` reads `Idempotency-Key`. Absent or blank: the request runs as before, and
-  `Complete`/`Fail` do nothing. Otherwise the key is claimed with the request's fingerprint (the
+  `Complete`/`Fail` do nothing; with `ARequired` (0.24.0) it is a **400**
+  `idempotency_key_required` instead, and the handler never runs without a key. Otherwise the key is claimed with the request's fingerprint (the
   SHA-256 of the method, the path and the body): `True` means the key already has an answer,
   which `Start` sent (the stored headers, `Idempotent-Replayed: true`, the body); the handler
   exits. **400** `invalid_idempotency_key` for a key that isn't 1 to 255 visible ASCII characters
@@ -204,7 +205,11 @@ tenants' keys of the same name never meet.
   for 24 hours by default; a claim holds for 30 seconds (a request that died leaves a key the
   next retry takes over after that). Keep the lease above the longest request.
 - **Required key.** `Start` leaves the key optional. To require one (a public booking route),
-  check the header for blanks before `Start` and answer 400 yourself.
+  pass `ARequired = True` (0.24.0): a missing or blank key is a 400 `idempotency_key_required`
+  (`RequireIdempotencyKey` does the check where there is no Horse request). Where a stored answer
+  carries something only its client should see (pascal-agenda-faa's public booking answers with
+  a signed link), also require a key long enough not to be guessed: the body must match too, but
+  `"1"` is a key two clients may both pick.
 
 ## Pitfalls
 

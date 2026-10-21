@@ -6,6 +6,30 @@ may change the API; each such change is listed here.
 
 ## [Unreleased]
 
+## [0.24.0] - 2026-10-21
+
+Two findings of pascal-agenda-faa's M3 (public booking routes and signed links), brought here
+by the user's decision. Needs pascal-common-faa **1.24.0**.
+
+### Added
+
+- A required `Idempotency-Key`: `THorseIdempotentRequest.Start(..., ARequired)` and
+  `RequireIdempotencyKey(AHeader)` (`PascalApi.Idempotency`) answer a missing or blank key with
+  400 `idempotency_key_required` (`API_CODE_IDEMPOTENCY_KEY_REQUIRED`,
+  `TApiMessages.IdempotencyKeyRequired`, English and Portuguese). Optional stays the default.
+  pascal-agenda-faa's public booking checked the header itself before `Start`.
+
+### Fixed
+
+- **A JWT verified under more than one spelling of its signature.** The signature was read with
+  the lenient Base64url decoder, which ignores the bits after the last byte: 32 bytes are 43
+  characters whose last carries 4 bits, so a token whose last character was changed to the next
+  one of the alphabet (`...c` to `...d`), or padded with `=`, verified as the original. Not a
+  forgery (the bytes are the signature's), but one token had several texts. `TJwt` now reads the
+  signature with pascal-common-faa 1.24.0's `PcBase64UrlDecodeStrict`: any other spelling is
+  `jrMalformed` (a 401). Found by pascal-agenda-faa's signed links, which had the same reading,
+  on its Linux run.
+
 ## [0.23.1] - 2026-10-21
 
 ### Fixed

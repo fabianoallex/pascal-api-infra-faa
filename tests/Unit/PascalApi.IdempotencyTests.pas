@@ -38,6 +38,7 @@ type
     [Test] procedure Claim_ScopesAreApart;
     [Test] procedure Fail_ClientErrorStored_OtherReleased;
     [Test] procedure Start_InvalidKey_Is400;
+    [Test] procedure RequireKey_BlankIs400;
     [Test] procedure DbStore_SqlAndParameters;
   end;
 
@@ -66,6 +67,17 @@ begin
   except
     on E: EHttpException do
       Result := IntToStr(E.StatusCode) + ' ' + E.Code;
+  end;
+end;
+
+function RequireOutcome(const AHeader: string): string;
+begin
+  try
+    RequireIdempotencyKey(AHeader);
+    Result := 'ok';
+  except
+    on E: EHttpException do
+      Result := IntToStr(E.StatusCode) + ' ' + E.Code + ' ' + E.Message;
   end;
 end;
 
@@ -260,6 +272,18 @@ begin
   finally
     LIdem.Free;
   end;
+end;
+
+procedure TIdempotencyTests.RequireKey_BlankIs400;
+begin
+  TApiMessages.Current := TApiMessages.English;
+  TAssert.AssertEquals('400 idempotency_key_required Idempotency-Key is required: a new one ' +
+    'for each request, such as a UUID.', RequireOutcome(''));
+  TAssert.AssertEquals('blank', '400 idempotency_key_required Idempotency-Key is required: a ' +
+    'new one for each request, such as a UUID.', RequireOutcome('   '));
+  TAssert.AssertEquals('ok', RequireOutcome('k1'));
+  // Invalid but present: Start's 400, not this one.
+  TAssert.AssertEquals('ok', RequireOutcome('a b'));
 end;
 
 procedure TIdempotencyTests.DbStore_SqlAndParameters;

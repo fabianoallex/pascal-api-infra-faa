@@ -342,8 +342,10 @@ on FPC Windows, FPC Linux and Delphi Win64. One Delphi Win64 run of sample 03 on
 failed 6 checks around "refresh after logout" (the refresh token came back empty: a 400
 "refreshToken is required"); three runs right after were clean, and sample 03 uses nothing of
 0.23.0. Not explained yet: worth watching on the next PostgreSQL runs.
-| Tenant from the path or host | `PascalApi.Tenancy` | **reopened**: multi-tenancy decision 5 (the real case: public booking routes by slug, user 2026-10-18) |
-| Signed links (HMAC + expiry, JWT key ring) | `PascalApi.SignedUrl` | proposed |
+| Tenant from the path or host | `PascalApi.Tenancy` | **reopened**: multi-tenancy decision 5 (the real case: public booking routes by slug, user 2026-10-18). **Built 2026-10-21 in pascal-agenda-faa** (`Agenda.PublicTenancy`: `/public/<slug>/`, a middleware after the rate limit marks the request as `TTenantMiddleware` does). Its decision 3 refines this library's decision 7 for sources nobody authenticated: a suspended tenant is the same 404 as an unknown one (a different answer lists the customers). Not promoted yet |
+| Signed links (HMAC + expiry) | `PascalApi.SignedUrl` | **Built 2026-10-21 in pascal-agenda-faa** (`Agenda.SignedLinks`). Not the JWT key ring, by the user's choice: a ring's key stops verifying minutes after the next one signs and rotates every 30 days, while a link may live a year; keys of its own (`id:<base64>` list, the first signs), derived per tenant with HMAC. Signature only in its canonical Base64url (below). Not promoted yet |
+| One text per Base64url signature | pascal-common-faa `PcBase64UrlDecodeStrict`; `PascalApi.Jwt` | found 2026-10-21 by pascal-agenda-faa's signed links (Linux run: a link with its last character changed still verified); this library's JWT had the same. User chose to fix it in the libraries: **done in pascal-common-faa 1.24.0 and here in 0.24.0** |
+| A required `Idempotency-Key` | `THorseIdempotentRequest.Start(..., ARequired)`, `RequireIdempotencyKey` | found 2026-10-21 (pascal-agenda-faa's public booking checked the header before `Start`); **done in 0.24.0** |
 | IANA time zones on both compilers | pascal-common-faa | proposed; own design phase (user, 2026-10-18) |
 | Outbox + relay to AMQP | a bridge (`src/amqp` or pascal-amqp-faa) | needs a second case |
 | Scheduler with a lease | pascal-common-faa | needs a second case |

@@ -89,6 +89,7 @@ implementation
 uses
   DateUtils,
   PascalCommon.SystemContext,
+  PascalCommon.Crypto,
   PascalApi.Text,
   PascalApi.Crypto;
 
@@ -238,7 +239,10 @@ begin
     LHeader.Free;
   end;
 
-  if not PaBase64UrlDecode(LSignaturePart, LGiven) then
+  // Strict (0.24.0): the lenient decoder ignores the bits after the last
+  // byte, and a signature with its last character changed to the next one
+  // ("...A" to "...B") verified as well. One token, one text.
+  if not PcBase64UrlDecodeStrict(LSignaturePart, LGiven) then
     Exit(jrMalformed);
   if not PaSameBytes(LGiven, Signature(LHeaderPart + '.' + LPayloadPart, ASecret)) then
     Exit(jrBadSignature);

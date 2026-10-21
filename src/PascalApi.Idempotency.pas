@@ -24,6 +24,11 @@ unit PascalApi.Idempotency;
   - The key is 1 to 255 visible ASCII characters, bare or as a structured
     field string in quotes ("..."); anything else is a 400
     (invalid_idempotency_key). Messages from TApiMessages.
+  - A route may require it (0.24.0): RequireIdempotencyKey answers a blank
+    header 400 (idempotency_key_required); THorseIdempotentRequest.Start
+    calls it when told the key is required. From pascal-agenda-faa's public
+    booking, whose stored answer carries a signed link: running it twice
+    for a client that retried without a key is what the key prevents.
 
   The store is an interface, the same shape as the refresh-token store:
   TDbIdempotencyStore on the application's named SQL (the SQL and the table
@@ -57,6 +62,7 @@ const
   API_CODE_INVALID_IDEMPOTENCY_KEY = 'invalid_idempotency_key';
   API_CODE_IDEMPOTENCY_KEY_IN_FLIGHT = 'idempotency_key_in_flight';
   API_CODE_IDEMPOTENCY_KEY_REUSED = 'idempotency_key_reused';
+  API_CODE_IDEMPOTENCY_KEY_REQUIRED = 'idempotency_key_required';
   IDEMPOTENCY_MAX_KEY_CHARS = 255;
   IDEMPOTENCY_DEFAULT_TTL_SECONDS = 86400;
   IDEMPOTENCY_DEFAULT_LEASE_SECONDS = 30;
@@ -167,6 +173,11 @@ type
 /// The key without its quotes, or '' when it isn't one.
 function NormalizeIdempotencyKey(const AHeader: string): string;
 
+/// For a route that requires the key (0.24.0): EHttpException 400
+/// idempotency_key_required when AHeader is absent or blank. A key that is
+/// there but invalid is TIdempotency.Start's 400, as before.
+procedure RequireIdempotencyKey(const AHeader: string);
+
 /// Lower-case hex SHA-256 of "<method> <path>" #10 <body> (UTF-8).
 function RequestFingerprint(const AMethod, APath, ABody: string): string;
 
@@ -201,6 +212,13 @@ begin
     if (LKey[I] < #$21) or (LKey[I] > #$7E) or (LKey[I] = '"') or (LKey[I] = '\') then
       Exit;
   Result := LKey;
+end;
+
+procedure RequireIdempotencyKey(const AHeader: string);
+begin
+  if Trim(AHeader) = '' then
+    raise EHttpException.Create(400, TApiMessages.Current.IdempotencyKeyRequired,
+      API_CODE_IDEMPOTENCY_KEY_REQUIRED);
 end;
 
 function RequestFingerprint(const AMethod, APath, ABody: string): string;

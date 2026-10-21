@@ -29,6 +29,9 @@ unit PascalApi.Horse.Idempotency;
 
   - Without an Idempotency-Key (absent or blank) the request runs as
     before: Start returns False, Complete and Fail do nothing, Send sends.
+    Unless ARequired (0.24.0): then Start raises 400
+    idempotency_key_required (RequireIdempotencyKey), and the handler
+    never runs without a key.
   - The fingerprint is the request's method, path (THorseRequest.PathInfo)
     and body; the scope is the caller's (the tenant's id, '' without
     tenants).
@@ -59,12 +62,13 @@ type
     FScope: string;
     FKey: string;
   public
-    /// Reads Idempotency-Key. Without one: False, and the rest does nothing.
-    /// With one: TIdempotency.Start; True when the key already has an
-    /// answer, which was sent (the handler exits). EHttpException 400, 409,
-    /// 422 as Start raises them.
+    /// Reads Idempotency-Key. Without one: False, and the rest does nothing;
+    /// or, with ARequired (0.24.0), EHttpException 400
+    /// idempotency_key_required. With one: TIdempotency.Start; True when
+    /// the key already has an answer, which was sent (the handler exits).
+    /// EHttpException 400, 409, 422 as Start raises them.
     function Start(AIdempotency: TIdempotency; AReq: THorseRequest; ARes: THorseResponse;
-      const AScope: string): Boolean;
+      const AScope: string; ARequired: Boolean = False): Boolean;
     /// Stores the answer under the key (nothing without one). AHeaders as
     /// HeaderLines writes them.
     procedure Complete(AStatus: Integer; const AJson: string; const AHeaders: string = '');
@@ -98,7 +102,7 @@ uses
 { THorseIdempotentRequest }
 
 function THorseIdempotentRequest.Start(AIdempotency: TIdempotency; AReq: THorseRequest;
-  ARes: THorseResponse; const AScope: string): Boolean;
+  ARes: THorseResponse; const AScope: string; ARequired: Boolean): Boolean;
 var
   LKey: string;
   LReplay: TStoredResponse;
@@ -110,6 +114,8 @@ begin
   FKey := '';
   Result := False;
   LKey := Trim(AReq.Headers[IDEMPOTENCY_KEY_HEADER]);
+  if ARequired then
+    RequireIdempotencyKey(LKey);
   if LKey = '' then
     Exit;
   if AIdempotency = nil then

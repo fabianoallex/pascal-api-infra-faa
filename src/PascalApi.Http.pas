@@ -154,6 +154,7 @@ type
     InvalidIdempotencyKey: string;     // 400, Format: %d = the longest key
     IdempotencyKeyInFlight: string;    // 409
     IdempotencyKeyReused: string;      // 422
+    IdempotencyKeyRequired: string;    // 400 (0.24.0)
     class function English: TApiMessages; static;
     class function Portuguese: TApiMessages; static;
     /// The messages in use. Assign once, at startup.
@@ -509,6 +510,8 @@ begin
     'A request with this Idempotency-Key is still running: retry in a moment.';
   Result.IdempotencyKeyReused :=
     'This Idempotency-Key was used for another request: use a new key for a new request.';
+  Result.IdempotencyKeyRequired :=
+    'Idempotency-Key is required: a new one for each request, such as a UUID.';
 end;
 
 class function TApiMessages.Portuguese: TApiMessages;
@@ -550,6 +553,8 @@ begin
     'Uma requisição com esta Idempotency-Key ainda está em andamento: tente de novo em instantes.';
   Result.IdempotencyKeyReused :=
     'Esta Idempotency-Key foi usada em outra requisição: use uma chave nova para uma nova requisição.';
+  Result.IdempotencyKeyRequired :=
+    'Idempotency-Key é obrigatória: uma nova para cada requisição, como um UUID.';
 end;
 
 { Error mapping }

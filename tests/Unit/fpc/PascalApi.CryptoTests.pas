@@ -65,6 +65,7 @@ type
     procedure Decode_NonAsciiClaimsAndSecret;
     procedure Decode_WrongSecret_BadSignature;
     procedure Decode_TamperedPayload_BadSignature;
+    procedure Decode_SignatureSpelledAnotherWay_Malformed;
     procedure Decode_AlgNone_Refused;
     procedure Decode_EmptySecret_Refused;
     procedure Decode_Malformed;
@@ -317,6 +318,19 @@ begin
     Encode('{"sub":"admin","name":"John Doe","iat":1516239022}') +
     Copy(JWT_IO_TOKEN, LastDelimiter('.', JWT_IO_TOKEN), MaxInt);
   TAssert.AssertTrue(DecodeResult(LToken, JWT_IO_SECRET) = jrBadSignature);
+end;
+
+procedure TJwtTests.Decode_SignatureSpelledAnotherWay_Malformed;
+var
+  LBody: string;
+begin
+  // The signature ends in "c" (28 = 011100): "d" differs only in the 2 bits
+  // after the last byte, which the lenient decoder drops, so until 0.24.0
+  // the token verified with either. Padding is another spelling too.
+  LBody := Copy(JWT_IO_TOKEN, 1, Length(JWT_IO_TOKEN) - 1);
+  TAssert.AssertTrue('the original', DecodeResult(LBody + 'c', JWT_IO_SECRET) = jrValid);
+  TAssert.AssertTrue('the last character + 1', DecodeResult(LBody + 'd', JWT_IO_SECRET) = jrMalformed);
+  TAssert.AssertTrue('padded', DecodeResult(JWT_IO_TOKEN + '=', JWT_IO_SECRET) = jrMalformed);
 end;
 
 procedure TJwtTests.Decode_AlgNone_Refused;
