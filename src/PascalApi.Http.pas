@@ -144,6 +144,16 @@ type
     InvalidQueryInteger: string;       // Format: %s = the query parameter (PascalApi.Pagination)
     InvalidQueryNumber: string;        // Format: %s = the query parameter (PascalApi.QueryParams, 0.19.0)
     InvalidQueryBoolean: string;       // Format: %s = the query parameter (PascalApi.QueryParams, 0.19.0)
+    // PascalApi.Preconditions (0.23.0)
+    PreconditionRequired: string;      // 428: no If-Match
+    PreconditionAnyRefused: string;    // 428: If-Match "*" where a version is needed
+    InvalidIfMatch: string;            // 400: not a list of entity tags
+    PreconditionFailed: string;        // 412: the write matched no row
+    PreconditionFailedETag: string;    // 412, Format: %s = the current entity tag
+    // PascalApi.Idempotency (0.23.0)
+    InvalidIdempotencyKey: string;     // 400, Format: %d = the longest key
+    IdempotencyKeyInFlight: string;    // 409
+    IdempotencyKeyReused: string;      // 422
     class function English: TApiMessages; static;
     class function Portuguese: TApiMessages; static;
     /// The messages in use. Assign once, at startup.
@@ -244,6 +254,9 @@ function ErrorJson(const AMessage, ARequestId, ACode: string): string; overload;
 /// EPcValidationError.
 function ErrorJson(const AMessage, ARequestId, ACode: string;
   const AFields: TPcFieldErrors): string; overload;
+
+/// A header as a value (0.23.0).
+function HttpHeader(const AName, AValue: string): THttpHeader;
 
 /// The CORS headers for a request from ARequestOrigin; none when the origin
 /// isn't allowed.
@@ -483,6 +496,19 @@ begin
   Result.InvalidQueryInteger := '"%s" must be an integer.';
   Result.InvalidQueryNumber := '"%s" must be a number.';
   Result.InvalidQueryBoolean := '"%s" must be true or false.';
+  Result.PreconditionRequired := 'If-Match is required: send the ETag of the version you read.';
+  Result.PreconditionAnyRefused :=
+    'If-Match must name the version you read (its ETag); "*" is not accepted here.';
+  Result.InvalidIfMatch := 'If-Match must be one or more entity tags, such as "3".';
+  Result.PreconditionFailed := 'The resource changed since you read it: read it again.';
+  Result.PreconditionFailedETag :=
+    'The resource changed since you read it: read it again (its ETag is now %s).';
+  Result.InvalidIdempotencyKey :=
+    'Idempotency-Key must be 1 to %d visible ASCII characters, such as a UUID.';
+  Result.IdempotencyKeyInFlight :=
+    'A request with this Idempotency-Key is still running: retry in a moment.';
+  Result.IdempotencyKeyReused :=
+    'This Idempotency-Key was used for another request: use a new key for a new request.';
 end;
 
 class function TApiMessages.Portuguese: TApiMessages;
@@ -511,6 +537,19 @@ begin
   Result.InvalidQueryInteger := '"%s" deve ser um número inteiro.';
   Result.InvalidQueryNumber := '"%s" deve ser um número.';
   Result.InvalidQueryBoolean := '"%s" deve ser true ou false.';
+  Result.PreconditionRequired := 'If-Match é obrigatório: envie o ETag da versão que você leu.';
+  Result.PreconditionAnyRefused :=
+    'If-Match deve indicar a versão que você leu (o ETag dela); "*" não é aceito aqui.';
+  Result.InvalidIfMatch := 'If-Match deve ser uma ou mais entity tags, como "3".';
+  Result.PreconditionFailed := 'O recurso mudou desde a sua leitura: leia-o novamente.';
+  Result.PreconditionFailedETag :=
+    'O recurso mudou desde a sua leitura: leia-o novamente (o ETag agora é %s).';
+  Result.InvalidIdempotencyKey :=
+    'Idempotency-Key deve ter de 1 a %d caracteres ASCII visíveis, como um UUID.';
+  Result.IdempotencyKeyInFlight :=
+    'Uma requisição com esta Idempotency-Key ainda está em andamento: tente de novo em instantes.';
+  Result.IdempotencyKeyReused :=
+    'Esta Idempotency-Key foi usada em outra requisição: use uma chave nova para uma nova requisição.';
 end;
 
 { Error mapping }
@@ -713,6 +752,12 @@ begin
   Result.AllowCredentials := False;
   Result.MaxAge := 86400;
   Result.ExposeHeaders := '';
+end;
+
+function HttpHeader(const AName, AValue: string): THttpHeader;
+begin
+  Result.Name := AName;
+  Result.Value := AValue;
 end;
 
 function CorsHeaders(const AOptions: TCorsOptions; const ARequestOrigin: string): TArray<THttpHeader>;

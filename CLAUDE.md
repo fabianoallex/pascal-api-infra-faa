@@ -226,6 +226,26 @@ scope '') and 03 (control database, the tenant as the scope); guide
   on FPC Windows). The runners set `REFRESH_TOKEN_SECONDS=3` for the expiry check; run the
   Delphi builds with it too.
 
+### If-Match and Idempotency-Key
+
+`PascalApi.Preconditions` and `PascalApi.Idempotency` (pure, tested in their `*Tests`; the
+database store on pascal-db-faa's mock), `src/horse/PascalApi.Horse.Idempotency`; sample 02's
+`PUT /cities/:code` and `POST /cities`; guide `docs/guide/concurrency.md`. From pascal-agenda-faa
+(0.23.0).
+
+- **No middleware for either**: the version check needs the row, and storing an answer needs the
+  handler's response body, which Horse doesn't expose alike on both compilers.
+- The write after `RequireIfMatch` names the version read (`WHERE VERSION = :VERSION`); zero rows
+  is `RaisePreconditionFailed`. The read before it is its own transaction (SQLite: a
+  transaction's first statement is a write when another writer may race). The scenarios fire
+  four `PUT`s from one version at once and want one 200 and three 412.
+- The idempotency claim's transaction starts with a write (the purge) for the same reason; its
+  `INSERT ... ON CONFLICT DO NOTHING` is the same on SQLite 3.24+ and PostgreSQL.
+- `Complete` goes inside the handler's `try` (a store that fails releases the key through
+  `Fail`); `Fail` never raises.
+- A header parameter (`HeaderParam`) is not an MCP argument: a route that requires one is
+  `NoMcp`.
+
 ### Horse
 
 The core package (`src/`) doesn't use Horse; only `src/horse/PascalApi.Horse.Middlewares` does,

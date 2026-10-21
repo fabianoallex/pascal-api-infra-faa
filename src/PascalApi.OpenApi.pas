@@ -43,7 +43,7 @@ type
   EApiSchemaError = class(Exception);
 
   TApiParamType = (ptString, ptInteger, ptNumber, ptBoolean);
-  TApiParamLocation = (plPath, plQuery);
+  TApiParamLocation = (plPath, plQuery, plHeader);
   TApiResponseKind = (rkNone, rkObject, rkArray, rkPaged, rkError);
 
   TApiParam = record
@@ -59,6 +59,14 @@ type
     Description: string;
     Kind: TApiResponseKind;
     Schema: PTypeInfo; // the DTO interface (rkObject, rkArray, rkPaged)
+  end;
+
+  /// A header the operation's answers carry (0.23.0), written under each
+  /// response's "headers" as a string. Code 0: every 2xx response.
+  TApiResponseHeader = record
+    Name: string;
+    Description: string;
+    Code: Integer;
   end;
 
   /// One documented operation. Path is in Horse's form ('/cities/:code');
@@ -80,6 +88,7 @@ type
     Body: PTypeInfo;
     BodyDescription: string;
     Responses: TArray<TApiResponse>;
+    ResponseHeaders: TArray<TApiResponseHeader>;
     /// Left out of the MCP tools (phase 5); still documented.
     NoMcp: Boolean;
     /// Needs no token: with TApiDocument.BearerAuth, written as
@@ -716,6 +725,7 @@ type
     procedure WriteObjectSchema(AInterface: PTypeInfo);
     procedure WriteResponseSchema(const AResponse: TApiResponse);
     procedure WriteOperation(AOp: TApiOperation);
+    procedure WriteResponseHeaders(AOp: TApiOperation; ACode: Integer);
     procedure AddQueryDtoParams(AQueryDto: PTypeInfo; var AParams: TArray<TApiParam>);
     function BuildParams(AOp: TApiOperation): TArray<TApiParam>;
   public
@@ -1180,7 +1190,9 @@ begin
       401: Result := 'Unauthorized';
       404: Result := 'Not Found';
       409: Result := 'Conflict';
+      412: Result := 'Precondition Failed';
       422: Result := 'Unprocessable Entity';
+      428: Result := 'Precondition Required';
       429: Result := 'Too Many Requests';
       500: Result := 'Internal Server Error';
       503: Result := 'Service Unavailable';
@@ -1264,6 +1276,41 @@ begin
   Result := LParams;
 end;
 
+// The headers declared for ACode (or, with Code 0, for any 2xx).
+procedure TApiDocWriter.WriteResponseHeaders(AOp: TApiOperation; ACode: Integer);
+var
+  I: Integer;
+  LAny: Boolean;
+begin
+  LAny := False;
+  for I := 0 to High(AOp.ResponseHeaders) do
+    if (AOp.ResponseHeaders[I].Code = ACode) or
+      ((AOp.ResponseHeaders[I].Code = 0) and (ACode >= 200) and (ACode <= 299)) then
+    begin
+      if not LAny then
+      begin
+        FW.Name('headers');
+        FW.BeginObject;
+        LAny := True;
+      end;
+      FW.Name(AOp.ResponseHeaders[I].Name);
+      FW.BeginObject;
+      if AOp.ResponseHeaders[I].Description <> '' then
+      begin
+        FW.Name('description');
+        FW.WriteString(AOp.ResponseHeaders[I].Description);
+      end;
+      FW.Name('schema');
+      FW.BeginObject;
+      FW.Name('type');
+      FW.WriteString('string');
+      FW.EndObject;
+      FW.EndObject;
+    end;
+  if LAny then
+    FW.EndObject;
+end;
+
 procedure TApiDocWriter.WriteOperation(AOp: TApiOperation);
 var
   I: Integer;
@@ -1305,10 +1352,12 @@ begin
       FW.Name('name');
       FW.WriteString(LParams[I].Name);
       FW.Name('in');
-      if LParams[I].Location = plPath then
-        FW.WriteString('path')
+      case LParams[I].Location of
+        plPath: FW.WriteString('path');
+        plHeader: FW.WriteString('header');
       else
         FW.WriteString('query');
+      end;
       if LParams[I].Description <> '' then
       begin
         FW.Name('description');
@@ -1360,6 +1409,7 @@ begin
     FW.BeginObject;
     FW.Name('description');
     FW.WriteString(ResponseDescription(AOp.Responses[I]));
+    WriteResponseHeaders(AOp, AOp.Responses[I].Code);
     if AOp.Responses[I].Kind <> rkNone then
     begin
       FW.Name('content');

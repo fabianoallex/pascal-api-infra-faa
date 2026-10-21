@@ -121,6 +121,8 @@
         <DCCReference Include="..\..\src\PascalApi.QueryParams.pas"/>
         <DCCReference Include="..\..\src\PascalApi.PagedQuery.pas"/>
         <DCCReference Include="..\..\src\PascalApi.RefreshTokens.pas"/>
+        <DCCReference Include="..\..\src\PascalApi.Preconditions.pas"/>
+        <DCCReference Include="..\..\src\PascalApi.Idempotency.pas"/>
         <DCCReference Include="..\..\src\PascalApi.RateLimitState.pas"/>
         <DCCReference Include="..\..\src\PascalApi.FileLog.pas"/>
         <DCCReference Include="..\..\src\PascalApi.Dto.pas"/>
@@ -140,6 +142,8 @@
         <DCCReference Include="PascalApi.QueryParamsTests.pas"/>
         <DCCReference Include="PascalApi.PagedQueryTests.pas"/>
         <DCCReference Include="PascalApi.RefreshTokensTests.pas"/>
+        <DCCReference Include="PascalApi.PreconditionsTests.pas"/>
+        <DCCReference Include="PascalApi.IdempotencyTests.pas"/>
         <DCCReference Include="PascalApi.ValidationTests.pas"/>
         <DCCReference Include="PascalApi.RateLimitStateTests.pas"/>
         <DCCReference Include="PascalApi.FileLogTests.pas"/>

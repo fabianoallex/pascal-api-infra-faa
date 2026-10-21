@@ -12,8 +12,8 @@ uses
   PascalApi.Pagination, PascalApi.RateLimitState, PascalApi.FileLog, 
   PascalApi.Dto, PascalApi.Crypto, PascalApi.Jwt, PascalApi.JwtKeys, 
   PascalApi.Http, PascalApi.OpenApi, PascalApi.Mcp, PascalApi.Otlp, 
-  PascalApi.Tenancy, PascalApi.QueryParams, 
-  PascalApi.PagedQuery, PascalApi.RefreshTokens;
+  PascalApi.Tenancy, PascalApi.QueryParams, PascalApi.PagedQuery, 
+  PascalApi.RefreshTokens, PascalApi.Preconditions, PascalApi.Idempotency;
 
 implementation
 

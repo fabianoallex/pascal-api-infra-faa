@@ -365,7 +365,11 @@ Each member the document lists (strings, integers, numbers, booleans, enumeratio
 optionals of those; `ApiQueryParamType` is the one rule for both) is looked up by its JSON name,
 ignoring case, written into a JSON object and given to the mapper, so a value meets the body's
 rules: an `IOptInteger` is absent or a number, an integer past its type is refused, a
-`TUtcDateTime` needs its zone. An empty or missing parameter is absent; a parameter the DTO
+`TUtcDateTime` needs its zone. An empty or missing parameter is absent; a member that isn't an
+optional is **required**, as the document says (0.23.0): missing, empty or blank, it is a
+`required` failure of that field (`"service" is required.`), every missing one in one 400
+(`invalid_fields`), the same failure `TValid.Required` gives a body's member (until 0.22.0 it was
+read as `''` or 0 without a word). A parameter the DTO
 doesn't have is ignored (unlike a body: a query string often carries a cache buster). A value of
 the wrong kind is a 400 naming the parameter (`"limit" must be an integer.`, `"active" must be
 true or false.`, `"price" must be a number.`: `TApiMessages.InvalidQueryInteger`,

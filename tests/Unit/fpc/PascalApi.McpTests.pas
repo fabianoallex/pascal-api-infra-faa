@@ -101,6 +101,7 @@ type
     procedure Catalog_NamesNoMcpAndTags;
     procedure Catalog_InputSchema;
     procedure Catalog_DescriptionWithReturns;
+    procedure Catalog_HeaderParamsAreNotArguments;
     procedure Catalog_DuplicateToolName_Raises;
     procedure Catalog_DuplicateArgument_Raises;
     procedure Discover_ExactText;
@@ -348,6 +349,26 @@ begin
   TAssert.AssertEquals('Get a city. Returns: code (string), name (string).',
     FServer.Tools[1].Description);
   TAssert.AssertEquals('GET /health', FServer.Tools[3].Description);
+end;
+
+// 0.23.0: the executor sends no headers of the model's, so If-Match and
+// Idempotency-Key are left out of the tool's arguments.
+procedure TMcpTests.Catalog_HeaderParamsAreNotArguments;
+var
+  LOp: TApiOperation;
+begin
+  LOp := Op('delete', '/cities/:code');
+  SetLength(LOp.Params, 1);
+  LOp.Params[0].Name := 'If-Match';
+  LOp.Params[0].Description := '';
+  LOp.Params[0].Location := plHeader;
+  LOp.Params[0].ParamType := ptString;
+  LOp.Params[0].Required := True;
+  Server([]);
+  TAssert.AssertEquals(1, Length(FServer.Tools[0].Args));
+  TAssert.AssertEquals('code', FServer.Tools[0].Args[0].Name);
+  TAssert.AssertEquals('{"type":"object","properties":{"code":{"type":"string"}},' +
+    '"required":["code"],"additionalProperties":false}', FServer.Tools[0].InputSchema);
 end;
 
 procedure TMcpTests.Catalog_DuplicateToolName_Raises;

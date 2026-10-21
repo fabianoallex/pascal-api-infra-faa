@@ -1,8 +1,9 @@
 #!/bin/sh
 # Checks samples/02-db over HTTP with curl: migrations, paging and ordering
 # in SQL, the state filter, 404, validation, 409 from the database's unique
-# key, NULL to JSON null, delete, OpenAPI, MCP tools with the DTOs'
-# schemas, and the pool metrics pascal-db-faa (0.14.0) records.
+# key, NULL to JSON null, delete, If-Match on PUT and Idempotency-Key on POST
+# (0.23.0), OpenAPI, MCP tools with the DTOs' schemas, and the pool metrics
+# pascal-db-faa (0.14.0) records.
 #
 #   sh tools/http_scenarios_db.sh [port]   (default 9330; DbApiSample must be
 #                                          running, started with --reset)
@@ -21,10 +22,10 @@ CHECKS=0
 req() {
   M="$1"; P="$2"; B="$3"; shift 3 2>/dev/null || shift $#
   if [ -n "$B" ]; then
-    curl -s -X "$M" -o "$T/body" -w '%{http_code}' -H 'Content-Type: application/json' \
-      --data-binary "$B" "$@" "$BASE$P" > "$T/status"
+    curl -s -X "$M" -o "$T/body" -D "$T/headers" -w '%{http_code}' \
+      -H 'Content-Type: application/json' --data-binary "$B" "$@" "$BASE$P" > "$T/status"
   else
-    curl -s -X "$M" -o "$T/body" -w '%{http_code}' "$@" "$BASE$P" > "$T/status"
+    curl -s -X "$M" -o "$T/body" -D "$T/headers" -w '%{http_code}' "$@" "$BASE$P" > "$T/status"
   fi
 }
 ok()   { CHECKS=$((CHECKS + 1)); }
@@ -33,6 +34,8 @@ status_is() { [ "$(cat "$T/status")" = "$1" ] && ok || fail "$2: status $(cat "$
 body_is()   { [ "$(cat "$T/body")" = "$1" ] && ok || fail "$2: body $(cat "$T/body"), expected $1"; }
 body_has()  { grep -qF -- "$1" "$T/body" && ok || fail "$2: body lacks $1 (body: $(cat "$T/body"))"; }
 body_lacks(){ grep -qF -- "$1" "$T/body" && fail "$2: body has $1" || ok; }
+header()    { tr -d '\r' < "$T/headers" | grep -i "^$1:" | head -1 | sed 's/^[^:]*: *//'; }
+header_is() { [ "$(header "$1")" = "$2" ] && ok || fail "$3: header $1 = '$(header "$1")', expected '$2'"; }
 # Sum of a metric's samples in a Prometheus text file (every label set).
 metric_sum() { awk -v n="$1" '$1 == n || index($1, n "{") == 1 { s += $NF } END { printf "%d", s }' "$2"; }
 
@@ -185,6 +188,119 @@ status_is 404 "delete again"
 req GET '/cities?limit=1' ""
 body_has '"total":7' "6 seeds + Maceió"
 
+# --- If-Match (0.23.0, PascalApi.Preconditions): the ETag is the row's
+# version; PUT needs the version read, a change in between is a 412.
+PA='{"name":"Porto Alegre","state":"RS","population":1332845}'
+req GET /cities/4314902 ""
+header_is ETag '"1"' "if-match: the ETag of a city never changed"
+req PUT /cities/4314902 "$PA"
+status_is 428 "if-match: absent"
+body_is '{"error":"If-Match is required: send the ETag of the version you read.","code":"precondition_required"}' "if-match: absent, its code"
+req PUT /cities/4314902 "$PA" -H 'If-Match: *'
+status_is 428 "if-match: * names no version"
+req PUT /cities/4314902 "$PA" -H 'If-Match: 1'
+status_is 400 "if-match: not an entity tag"
+body_has '"code":"invalid_if_match"' "if-match: not an entity tag, its code"
+req PUT /cities/4314902 "$PA" -H 'If-Match: "1"'
+status_is 200 "if-match: the version read"
+body_is '{"code":"4314902","name":"Porto Alegre","state":"RS","population":1332845}' "if-match: the city"
+header_is ETag '"2"' "if-match: the new version"
+req PUT /cities/4314902 "$PA" -H 'If-Match: "1"'
+status_is 412 "if-match: an old version"
+body_is '{"error":"The resource changed since you read it: read it again (its ETag is now \"2\").","code":"precondition_failed"}' "if-match: an old version, the current ETag named"
+req PUT /cities/4314902 "$PA" -H 'If-Match: W/"2"'
+status_is 412 "if-match: a weak tag never matches"
+req PUT /cities/4314902 "$PA" -H 'If-Match: "7", "2"'
+status_is 200 "if-match: a list holding the current tag"
+header_is ETag '"3"' "if-match: a list, the new version"
+# A PATCH moves the version too: a PUT from the version before it is a lost
+# update, caught.
+req PATCH /cities/4314902 '{"population":1332846}'
+header_is ETag '"4"' "if-match: a PATCH moves the version"
+req PUT /cities/4314902 "$PA" -H 'If-Match: "3"'
+status_is 412 "if-match: a lost update caught"
+req GET /cities/4314902 ""
+body_has '"population":1332846' "if-match: the PATCH kept"
+req PUT /cities/9999999 "$PA" -H 'If-Match: "1"'
+status_is 404 "if-match: an unknown city"
+req PUT /cities/4314902 '{"name":"","state":"RS","population":null}' -H 'If-Match: "4"'
+status_is 400 "if-match: the body's rules still apply"
+# Four PUTs from one version at once: one 200, three 412 (the write names
+# the version read, so the losers match no row).
+for I in 1 2 3 4; do
+  curl -s -o /dev/null -w '%{http_code}' -X PUT -H 'Content-Type: application/json' \
+    -H 'If-Match: "4"' --data-binary "{\"name\":\"Porto Alegre $I\",\"state\":\"RS\",\"population\":null}" \
+    "$BASE/cities/4314902" > "$T/put$I" &
+done
+wait
+RACE="$(cat "$T/put1" "$T/put2" "$T/put3" "$T/put4" | fold -w3 | sort | tr '\n' ' ')"
+[ "$RACE" = "200 412 412 412 " ] && ok || fail "if-match: four PUTs from one version, expected 200 412 412 412 ($RACE)"
+req GET /cities/4314902 ""
+header_is ETag '"5"' "if-match: one change from the four"
+req PUT /cities/4314902 "$PA" -H 'If-Match: "5"'
+status_is 200 "if-match: back as it was"
+
+# --- Idempotency-Key (0.23.0, PascalApi.Idempotency): a retry gets the first
+# answer again, never a second insert. The keys live in the database.
+NA='{"code":"2408102","name":"Natal","state":"RN"}'
+req POST /cities "$NA" -H 'Idempotency-Key: city-natal'
+status_is 201 "idempotency: created"
+body_is '{"code":"2408102","name":"Natal","state":"RN","population":null}' "idempotency: the city"
+header_is ETag '"1"' "idempotency: its ETag"
+header_is Idempotent-Replayed '' "idempotency: the first answer is no replay"
+req POST /cities "$NA" -H 'Idempotency-Key: city-natal'
+status_is 201 "idempotency: a retry gets the 201 again"
+body_is '{"code":"2408102","name":"Natal","state":"RN","population":null}' "idempotency: the same body"
+header_is ETag '"1"' "idempotency: the stored ETag"
+header_is Idempotent-Replayed 'true' "idempotency: marked as a replay"
+req POST /cities "$NA" -H 'Idempotency-Key: "city-natal"'
+header_is Idempotent-Replayed 'true' "idempotency: a quoted key is the same key"
+req POST /cities '{"code":"2408102","name":"Natal","state":"RN","population":1}' -H 'Idempotency-Key: city-natal'
+status_is 422 "idempotency: the key with another body"
+body_has '"code":"idempotency_key_reused"' "idempotency: another body, its code"
+# A client error is stored as it was sent: the retry gets the same 409.
+req POST /cities '{"code":"3550308","name":"Again","state":"SP"}' -H 'Idempotency-Key: city-dup'
+status_is 409 "idempotency: a duplicate code"
+req POST /cities '{"code":"3550308","name":"Again","state":"SP"}' -H 'Idempotency-Key: city-dup'
+status_is 409 "idempotency: the 409 replayed"
+body_is '{"error":"A record with these values already exists."}' "idempotency: the 409's body"
+header_is Idempotent-Replayed 'true' "idempotency: the 409 as a replay"
+req POST /cities "$NA" -H 'Idempotency-Key: a b'
+status_is 400 "idempotency: an invalid key"
+body_has '"code":"invalid_idempotency_key"' "idempotency: an invalid key, its code"
+# Four requests with one key at once: one inserts; the others are told it
+# is running (409) or get its answer (201). Never a second insert.
+RN='{"code":"2408003","name":"Mossoro","state":"RN"}'
+for I in 1 2 3 4; do
+  curl -s -o "$T/idem$I.body" -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
+    -H 'Idempotency-Key: city-race' --data-binary "$RN" "$BASE/cities" > "$T/idem$I" &
+done
+wait
+IDEM="$(cat "$T/idem1" "$T/idem2" "$T/idem3" "$T/idem4" | fold -w3 | sort | tr '\n' ' ')"
+case "$IDEM" in
+  "201 "*) ok ;;
+  *) fail "idempotency: four at once, expected a 201 first ($IDEM)" ;;
+esac
+echo "$IDEM" | grep -qE '^(201|409)( (201|409))* $' && ok || fail "idempotency: four at once, only 201 and 409 ($IDEM)"
+if grep -l '"error"' "$T"/idem?.body >/dev/null 2>&1; then
+  grep -h '"error"' "$T"/idem?.body | grep -qv 'idempotency_key_in_flight' \
+    && fail "idempotency: a 409 other than in flight ($(cat "$T"/idem?.body))" || ok
+else
+  ok
+fi
+req POST /cities "$RN" -H 'Idempotency-Key: city-race'
+header_is Idempotent-Replayed 'true' "idempotency: a later retry is a replay"
+req GET '/cities?state=RN' ""
+body_has '"total":2' "idempotency: one insert per key"
+# Without a key, as before: a second POST is the database's 409.
+req POST /cities '{"code":"2408003","name":"Mossoro","state":"RN"}'
+status_is 409 "idempotency: without a key, no replay"
+header_is Idempotent-Replayed '' "idempotency: without a key, no header"
+req DELETE /cities/2408102 ""
+status_is 204 "idempotency: clean up"
+req DELETE /cities/2408003 ""
+status_is 204 "idempotency: clean up"
+
 # --- OpenAPI document and Swagger UI (public)
 req GET /swagger/doc.json ""
 status_is 200 "OpenAPI document"
@@ -199,6 +315,9 @@ body_lacks 'securitySchemes' "no authentication middleware, no security scheme"
 body_has '"$ref":"#/components/schemas/Error"' "error responses"
 body_has '{"name":"state","in":"query","description":"Only the cities of this state (two letters)","required":false,"schema":{"type":"string"}}' "query parameter from the Find DTO"
 body_has '{"name":"page","in":"query","description":"Page number, from 1","required":false,"schema":{"type":"integer"}}' "inherited query parameter"
+body_has '{"name":"If-Match","in":"header","description":"The ETag of the version read, as in \"3\"","required":true,"schema":{"type":"string"}}' "a header parameter (0.23.0)"
+body_has '"headers":{"ETag":{"description":"The version read, for If-Match","schema":{"type":"string"}}}' "a response header (0.23.0)"
+body_has '"428":{"description":"precondition_required' "PUT's 428"
 
 req GET /swagger ""
 status_is 200 "Swagger UI"
@@ -219,6 +338,8 @@ call() { mcp tools/call ",\"name\":\"$1\",\"arguments\":$2" "$1"; }
 
 mcp tools/list ""
 status_is 200 "MCP tools/list"
+body_lacks 'Idempotency-Key' "MCP: a header parameter is no argument (0.23.0)"
+body_lacks 'replace_citie' "MCP: PUT is NoMcp"
 body_has '"state":{"type":"string","description":"Only the cities of this state (two letters)"}' "MCP: query argument from the Find DTO"
 body_has '"code":{"type":"string","description":"IBGE code","examples":["4205407"],"pattern":"^[0-9]{7}$"}' "MCP: body argument with its metadata"
 body_has '"required":["code","name","state"],"additionalProperties":false' "MCP: body's required members"

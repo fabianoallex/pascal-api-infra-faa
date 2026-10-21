@@ -70,6 +70,16 @@ type
       AType: TApiParamType = ptString): TRouteDocBuilder;
     function QueryParam(const AName: string; const ADescription: string = '';
       AType: TApiParamType = ptString; ARequired: Boolean = False): TRouteDocBuilder;
+    /// A request header (0.23.0), documented as a string: If-Match,
+    /// Idempotency-Key. Not an MCP tool argument (the executor sends no
+    /// headers of the model's): a route that requires one is usually NoMcp.
+    function HeaderParam(const AName: string; const ADescription: string = '';
+      ARequired: Boolean = False): TRouteDocBuilder;
+    /// A header the answers carry (0.23.0), documented as a string: ETag,
+    /// Idempotent-Replayed. ACode 0: on every 2xx response of the route,
+    /// declared before or after; otherwise on that response only.
+    function ResponseHeader(const AName: string; const ADescription: string = '';
+      ACode: Integer = 0): TRouteDocBuilder;
     /// One query parameter per published property of the DTO I (a paged
     /// search's Find DTO), named as the mapper names it; descriptions from
     /// TApiSchema.Describe(TypeInfo(I)).
@@ -197,6 +207,26 @@ function TRouteDocBuilder.QueryParam(const AName, ADescription: string; AType: T
   ARequired: Boolean): TRouteDocBuilder;
 begin
   AddParam(AName, ADescription, plQuery, AType, ARequired);
+  Result := Self;
+end;
+
+function TRouteDocBuilder.HeaderParam(const AName, ADescription: string;
+  ARequired: Boolean): TRouteDocBuilder;
+begin
+  AddParam(AName, ADescription, plHeader, ptString, ARequired);
+  Result := Self;
+end;
+
+function TRouteDocBuilder.ResponseHeader(const AName, ADescription: string;
+  ACode: Integer): TRouteDocBuilder;
+var
+  LHeader: TApiResponseHeader;
+begin
+  LHeader.Name := AName;
+  LHeader.Description := ADescription;
+  LHeader.Code := ACode;
+  SetLength(FOp.ResponseHeaders, Length(FOp.ResponseHeaders) + 1);
+  FOp.ResponseHeaders[High(FOp.ResponseHeaders)] := LHeader;
   Result := Self;
 end;
 

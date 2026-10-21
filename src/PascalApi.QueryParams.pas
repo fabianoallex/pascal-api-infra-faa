@@ -24,6 +24,11 @@ unit PascalApi.QueryParams;
 
   - Absent or empty ("?search=") is an absent member: the DTO keeps its
     default (an optional stays Undefined).
+  - A member that isn't an optional is required, as the document says
+    (0.23.0): absent, empty or blank, it is a "required" failure of the
+    field, the same TValid.Required gives a body's member, every missing
+    one in one 400 (invalid_fields), before any value is read. Until 0.22.0
+    it was read as '' or 0 without a word, and handlers checked it again.
   - A value of the wrong kind is a 400 naming the parameter, with
     TApiMessages' InvalidQueryInteger, InvalidQueryNumber or
     InvalidQueryBoolean; booleans are "true" or "false". What the mapper
@@ -38,6 +43,7 @@ interface
 
 uses
   Classes,
+  PascalCommon.Validators,
   PascalJsonMapper.Mapper;
 
 type
@@ -52,6 +58,11 @@ type
     /// (RegisterMapping), filled from AValues. EValidationException (400)
     /// for a value that doesn't fit its member.
     class function Read<I: IInterface>(AMapper: TJsonMapper; AValues: TStrings): I; static;
+    /// A "required" failure in AValidation for each member of ADtoClass the
+    /// document marks required (not an optional) that AValues lacks, has
+    /// empty or only blanks (0.23.0). Read calls it.
+    class procedure CheckRequired(AMapper: TJsonMapper; ADtoClass: TClass; AValues: TStrings;
+      var AValidation: TPcValidation); static;
   end;
 
 implementation
@@ -60,7 +71,6 @@ uses
   SysUtils,
   TypInfo,
   PascalJsonMapper.Json,
-  PascalCommon.Validators,
   PascalApi.OpenApi,
   PascalApi.Http;
 
@@ -205,6 +215,29 @@ begin
   end;
 end;
 
+class procedure TQueryParams.CheckRequired(AMapper: TJsonMapper; ADtoClass: TClass;
+  AValues: TStrings; var AValidation: TPcValidation);
+var
+  LMembers: TJsonMemberArray;
+  LType: TApiParamType;
+  LOptional: Boolean;
+  LText: string;
+  I: Integer;
+begin
+  LMembers := AMapper.Members(ADtoClass);
+  for I := 0 to High(LMembers) do
+  begin
+    if not LMembers[I].Writable then
+      Continue;
+    if not ApiQueryParamType(LMembers[I].TypeInfo, LType, LOptional) or LOptional then
+      Continue;
+    ValueOf(AValues, LMembers[I].JsonName, LText);
+    if Trim(LText) = '' then
+      AValidation.Fail(LMembers[I].JsonName, PC_VALIDATION_REQUIRED,
+        Format(TPcValidationMessages.Current.Required, [LMembers[I].JsonName]));
+  end;
+end;
+
 class function TQueryParams.Read<I>(AMapper: TJsonMapper; AValues: TStrings): I;
 var
   LClass: TClass;
@@ -215,6 +248,11 @@ begin
   if LClass = nil then
     raise EJsonMapperError.CreateFmt('TQueryParams.Read: %s has no class registered ' +
       '(call RegisterMapping first)', [string(PTypeInfo(TypeInfo(I))^.Name)]);
+  // The required members first, every missing one in one 400: a blank
+  // value would otherwise fail as its type (an enumeration, a date) alone.
+  LCheck := TPcValidation.Create;
+  CheckRequired(AMapper, LClass, AValues, LCheck);
+  LCheck.RaiseIfAny;
   LJson := ToJson(AMapper, LClass, AValues);
   try
     Result := AMapper.FromJson<I>(LJson);
@@ -228,7 +266,6 @@ begin
         raise EValidationException.Create(E.Message);
   end;
   // The limits the document declares for these parameters (0.20.0).
-  LCheck := TPcValidation.Create;
   TApiSchema.Check(TypeInfo(I), Result, LCheck, AMapper);
   LCheck.RaiseIfAny;
 end;

@@ -10,12 +10,14 @@ threading), [pascal-jsonmapper-faa](https://github.com/fabianoallex/pascal-jsonm
 paging). It is not a drop-in replacement for the Delphi library: DTOs map **published**
 properties, because FPC 3.2.2's RTTI sees nothing else.
 
-Version **0.16.0** (see the [changelog](CHANGELOG.md)): the core, the Horse middlewares, OpenAPI, an MCP
+Version **0.23.0** (see the [changelog](CHANGELOG.md)): the core, the Horse middlewares, OpenAPI, an MCP
 server (protocol 2026-07-28), W3C trace context, metrics (Prometheus), health endpoints,
 spans exported to an OpenTelemetry collector (OTLP), opt-in multi-tenancy
 ([docs/multitenancy-design.md](docs/multitenancy-design.md)), JWT signing keys that rotate
 by themselves, per tenant, sealed in their store ([guide](docs/guide/jwt-keys.md)), and refresh
-tokens used once, a copy that comes back ending its login ([guide](docs/guide/refresh-tokens.md)).
+tokens used once, a copy that comes back ending its login ([guide](docs/guide/refresh-tokens.md)),
+`ETag`/`If-Match` against lost updates and `Idempotency-Key` for retried POSTs
+([guide](docs/guide/concurrency.md)).
 Observability plan: [docs/observability-design.md](docs/observability-design.md). See [docs/plan.md](docs/plan.md).
 
 ## Guides
@@ -45,6 +47,9 @@ and what was measured.
 | `PascalApi.Jwt` | HS256 JSON Web Tokens: sign, verify (alg, signature, exp, nbf), claims; a key id (`kid`) in the header |
 | `PascalApi.JwtKeys` | signing keys named by `kid` ([guide](docs/guide/jwt-keys.md)): a static ring (`JWT_KEYS`), a ring that generates and rotates its keys in a store every instance shares (`TDbJwtKeyStore`; Redis in `src/redis`), secrets sealed with AES-256-GCM under a master key (`TSealedJwtKeyStore`) |
 | `PascalApi.RefreshTokens` | refresh tokens used once ([guide](docs/guide/refresh-tokens.md)): `<scope>.<secret>`, only the SHA-256 stored, rotation in a family, a spent token that comes back or two refreshes at once revoking the family, your user check, logout and `RevokeUser`; stores in a database (`TDbRefreshTokenStore`, your named SQL) or in memory |
+| `PascalApi.Preconditions` | optimistic concurrency ([guide](docs/guide/concurrency.md)): the row's version as a strong `ETag`, `If-Match` read as RFC 9110 says (a list, strong comparison), 428/400/412 with their codes |
+| `PascalApi.Idempotency` | `Idempotency-Key` ([guide](docs/guide/concurrency.md)): a key per scope and request (SHA-256 fingerprint), claimed with a lease, the answer stored and replayed, a client error replayed and anything else released; stores in a database (`TDbIdempotencyStore`, your named SQL) or in memory |
+| `PascalApi.Horse.Idempotency` (`src/horse`) | `THorseIdempotentRequest`: the key read, the replay sent (`Idempotent-Replayed: true`), the answer stored, in a handler |
 | `PascalApi.Redis.JwtKeys` (`src/redis`) | `TRedisJwtKeyStore`: the keys in Redis, on pascal-redis-faa (outside the package) |
 | `PascalApi.Horse.Middlewares` (`src/horse`) | Horse middlewares: error handler, CORS, request log (with your own fields: `AddField`), Bearer auth, JWT, rate limit (key and limit per request: `KeyExtractor`, `LimitFor`) |
 | `PascalApi.OpenApi` | OpenAPI 3.0.3 document from routes and DTO types; `TApiSchema.Describe` for metadata |

@@ -15,6 +15,7 @@ way it does.
 | [Authentication](authentication.md) | routes need a token: JWT (HS256) or your own check, the open paths, issuing and reading a token |
 | [Refresh tokens](refresh-tokens.md) | access tokens should be short: a refresh token used once, a copy that comes back ending the login, two refreshes at once, logout, ending every login of a user; the table a database store needs |
 | [JWT signing keys and rotation](jwt-keys.md) | one secret is no longer enough: keys named by `kid`, rotating by themselves in a database or Redis, one per tenant, sealed under a master key; what to do when one leaks |
+| [Lost updates and retries](concurrency.md) | two clients change one row (`ETag`/`If-Match`, 412/428), or a client retries a POST (`Idempotency-Key`: the first answer again, never a second run); the table the keys need |
 | [Rate limiting](rate-limiting.md) | a client may make so many requests a minute: the window, the key (behind a proxy too), a limit per client, the headers and the 429 |
 | [Database access](database.md) | handlers over a real database: the factory, migrations, SQL by key, paging and ordering in SQL, transactions, what the database's errors become |
 | [Logging and observability](observability.md) | the request id, the access line, the client's address, files, metrics, health, spans to OpenTelemetry |

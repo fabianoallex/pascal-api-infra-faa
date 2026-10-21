@@ -30,17 +30,23 @@
 
   Routes:
     GET    /cities          paged: ?state=&page=&limit=&orderBy=name|-name|state|population
-    GET    /cities/:code    404 when it doesn't exist
+    GET    /cities/:code    404 when it doesn't exist; ETag: the row's version ("1")
     POST   /cities          {"code":"4205407","name":"...","state":"SC","population":123}
-                            201; 409 when the code exists (the database says so), 400 invalid
+                            201; 409 when the code exists (the database says so), 400 invalid.
+                            Idempotency-Key (optional): a retry with the same key and body
+                            gets the first answer again, Idempotent-Replayed: true
+                            (PascalApi.Idempotency, keys in the database, 24 hours)
     PATCH  /cities/:code    {"name":"...","state":"..","population":123|null}: only the
                             members that came change; null clears population; 200
+    PUT    /cities/:code    {"name":"...","state":"..","population":123|null}, with
+                            If-Match: the ETag read (PascalApi.Preconditions): 428 without
+                            it, 412 when the city changed since; 200 with the new ETag
     DELETE /cities/:code    204; 404 when it doesn't exist
     GET    /metrics         Prometheus text (http.server.* metrics)
     GET    /health/live     200 while the process answers
     GET    /health/ready    the readiness check "database" (SELECT 1 through the pool)
     GET    /swagger         Swagger UI; /swagger/doc.json is the OpenAPI 3.0.3 document
-    POST   /mcp             MCP (2026-07-28): the five routes above as tools, with the
+    POST   /mcp             MCP (2026-07-28): the routes above but PUT as tools, with the
                             schemas of their DTOs; browser origin allowed: the MCP
                             Inspector's (http://localhost:6274)
 
@@ -80,7 +86,10 @@ uses
   PascalApi.OrderBy,
   PascalApi.OpenApi,
   PascalApi.Http,
+  PascalApi.Preconditions,
+  PascalApi.Idempotency,
   PascalApi.Horse.Middlewares,
+  PascalApi.Horse.Idempotency,
   PascalApi.Horse.OpenApi,
   PascalApi.Horse.Mcp,
   PascalApi.Horse.Observability,
@@ -94,6 +103,7 @@ uses
 var
   GFactory: IDBFactory;
   GCities: TCityRepository;
+  GIdempotency: TIdempotency;
 
 { Handlers }
 
@@ -112,21 +122,67 @@ begin
     TJsonMapper.Shared.Serialize<TCityArray>(LPage.Items)));
 end;
 
-procedure GetCity(AReq: THorseRequest; ARes: THorseResponse; ANext: TNextProc);
+// A city and its ETag (the row's version), which PUT's If-Match sends back.
+procedure SendCity(ARes: THorseResponse; const ACity: ICity; AVersion: Int64;
+  AStatus: Integer = 200);
 begin
-  TJsonSend.Send(ARes, TJsonMapper.Shared.ToJson<ICity>(GCities.FindByCode(AReq.Params['code'])));
+  ARes.AddHeader('ETag', VersionETag(AVersion));
+  TJsonSend.Send(ARes, TJsonMapper.Shared.ToJson<ICity>(ACity), AStatus);
 end;
 
-procedure PostCity(AReq: THorseRequest; ARes: THorseResponse; ANext: TNextProc);
+procedure GetCity(AReq: THorseRequest; ARes: THorseResponse; ANext: TNextProc);
+var
+  LCity: ICity;
+  LVersion: Int64;
 begin
-  TJsonSend.Send(ARes, TJsonMapper.Shared.ToJson<ICity>(
-    GCities.Insert(THorseBody.Read<ICityInsert>(AReq))), 201);
+  LCity := GCities.FindByCode(AReq.Params['code'], LVersion);
+  SendCity(ARes, LCity, LVersion);
+end;
+
+// With an Idempotency-Key (0.23.0): a retry with the same key and body gets
+// the first answer again, a 201 or the 4xx it was (a duplicate code's 409);
+// the same key with another body is a 422. Without one, as before.
+procedure PostCity(AReq: THorseRequest; ARes: THorseResponse; ANext: TNextProc);
+var
+  LIdem: THorseIdempotentRequest;
+  LVersion: Int64;
+  LJson, LHeaders: string;
+begin
+  if LIdem.Start(GIdempotency, AReq, ARes, '') then
+    Exit; // replayed
+  try
+    LJson := TJsonMapper.Shared.ToJson<ICity>(
+      GCities.Insert(THorseBody.Read<ICityInsert>(AReq), LVersion));
+    LHeaders := HeaderLines([HttpHeader('ETag', VersionETag(LVersion))]);
+    LIdem.Complete(201, LJson, LHeaders);
+  except
+    on E: Exception do
+    begin
+      LIdem.Fail(E);
+      raise;
+    end;
+  end;
+  LIdem.Send(201, LJson, LHeaders);
 end;
 
 procedure PatchCity(AReq: THorseRequest; ARes: THorseResponse; ANext: TNextProc);
+var
+  LCity: ICity;
+  LVersion: Int64;
 begin
-  TJsonSend.Send(ARes, TJsonMapper.Shared.ToJson<ICity>(GCities.Update(AReq.Params['code'],
-    THorseBody.Read<ICityPatch>(AReq))));
+  LCity := GCities.Update(AReq.Params['code'], THorseBody.Read<ICityPatch>(AReq), LVersion);
+  SendCity(ARes, LCity, LVersion);
+end;
+
+// Every member, guarded by If-Match (0.23.0): the version read, or a 412.
+procedure PutCity(AReq: THorseRequest; ARes: THorseResponse; ANext: TNextProc);
+var
+  LCity: ICity;
+  LVersion: Int64;
+begin
+  LCity := GCities.Replace(AReq.Params['code'], AReq.Headers['If-Match'],
+    THorseBody.Read<ICityReplace>(AReq), LVersion);
+  SendCity(ARes, LCity, LVersion);
 end;
 
 procedure DeleteCity(AReq: THorseRequest; ARes: THorseResponse; ANext: TNextProc);
@@ -255,6 +311,8 @@ begin
   try
     LQuery.Sql := 'DROP TABLE IF EXISTS CITIES';
     LQuery.ExecSql;
+    LQuery.Sql := 'DROP TABLE IF EXISTS IDEMPOTENCY_KEYS';
+    LQuery.ExecSql;
     LQuery.Sql := 'DROP TABLE IF EXISTS SCHEMA_MIGRATIONS';
     LQuery.ExecSql;
     LScope.Commit;
@@ -314,6 +372,9 @@ begin
       GEngine.Free;
     end;
     GCities := TCityRepository.Create(GFactory);
+    // Idempotency-Key on POST /cities: the keys in the database (the scope
+    // is '' without tenants), kept 24 hours, a lease of 30 seconds.
+    GIdempotency := TIdempotency.Create(TDbIdempotencyStore.Create(GFactory));
 
     if TAppConfig.Get('OTEL_EXPORTER_OTLP_ENDPOINT', '') <> '' then
       TPcTracing.Start(TPcTracingOptions.FromEnvironment('cities-api', '1.0.0', ReadAppConfig),
@@ -332,23 +393,44 @@ begin
       .Summary('One city').Tag('cities')
       .PathParam('code', 'IBGE code (7 digits)')
       .Response<ICity>(200)
+      .ResponseHeader('ETag', 'The version read, for If-Match')
       .Error(404, 'No city with this code')
       .Register(GetCity);
     TRouteDoc.Post('/cities')
       .Summary('Create a city').Tag('cities')
+      .HeaderParam('Idempotency-Key', 'Optional, 1 to 255 visible ASCII characters (a UUID): ' +
+        'a retry with the same key and body gets the first answer again, for 24 hours')
       .Body<ICityInsert>
       .Response<ICity>(201, 'Created')
-      .Error(400, 'Invalid data')
-      .Error(409, 'A city with this code already exists')
+      .ResponseHeader('ETag', 'The new city''s version')
+      .ResponseHeader('Idempotent-Replayed', '"true" on an answer sent again')
+      .Error(400, 'Invalid data, or invalid_idempotency_key')
+      .Error(409, 'A city with this code already exists, or idempotency_key_in_flight')
+      .Error(422, 'idempotency_key_reused: the key was used for another request')
       .Register(PostCity);
     TRouteDoc.Patch('/cities/:code')
       .Summary('Change some members of a city').Tag('cities')
       .PathParam('code', 'IBGE code (7 digits)')
       .Body<ICityPatch>
       .Response<ICity>(200, 'The city after the change')
+      .ResponseHeader('ETag', 'The new version')
       .Error(400, 'Invalid data')
       .Error(404, 'No city with this code')
       .Register(PatchCity);
+    // NoMcp: the MCP executor sends no If-Match, so the tool could only 428.
+    TRouteDoc.Put('/cities/:code')
+      .Summary('Replace a city''s members, from the version read').Tag('cities')
+      .PathParam('code', 'IBGE code (7 digits)')
+      .HeaderParam('If-Match', 'The ETag of the version read, as in "3"', True)
+      .Body<ICityReplace>
+      .Response<ICity>(200, 'The city after the change')
+      .ResponseHeader('ETag', 'The new version')
+      .Error(400, 'Invalid data, or invalid_if_match')
+      .Error(404, 'No city with this code')
+      .Error(412, 'precondition_failed: the city changed since that version')
+      .Error(428, 'precondition_required: If-Match missing, or "*"')
+      .NoMcp
+      .Register(PutCity);
     TRouteDoc.Delete('/cities/:code')
       .Summary('Delete a city').Tag('cities')
       .PathParam('code', 'IBGE code (7 digits)')
@@ -365,6 +447,7 @@ begin
     SafeWriteln('DbApiSample listening on port %d', [GPort]);
     THorse.Listen(GPort);
   finally
+    GIdempotency.Free;
     GCities.Free;
     GFactory := nil;
     GLog.Free;

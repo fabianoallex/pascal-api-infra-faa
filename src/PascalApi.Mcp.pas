@@ -399,6 +399,21 @@ begin
   Result := False;
 end;
 
+function WithoutHeaderParams(const AParams: TArray<TApiParam>): TArray<TApiParam>;
+var
+  I, N: Integer;
+begin
+  Result := nil;
+  N := 0;
+  for I := 0 to High(AParams) do
+    if AParams[I].Location <> plHeader then
+    begin
+      SetLength(Result, N + 1);
+      Result[N] := AParams[I];
+      Inc(N);
+    end;
+end;
+
 function BuildTool(ADoc: TApiDocument; AOp: TApiOperation): TMcpTool;
 var
   LParams: TArray<TApiParam>;
@@ -437,7 +452,10 @@ begin
         Result.Description := Result.Description + '. ' + LHint;
 
     // The arguments: path and query parameters, then the body's properties.
-    LParams := ApiOperationParams(ADoc, AOp);
+    // Header parameters (0.23.0: If-Match, Idempotency-Key) aren't
+    // arguments: the executor sends no headers of the model's. A route that
+    // needs one answers the call with its 4xx; mark it NoMcp.
+    LParams := WithoutHeaderParams(ApiOperationParams(ADoc, AOp));
     for I := 0 to High(LParams) do
       if LParams[I].Location = plPath then
         AddArg(Result, LParams[I].Name, alPath, True)

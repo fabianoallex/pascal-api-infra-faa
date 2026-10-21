@@ -323,6 +323,12 @@ TApiMessages.Current := LMessages;
 | `InvalidQueryInteger` | "%s" must be an integer. | 400, from `ParseQueryInt` and `TQueryParams` (`%s` is the parameter) |
 | `InvalidQueryNumber` | "%s" must be a number. | 400, from `TQueryParams` (0.19.0) |
 | `InvalidQueryBoolean` | "%s" must be true or false. | 400, from `TQueryParams` (0.19.0) |
+| `PreconditionRequired`, `PreconditionAnyRefused` | If-Match is required: send the ETag of the version you read. | 428 `precondition_required`, `PascalApi.Preconditions` (0.23.0, [Lost updates and retries](concurrency.md)) |
+| `InvalidIfMatch` | If-Match must be one or more entity tags, such as "3". | 400 `invalid_if_match` |
+| `PreconditionFailed`, `PreconditionFailedETag` | The resource changed since you read it: read it again. | 412 `precondition_failed` (`%s`: the current ETag) |
+| `InvalidIdempotencyKey` | Idempotency-Key must be 1 to %d visible ASCII characters, such as a UUID. | 400 `invalid_idempotency_key`, `PascalApi.Idempotency` (0.23.0) |
+| `IdempotencyKeyInFlight` | A request with this Idempotency-Key is still running: retry in a moment. | 409 `idempotency_key_in_flight` |
+| `IdempotencyKeyReused` | This Idempotency-Key was used for another request: use a new key for a new request. | 422 `idempotency_key_reused` |
 | `InternalError` | An unexpected error occurred. | 500 |
 
 A field with `%s` or `%d` goes through `Format`: keep the placeholder when you replace it.

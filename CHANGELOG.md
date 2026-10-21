@@ -6,6 +6,58 @@ may change the API; each such change is listed here.
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-10-21
+
+Three candidates pascal-agenda-faa built and proved (M2: changing, cancelling and booking
+appointments), promoted by the user's decision (`docs/plan.md`, section 10). Guide:
+`docs/guide/concurrency.md`.
+
+### Added
+
+- `PascalApi.Preconditions`: optimistic concurrency over HTTP. `VersionETag` (the version in
+  quotes, a strong validator), `EvaluateIfMatch` (RFC 9110: a list of entity tags, blanks and
+  empty elements allowed, strong comparison, `W/` never matches, `*`), `RequireIfMatchSent` (428
+  `precondition_required` when absent, or `*` unless `AAcceptAny`; 400 `invalid_if_match` when
+  it isn't the RFC's syntax), `RequireIfMatch` (then 412 `precondition_failed`, naming the
+  current ETag) and `RaisePreconditionFailed` (the write guarded by the version read matched no
+  row). A unit of its own rather than `PascalApi.Http`: that one holds the middlewares'
+  decisions, and this check is a handler's (it needs the row). No middleware, for that reason.
+- `PascalApi.Idempotency`: `Idempotency-Key`. `TIdempotency` (`Start`, `Complete`, `Fail`) over
+  an `IIdempotencyStore`: a key per scope and request (`RequestFingerprint`, the SHA-256 of
+  method, path and body), claimed with a lease (30 s), 409 `idempotency_key_in_flight` while it
+  runs, 422 `idempotency_key_reused` with another request, the answer stored and replayed for
+  24 hours; a client error is stored as the error handler sends it, anything else releases the
+  key. `NormalizeIdempotencyKey` (1 to 255 visible ASCII characters, bare or quoted; 400
+  `invalid_idempotency_key`). Stores: `TMemoryIdempotencyStore` and `TDbIdempotencyStore`, whose
+  six statement names are constructor parameters with defaults (`IDEMPOTENCY.PURGE`, `.CLAIM`,
+  `.BY_KEY`, `.TAKE_OVER`, `.COMPLETE`, `.RELEASE`), as `TDbRefreshTokenStore`'s are; the SQL and
+  the table are in the guide (the application owns its migrations). `HeaderLines` and
+  `ParseHeaderLines` keep a stored answer's headers. No Redis store yet (`docs/plan.md`).
+- `src/horse/PascalApi.Horse.Idempotency`: `THorseIdempotentRequest`, a record on the handler's
+  stack: `Start` reads the header and sends a stored answer (its headers,
+  `Idempotent-Replayed: true`, its body), `Complete`, `Fail`, `Send`. Not a middleware: it would
+  need the handler's response body, which Horse doesn't expose alike on both compilers.
+- `TRouteDocBuilder.HeaderParam` (a request header, `"in": "header"`) and `ResponseHeader` (a
+  header under a response's `"headers"`; code 0 for every 2xx). `TApiParamLocation` gains
+  `plHeader`, `TApiOperation` `ResponseHeaders`; 412 and 428 get their names as default
+  descriptions. A header parameter is not an MCP tool argument (the executor sends no headers
+  of the model's).
+- `HttpHeader(Name, Value)` (`PascalApi.Http`); `TApiMessages` gains the eight messages of the two
+  new units, in English and Portuguese.
+- Sample 02: a `VERSION` column (migration 4) sent as `ETag`, `PUT /cities/:code` with
+  `If-Match` (`NoMcp`), and an optional `Idempotency-Key` on `POST /cities` with the keys in the
+  database (migration 5); `tools/http_scenarios_db.sh` checks both on SQLite and PostgreSQL, four
+  concurrent requests each included (151 and 152 checks, from 98 and 99).
+
+### Changed
+
+- `TQueryParams.Read` (and `THorseQueryParams.Read`): a member that isn't an optional, which the
+  document already marked `required`, is now required: missing, empty or blank, it is a
+  `required` failure of the field, every missing one in one 400 (`invalid_fields`), before any
+  value is read. Until 0.22.0 it was read as `''` or 0, and handlers checked it again
+  (pascal-agenda-faa's availability route did). `TQueryParams.CheckRequired` is the check alone.
+  A Find DTO whose plain members were meant to be optional must declare them `IOptXxx`.
+
 ## [0.22.0] - 2026-10-20
 
 ### Added

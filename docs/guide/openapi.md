@@ -79,6 +79,8 @@ What each builder method documents:
 | `PathParam(name, desc, type)` | a path parameter (`ptString`, `ptInteger`, `ptNumber`, `ptBoolean`) |
 | `QueryParam(name, desc, type, required)` | one query parameter |
 | `QueryParams<IFind>` | one query parameter per published property of a Find DTO (step 4) |
+| `HeaderParam(name, desc, required)` | a request header, as a string: `If-Match`, `Idempotency-Key` (0.23.0). Not an MCP tool argument |
+| `ResponseHeader(name, desc, code)` | a header the answers carry, as a string: `ETag`, `Idempotent-Replayed` (0.23.0). Code 0 (the default): on every 2xx response of the route; otherwise on that response only |
 | `Body<I>` | the request body: the schema of the DTO `I` |
 | `Response<I>`, `ResponseArray<I>`, `ResponsePaged<I>` | a response with `I`, an array of `I`, or the paging envelope with `I` in `items` |
 | `NoContent(code, desc)` | a response without a schema |

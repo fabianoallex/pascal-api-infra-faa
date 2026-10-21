@@ -143,6 +143,7 @@ type
     procedure Path_ConvertedAndUndeclaredParamsAdded;
     procedure RequestBody_AndQueryParams;
     procedure QueryDto_ExpandsToQueryParams;
+    procedure HeaderParams_AndResponseHeaders;
     procedure Describe_UnknownProperty_Raises;
     procedure Describe_UnregisteredInterface_Raises;
     procedure SchemaName_DropsLeadingI;
@@ -439,6 +440,46 @@ begin
     '{"name":"color","in":"query","required":true,"schema":{"type":"string"}}]',
     Text(['paths', '/finds', 'get', 'parameters']));
   TAssert.AssertFalse('a query DTO is not a component schema', Has(['components']));
+end;
+
+// 0.23.0: a header parameter is "in": "header"; a response header goes
+// under the response's "headers", Code 0 on every 2xx, else on that code.
+procedure TOpenApiTests.HeaderParams_AndResponseHeaders;
+var
+  LOp: TApiOperation;
+begin
+  LOp := Op('put', '/parts/:id');
+  SetLength(LOp.Params, 1);
+  LOp.Params[0].Name := 'If-Match';
+  LOp.Params[0].Description := 'The ETag read';
+  LOp.Params[0].Location := plHeader;
+  LOp.Params[0].ParamType := ptString;
+  LOp.Params[0].Required := True;
+  AddResponse(LOp, 200, rkNone, nil, 'Changed');
+  AddResponse(LOp, 201, rkNone, nil, 'Created');
+  AddResponse(LOp, 412, rkError, nil, '');
+  SetLength(LOp.ResponseHeaders, 2);
+  LOp.ResponseHeaders[0].Name := 'ETag';
+  LOp.ResponseHeaders[0].Description := 'The new version';
+  LOp.ResponseHeaders[0].Code := 0;
+  LOp.ResponseHeaders[1].Name := 'Idempotent-Replayed';
+  LOp.ResponseHeaders[1].Description := '';
+  LOp.ResponseHeaders[1].Code := 201;
+  TAssert.AssertEquals(
+    '[{"name":"If-Match","in":"header","description":"The ETag read","required":true,' +
+    '"schema":{"type":"string"}},' +
+    '{"name":"id","in":"path","required":true,"schema":{"type":"string"}}]',
+    Text(['paths', '/parts/{id}', 'put', 'parameters']));
+  TAssert.AssertEquals('{"description":"Changed","headers":{"ETag":{"description":' +
+    '"The new version","schema":{"type":"string"}}}}',
+    Text(['paths', '/parts/{id}', 'put', 'responses', '200']));
+  TAssert.AssertEquals('{"description":"Created","headers":{"ETag":{"description":' +
+    '"The new version","schema":{"type":"string"}},"Idempotent-Replayed":{"schema":' +
+    '{"type":"string"}}}}',
+    Text(['paths', '/parts/{id}', 'put', 'responses', '201']));
+  TAssert.AssertEquals('{"description":"Precondition Failed","content":{"application/json":' +
+    '{"schema":{"$ref":"#/components/schemas/Error"}}}}',
+    Text(['paths', '/parts/{id}', 'put', 'responses', '412']));
 end;
 
 procedure TOpenApiTests.Describe_UnknownProperty_Raises;
