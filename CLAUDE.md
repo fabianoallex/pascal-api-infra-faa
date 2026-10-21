@@ -137,7 +137,9 @@ four decisions taken with the user: `docs/openapi-design.md`. Rules that keep it
 - Types by `PTypeInfo` identity and kind, never by name (names differ between compilers).
 - Metadata by Pascal property name, checked at `Describe` time (`EApiSchemaError`).
 - Both samples document their routes, and `tools/test_http_docker.sh` (CI) validates each
-  document with `openapi-spec-validator`.
+  document with `openapi-spec-validator`, after `tools/json_no_duplicate_keys.py`: the validator
+  reads JSON with the last of two equal keys winning, and Swagger UI refuses the document (a
+  doubled `"format"` reached a browser in 0.23.0, fixed in 0.23.1).
 - Authentication in the document comes from the middleware, never from a second list:
   `TRouteDoc.Serve` asks `TJwtMiddleware`/`TAuthMiddleware` (`Configured`, `Excludes`) and marks
   the excluded paths `NoAuth` (`"security": []`).

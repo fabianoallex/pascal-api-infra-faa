@@ -90,6 +90,11 @@ MSYS_NO_PATHCONV=1 docker run --rm --network "$NAME" -v "$NAME:/otel:ro" -v "$MO
     OPENAPI_OUT=/t/openapi-$2.json METRICS_OUT=/t/metrics-$2.txt SERVER_LOG=/t/server-$2.log \
       sh /t/tools/$4 $3 || RC=$?
     # The document each sample serves, checked against the OpenAPI 3.0 spec.
+    # No key twice in one object (Swagger UI refuses it; the validator
+    # reads JSON with the last key winning), then the spec.
+    if [ $RC -eq 0 ]; then
+      python3 /t/tools/json_no_duplicate_keys.py /t/openapi-$2.json || RC=$?
+    fi
     if [ $RC -eq 0 ]; then
       python3 -m openapi_spec_validator /t/openapi-$2.json || RC=$?
     fi

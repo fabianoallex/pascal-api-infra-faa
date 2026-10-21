@@ -133,6 +133,7 @@ type
     [Test] procedure NamesFollowTheMapper;
     [Test] procedure Metadata_DescriptionExampleLimits;
     [Test] procedure Metadata_EnumOverridesTypeEnum;
+    [Test] procedure Metadata_FormatReplacesTheTypesFormat;
     [Test] procedure Responses_ArrayPagedErrorNone;
     [Test] procedure ErrorSchema_OnlyWhenUsed;
     [Test] procedure Path_ConvertedAndUndeclaredParamsAdded;
@@ -327,6 +328,26 @@ begin
   TApiSchema.Describe(TypeInfo(IKitchen), '', FMapper).Prop('Color').Enum(['red', 'green']);
   AddResponse(Op('get', '/k'), 200, rkObject, TypeInfo(IKitchen));
   TAssert.AssertEquals('{"type":"string","enum":["red","green"]}', Prop('color').ToJson);
+end;
+
+// 0.23.1: a Format on a member whose type already has one (a date-time)
+// wrote "format" twice; Swagger UI refuses a document with a duplicated key
+// ("duplicated mapping key"), while JSON parsers that keep the last one (the
+// DOM here, Python's json) don't notice. Checked on the document's text.
+procedure TOpenApiTests.Metadata_FormatReplacesTheTypesFormat;
+var
+  LJson: string;
+begin
+  TApiSchema.Describe(TypeInfo(IKitchen), '', FMapper)
+    .Prop('At').Format('date-time')
+    .Prop('Count').Format('int64')
+    .Prop('Text').Format('uuid');
+  AddResponse(Op('get', '/k'), 200, rkObject, TypeInfo(IKitchen));
+  LJson := FDoc.ToJson;
+  TAssert.AssertTrue('one format for a date-time', Pos('"at":{"type":"string","format":"date-time"}', LJson) > 0);
+  TAssert.AssertTrue('the metadata wins', Pos('"count":{"type":"integer","format":"int64"}', LJson) > 0);
+  TAssert.AssertTrue('a type without one gets it', Pos('"text":{"type":"string","format":"uuid"}', LJson) > 0);
+  TAssert.AssertEquals('never twice', 0, Pos('"format":"date-time","format"', LJson));
 end;
 
 procedure TOpenApiTests.Responses_ArrayPagedErrorNone;

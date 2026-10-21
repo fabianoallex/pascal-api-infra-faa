@@ -6,6 +6,19 @@ may change the API; each such change is listed here.
 
 ## [Unreleased]
 
+## [0.23.1] - 2026-10-21
+
+### Fixed
+
+- The OpenAPI document wrote `"format"` twice for a property whose type has a format of its own
+  (a date-time, an integer) when `TApiSchema.Describe` gave it one too (`.Format('date-time')` on a
+  `TUtcDateTime`): `"format":"date-time","format":"date-time"`. Swagger UI refuses such a document
+  ("duplicated mapping key") and shows nothing; `openapi-spec-validator` and the DOM read JSON with
+  the last key winning, so CI and the tests passed. The metadata's format now replaces the type's.
+  Found on pascal-agenda-faa's `/swagger` in a browser; present since `Format` was added.
+- `tools/json_no_duplicate_keys.py`: `tools/test_http_docker.sh` (CI) checks each sample's
+  document for a key twice before the validator.
+
 ## [0.23.0] - 2026-10-21
 
 Three candidates pascal-agenda-faa built and proved (M2: changing, cancelling and booking

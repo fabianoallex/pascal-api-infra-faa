@@ -719,7 +719,8 @@ type
     procedure Collect(AInterface: PTypeInfo);
     procedure CollectType(ATypeInfo: PTypeInfo);
     procedure WriteRef(AInterface: PTypeInfo);
-    procedure WriteBaseType(const ABase: string; ANullable: Boolean = False);
+    procedure WriteBaseType(const ABase: string; ANullable: Boolean = False;
+      const AFormat: string = '');
     procedure WriteTypeSchema(ATypeInfo: PTypeInfo; AMeta: TApiPropMeta; out AOptional: Boolean);
     procedure WriteExample(const ABase, AExample: string);
     procedure WriteObjectSchema(AInterface: PTypeInfo);
@@ -807,11 +808,20 @@ begin
   FW.EndObject;
 end;
 
-// The "type"/"format" members for a base type name.
-procedure TApiDocWriter.WriteBaseType(const ABase: string; ANullable: Boolean);
+// The "type"/"format" members for a base type name. AFormat, when given
+// (the property's Format metadata), replaces the type's own: one "format"
+// member, never two (0.23.1: a TUtcDateTime described with
+// Format('date-time') wrote it twice, and Swagger UI refused the document).
+procedure TApiDocWriter.WriteBaseType(const ABase: string; ANullable: Boolean;
+  const AFormat: string);
 
-  procedure TypeAndFormat(const AType, AFormat: string);
+  procedure TypeAndFormat(const AType, ATypeFormat: string);
+  var
+    LFormat: string;
   begin
+    LFormat := ATypeFormat;
+    if AFormat <> '' then
+      LFormat := AFormat;
     FW.Name('type');
     if ANullable then
     begin
@@ -823,10 +833,10 @@ procedure TApiDocWriter.WriteBaseType(const ABase: string; ANullable: Boolean);
     end
     else
       FW.WriteString(AType);
-    if AFormat <> '' then
+    if LFormat <> '' then
     begin
       FW.Name('format');
-      FW.WriteString(AFormat);
+      FW.WriteString(LFormat);
     end;
   end;
 
@@ -944,9 +954,15 @@ var
   LNullable: Boolean;
   LData: PTypeData;
   I: Integer;
+  LMetaFormat: string;
+  LFormatWritten: Boolean;
 begin
   AOptional := False;
   LNullable := False;
+  LMetaFormat := '';
+  if AMeta <> nil then
+    LMetaFormat := AMeta.Format;
+  LFormatWritten := False;
   if (ATypeInfo^.Kind = tkInterface) and not FindOptional(ATypeInfo, LOpt) then
   begin
     WriteRef(ATypeInfo); // a nested DTO: no metadata on a $ref (OpenAPI 3.0 ignores siblings)
@@ -959,7 +975,8 @@ begin
     LBase := LOpt.Base;
     AOptional := LOpt.Optional;
     LNullable := LOpt.Nullable;
-    WriteBaseType(LBase, LNullable and FJsonSchema);
+    WriteBaseType(LBase, LNullable and FJsonSchema, LMetaFormat);
+    LFormatWritten := True;
   end
   else if ATypeInfo^.Kind = tkDynArray then
   begin
@@ -994,7 +1011,8 @@ begin
   else
   begin
     LBase := BaseOfType(ATypeInfo);
-    WriteBaseType(LBase);
+    WriteBaseType(LBase, False, LMetaFormat);
+    LFormatWritten := True;
   end;
 
   if LNullable and not FJsonSchema then
@@ -1004,7 +1022,7 @@ begin
   end;
   if AMeta <> nil then
   begin
-    if AMeta.Format <> '' then
+    if (AMeta.Format <> '') and not LFormatWritten then
     begin
       FW.Name('format');
       FW.WriteString(AMeta.Format);
