@@ -30,7 +30,8 @@
 
   Routes:
     GET    /cities          paged: ?state=&page=&limit=&orderBy=name|-name|state|population
-    GET    /cities/:code    404 when it doesn't exist; ETag: the row's version ("1")
+    GET    /cities/:code    404 when it doesn't exist; ETag: the row's version ("1"), which
+                            the body's "version" carries too (1)
     POST   /cities          {"code":"4205407","name":"...","state":"SC","population":123}
                             201; 409 when the code exists (the database says so), 400 invalid.
                             Idempotency-Key (optional): a retry with the same key and body
@@ -46,8 +47,9 @@
     GET    /health/live     200 while the process answers
     GET    /health/ready    the readiness check "database" (SELECT 1 through the pool)
     GET    /swagger         Swagger UI; /swagger/doc.json is the OpenAPI 3.0.3 document
-    POST   /mcp             MCP (2026-07-28): the routes above but PUT as tools, with the
-                            schemas of their DTOs; browser origin allowed: the MCP
+    POST   /mcp             MCP (2026-07-28): the routes above as tools, with the schemas
+                            of their DTOs; replace_city (PUT) takes ifMatch, create_citie
+                            idempotencyKey (0.25.0, McpHeader); browser origin allowed: the MCP
                             Inspector's (http://localhost:6274)
 
   On startup the migrations run (TDBMigrationEngine): SCHEMA_MIGRATIONS,
@@ -400,6 +402,7 @@ begin
       .Summary('Create a city').Tag('cities')
       .HeaderParam('Idempotency-Key', 'Optional, 1 to 255 visible ASCII characters (a UUID): ' +
         'a retry with the same key and body gets the first answer again, for 24 hours')
+      .McpHeader('Idempotency-Key') // the tool's "idempotencyKey"
       .Body<ICityInsert>
       .Response<ICity>(201, 'Created')
       .ResponseHeader('ETag', 'The new city''s version')
@@ -417,11 +420,15 @@ begin
       .Error(400, 'Invalid data')
       .Error(404, 'No city with this code')
       .Register(PatchCity);
-    // NoMcp: the MCP executor sends no If-Match, so the tool could only 428.
+    // An MCP tool too (0.25.0): McpHeader makes If-Match its "ifMatch"
+    // argument, which the city's "version" in quotes fills. Named, since
+    // the derived name (update_citie) is PATCH's.
     TRouteDoc.Put('/cities/:code')
       .Summary('Replace a city''s members, from the version read').Tag('cities')
+      .OperationId('replace_city')
       .PathParam('code', 'IBGE code (7 digits)')
-      .HeaderParam('If-Match', 'The ETag of the version read, as in "3"', True)
+      .HeaderParam('If-Match', 'The version read, in quotes: "3" for version 3', True)
+      .McpHeader('If-Match')
       .Body<ICityReplace>
       .Response<ICity>(200, 'The city after the change')
       .ResponseHeader('ETag', 'The new version')
@@ -429,7 +436,6 @@ begin
       .Error(404, 'No city with this code')
       .Error(412, 'precondition_failed: the city changed since that version')
       .Error(428, 'precondition_required: If-Match missing, or "*"')
-      .NoMcp
       .Register(PutCity);
     TRouteDoc.Delete('/cities/:code')
       .Summary('Delete a city').Tag('cities')

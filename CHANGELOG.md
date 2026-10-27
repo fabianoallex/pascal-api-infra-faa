@@ -6,6 +6,38 @@ may change the API; each such change is listed here.
 
 ## [Unreleased]
 
+## [0.25.0] - 2026-10-27
+
+Asked by pascal-agenda-faa (M5, decision 1): its AI agent must move and cancel appointments,
+which require `If-Match`, and book with an `Idempotency-Key`. Same dependencies as 0.24.0.
+
+### Added
+
+- **Header parameters as MCP tool arguments, opted in per parameter.**
+  `TRouteDocBuilder.McpHeader('If-Match')` (after or before `HeaderParam`) makes the header an
+  argument of the route's tool, named `ifMatch` (`McpHeaderArgName`: the header's words, the
+  first in lower case), or `McpHeader('If-Match', 'version')`; required when the header is;
+  described by `HeaderParam`'s text plus the header it becomes. The executor sends it as that
+  header (`TMcpForward.Headers`, new; `IMcpToolExecutor`'s signature is unchanged). Stored in
+  `TApiOperation.McpHeaders` (`TApiMcpHeader`).
+- **Checked at `TMcpEndpoint.Register`** (`EMcpError`): a header the route doesn't declare, a
+  name another argument has, and a reserved header (`McpHeaderReserved`): `Authorization`,
+  `X-Forwarded-*`, `Forwarded`, `X-Real-IP`, `traceparent`, `tracestate`, `Host`,
+  `Content-Type`, `Content-Length`, `Accept`, `Expect`, `Cookie`, `MCP-Protocol-Version`,
+  `Mcp-*`, `Proxy-*` and the hop-by-hop headers. A model's argument never sets who the caller is.
+- **A header value must be a string of printable ASCII**: a line break or an accent is an
+  `isError` result (`Argument ifMatch: a header value must be printable ASCII ...`) without
+  calling the API; an empty value is no value.
+
+### Changed
+
+- The tools of routes without `McpHeader` are unchanged: a header parameter is still left out.
+- Sample 02: `PUT /cities/:code` is the `replace_city` tool with `ifMatch` (it was `NoMcp`), and
+  `create_citie` takes `idempotencyKey`. The city carries its `version` in the body, since a
+  tool's result is the body alone (the `ETag` header stays). `tools/http_scenarios_db.sh` and
+  `tools/mcp_client_check.py` replace through MCP with the version read, get the 412 from an old
+  one, and repeat a create with one key.
+
 ## [0.24.0] - 2026-10-21
 
 Two findings of pascal-agenda-faa's M3 (public booking routes and signed links), brought here

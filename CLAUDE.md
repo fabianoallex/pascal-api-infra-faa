@@ -245,8 +245,12 @@ database store on pascal-db-faa's mock), `src/horse/PascalApi.Horse.Idempotency`
   `INSERT ... ON CONFLICT DO NOTHING` is the same on SQLite 3.24+ and PostgreSQL.
 - `Complete` goes inside the handler's `try` (a store that fails releases the key through
   `Fail`); `Fail` never raises.
-- A header parameter (`HeaderParam`) is not an MCP argument: a route that requires one is
-  `NoMcp`.
+- A header parameter (`HeaderParam`) is an MCP argument only with `McpHeader` (0.25.0, from
+  pascal-agenda-faa's M5): named `ifMatch` from `If-Match` unless named there; `Register` raises
+  for a reserved header (`McpHeaderReserved`: `Authorization`, `X-Forwarded-*`, `traceparent`,
+  `Content-Type`, `Mcp-*`...); a value that isn't printable ASCII is an `isError` without a
+  call. Don't shorten the reserved list without the user. A tool sees only the body: a version
+  the model needs for `If-Match` goes in the body too (sample 02's `version`).
 
 ### Horse
 

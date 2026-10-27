@@ -225,10 +225,10 @@ tenants' keys of the same name never meet.
   `VERSION = VERSION + 1` makes a stale `If-Match` match.
 - **The fingerprint is method, path and body, byte for byte.** A client that re-serializes the
   body differently on a retry (another member order) gets a 422. Send the same bytes again.
-- **Headers in the MCP tools.** A header parameter (`HeaderParam`) is not a tool argument: the
-  MCP executor sends no headers of the model's. A route that requires `If-Match` would only
-  answer the model with a 428, so sample 02 marks `PUT` `NoMcp`. A tool for a POST with an
-  optional `Idempotency-Key` works, without the key.
+- **Headers in the MCP tools.** A header parameter (`HeaderParam`) is a tool argument only
+  when the route opts it in with `McpHeader` (0.25.0): sample 02's `replace_city` takes
+  `ifMatch` and `create_citie` takes `idempotencyKey` ([MCP](mcp.md), step 6). The model sees
+  only the body, so the version must be there too, not only in the `ETag` header.
 - **Curl from Git Bash** sends `If-Match: "1"` as written (single quotes around the whole
   header). In a script, keep the double quotes inside single quotes.
 
@@ -258,6 +258,7 @@ cases.
 - `src/horse/PascalApi.Horse.Idempotency`: `THorseIdempotentRequest`,
   `THorseIdempotency.SendReplay`.
 - Documenting them: `TRouteDoc` `HeaderParam('If-Match', ..., True)`,
-  `ResponseHeader('ETag', ...)` ([OpenAPI](openapi.md)).
+  `ResponseHeader('ETag', ...)` ([OpenAPI](openapi.md)); as MCP tool arguments,
+  `McpHeader('If-Match')` ([MCP](mcp.md)).
 - The messages are `TApiMessages` (English and Portuguese, [Errors](errors.md)).
 - Sample: `samples/02-db`; scenarios: `tools/http_scenarios_db.sh`.

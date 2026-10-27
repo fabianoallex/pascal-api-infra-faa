@@ -47,7 +47,7 @@ WAIT_COUNT0=$(metric_sum db_client_connection_wait_time_seconds_count "$T/metric
 req GET '/cities?limit=2' ""
 status_is 200 "page 1"
 body_has '"page":1,"limit":2,"total":6,"totalPages":3,"hasNext":true,"hasPrev":false' "page 1"
-body_has '"items":[{"code":"1501402","name":"Belém","state":"PA","population":1303403},{"code":"3509502","name":"Campinas"' "page 1 by name (UTF-8)"
+body_has '"items":[{"code":"1501402","name":"Belém","state":"PA","population":1303403,"version":1},{"code":"3509502","name":"Campinas"' "page 1 by name (UTF-8)"
 req GET '/cities?page=3&limit=2' ""
 body_has '"hasNext":false,"hasPrev":true' "page 3"
 body_has '"name":"São Paulo"' "page 3 by name"
@@ -97,19 +97,19 @@ body_has '"total":0,"totalPages":1,"hasNext":false,"hasPrev":false,"items":[]' "
 
 # --- one city, create, conflict, validation, delete
 req GET /cities/4314902 ""
-body_is '{"code":"4314902","name":"Porto Alegre","state":"RS","population":1332845}' "city by code"
+body_is '{"code":"4314902","name":"Porto Alegre","state":"RS","population":1332845,"version":1}' "city by code"
 req GET /cities/9999999 ""
 status_is 404 "unknown code"
 body_is '{"error":"City 9999999 not found."}' "unknown code"
 req POST /cities '{"code":"2408102","name":"Natal","state":"rn"}'
 status_is 201 "create without population"
-body_is '{"code":"2408102","name":"Natal","state":"RN","population":null}' "create without population"
+body_is '{"code":"2408102","name":"Natal","state":"RN","population":null,"version":1}' "create without population"
 # Non-ASCII from a file with explicit UTF-8 bytes (Git Bash hands curl.exe its
 # arguments in the ANSI code page).
 printf '{"code":"2704302","name":"Macei\303\263","state":"AL","population":957916}' > "$T/utf8"
 req POST /cities "@$T/utf8"
 status_is 201 "create with population"
-body_is '{"code":"2704302","name":"Maceió","state":"AL","population":957916}' "create with population"
+body_is '{"code":"2704302","name":"Maceió","state":"AL","population":957916,"version":1}' "create with population"
 req GET '/cities?state=al' ""
 body_has '"name":"Maceió"' "read back from the database"
 req POST /cities '{"code":"3550308","name":"Another","state":"SP"}'
@@ -152,24 +152,24 @@ body_has '$.popultion' "unknown member: its path"
 # A JSON escape (the file holds backslash, u, 00e3) comes back as UTF-8.
 printf '{"code":"1000002","name":"Jo\\u00e3o","state":"SP"}' > "$T/escape"
 req POST /cities "@$T/escape"
-body_is '{"code":"1000002","name":"João","state":"SP","population":null}' "escape stored as UTF-8"
+body_is '{"code":"1000002","name":"João","state":"SP","population":null,"version":1}' "escape stored as UTF-8"
 req DELETE /cities/1000002 ""
 
 # --- PATCH: absent leaves a member, null clears population, a value sets it
 req PATCH /cities/2408102 '{"population":890480}'
 status_is 200 "patch a value"
-body_is '{"code":"2408102","name":"Natal","state":"RN","population":890480}' "patch a value: the others stay"
+body_is '{"code":"2408102","name":"Natal","state":"RN","population":890480,"version":2}' "patch a value: the others stay"
 req PATCH /cities/2408102 '{}'
 status_is 200 "empty patch"
-body_is '{"code":"2408102","name":"Natal","state":"RN","population":890480}' "empty patch changes nothing"
+body_is '{"code":"2408102","name":"Natal","state":"RN","population":890480,"version":2}' "empty patch changes nothing"
 req PATCH /cities/2408102 '{"population":null}'
-body_is '{"code":"2408102","name":"Natal","state":"RN","population":null}' "patch null clears population"
+body_is '{"code":"2408102","name":"Natal","state":"RN","population":null,"version":3}' "patch null clears population"
 # The edge enforces the document's limits on the value as it came (state:
 # exactly 2 characters), then the repository normalizes ("rn" -> "RN").
 req PATCH /cities/2408102 '{"name":"  Natal   RN  ","state":"rn"}'
-body_is '{"code":"2408102","name":"Natal RN","state":"RN","population":null}' "patch two members, normalized (TNorm.CityName, StateCode)"
+body_is '{"code":"2408102","name":"Natal RN","state":"RN","population":null,"version":4}' "patch two members, normalized (TNorm.CityName, StateCode)"
 req GET /cities/2408102 ""
-body_is '{"code":"2408102","name":"Natal RN","state":"RN","population":null}' "patch read back"
+body_is '{"code":"2408102","name":"Natal RN","state":"RN","population":null,"version":4}' "patch read back"
 req PATCH /cities/2408102 '{"name":null}'
 status_is 400 "patch null into a NOT NULL member"
 body_has '$.name: null is not allowed here' "patch null name: the path"
@@ -203,7 +203,7 @@ status_is 400 "if-match: not an entity tag"
 body_has '"code":"invalid_if_match"' "if-match: not an entity tag, its code"
 req PUT /cities/4314902 "$PA" -H 'If-Match: "1"'
 status_is 200 "if-match: the version read"
-body_is '{"code":"4314902","name":"Porto Alegre","state":"RS","population":1332845}' "if-match: the city"
+body_is '{"code":"4314902","name":"Porto Alegre","state":"RS","population":1332845,"version":2}' "if-match: the city"
 header_is ETag '"2"' "if-match: the new version"
 req PUT /cities/4314902 "$PA" -H 'If-Match: "1"'
 status_is 412 "if-match: an old version"
@@ -245,12 +245,12 @@ status_is 200 "if-match: back as it was"
 NA='{"code":"2408102","name":"Natal","state":"RN"}'
 req POST /cities "$NA" -H 'Idempotency-Key: city-natal'
 status_is 201 "idempotency: created"
-body_is '{"code":"2408102","name":"Natal","state":"RN","population":null}' "idempotency: the city"
+body_is '{"code":"2408102","name":"Natal","state":"RN","population":null,"version":1}' "idempotency: the city"
 header_is ETag '"1"' "idempotency: its ETag"
 header_is Idempotent-Replayed '' "idempotency: the first answer is no replay"
 req POST /cities "$NA" -H 'Idempotency-Key: city-natal'
 status_is 201 "idempotency: a retry gets the 201 again"
-body_is '{"code":"2408102","name":"Natal","state":"RN","population":null}' "idempotency: the same body"
+body_is '{"code":"2408102","name":"Natal","state":"RN","population":null,"version":1}' "idempotency: the same body"
 header_is ETag '"1"' "idempotency: the stored ETag"
 header_is Idempotent-Replayed 'true' "idempotency: marked as a replay"
 req POST /cities "$NA" -H 'Idempotency-Key: "city-natal"'
@@ -315,7 +315,7 @@ body_lacks 'securitySchemes' "no authentication middleware, no security scheme"
 body_has '"$ref":"#/components/schemas/Error"' "error responses"
 body_has '{"name":"state","in":"query","description":"Only the cities of this state (two letters)","required":false,"schema":{"type":"string"}}' "query parameter from the Find DTO"
 body_has '{"name":"page","in":"query","description":"Page number, from 1","required":false,"schema":{"type":"integer"}}' "inherited query parameter"
-body_has '{"name":"If-Match","in":"header","description":"The ETag of the version read, as in \"3\"","required":true,"schema":{"type":"string"}}' "a header parameter (0.23.0)"
+body_has '{"name":"If-Match","in":"header","description":"The version read, in quotes: \"3\" for version 3","required":true,"schema":{"type":"string"}}' "a header parameter (0.23.0)"
 body_has '"headers":{"ETag":{"description":"The version read, for If-Match","schema":{"type":"string"}}}' "a response header (0.23.0)"
 body_has '"428":{"description":"precondition_required' "PUT's 428"
 
@@ -338,8 +338,12 @@ call() { mcp tools/call ",\"name\":\"$1\",\"arguments\":$2" "$1"; }
 
 mcp tools/list ""
 status_is 200 "MCP tools/list"
-body_lacks 'Idempotency-Key' "MCP: a header parameter is no argument (0.23.0)"
-body_lacks 'replace_citie' "MCP: PUT is NoMcp"
+# 0.25.0: the header parameters the routes opt in (McpHeader) are arguments.
+body_has '"name":"replace_city"' "MCP: PUT is a tool (it takes If-Match)"
+body_has '"ifMatch":{"type":"string","description":"The version read, in quotes: \"3\" for version 3 (sent as the If-Match header)"}' "MCP: If-Match as an argument, with what to pass"
+body_has '"required":["code","ifMatch","name"' "MCP: ifMatch required, as the header is"
+body_has '"idempotencyKey":{"type":"string","description":"Optional, 1 to 255' "MCP: Idempotency-Key as an argument"
+body_has '(sent as the Idempotency-Key header)"}' "MCP: the header it becomes"
 body_has '"state":{"type":"string","description":"Only the cities of this state (two letters)"}' "MCP: query argument from the Find DTO"
 body_has '"code":{"type":"string","description":"IBGE code","examples":["4205407"],"pattern":"^[0-9]{7}$"}' "MCP: body argument with its metadata"
 body_has '"required":["code","name","state"],"additionalProperties":false' "MCP: body's required members"
@@ -353,6 +357,33 @@ body_has '"isError":true' "MCP call, invalid data"
 call get_citie '{"code":"3550308"}'
 body_has '\"code\":\"3550308\"' "MCP call with a path argument"
 body_has '"isError":false' "MCP call with a path argument"
+# Replace through MCP: the version read from get_citie, in quotes, as ifMatch.
+call get_citie '{"code":"4314902"}'
+V="$(grep -o '\\"version\\":[0-9]*' "$T/body" | grep -o '[0-9]*$')"
+[ -n "$V" ] && ok || fail "MCP: the city's version in the tool's result (body: $(cat "$T/body"))"
+PAV='"name":"Porto Alegre","state":"RS","population":1332845'
+call replace_city "{\"code\":\"4314902\",$PAV}"
+body_has '"text":"Missing required argument: ifMatch"}],"isError":true' "MCP: ifMatch missing, no call"
+call replace_city "{\"code\":\"4314902\",\"ifMatch\":\"\\\"$V\\\"\",$PAV}"
+body_has '"isError":false' "MCP: replace with the version read"
+body_has "\\\"version\\\":$((V + 1))" "MCP: replace moved the version"
+call replace_city "{\"code\":\"4314902\",\"ifMatch\":\"\\\"$V\\\"\",$PAV}"
+body_has '"isError":true' "MCP: replace from an old version"
+body_has 'precondition_failed' "MCP: the API's 412 as the result"
+# A line break would start another header: refused before the call.
+call replace_city "{\"code\":\"4314902\",\"ifMatch\":\"\\\"$V\\\"\r\nX-Evil: 1\",$PAV}"
+body_has 'a header value must be printable ASCII' "MCP: a header value with CR LF refused"
+# A model that repeats a call: the same key gets the first answer, not a 409.
+RE='"code":"2611606","name":"Recife","state":"PE"'
+call create_citie "{$RE,\"idempotencyKey\":\"mcp-recife\"}"
+body_has '"isError":false' "MCP: create with idempotencyKey"
+call create_citie "{$RE,\"idempotencyKey\":\"mcp-recife\"}"
+body_has '"isError":false' "MCP: the same call again, the first answer"
+body_has '\"code\":\"2611606\"' "MCP: the replayed city"
+call create_citie "{$RE}"
+body_has '"isError":true' "MCP: without the key the repeat is a 409"
+call delete_citie '{"code":"2611606"}'
+body_has '"isError":false' "MCP: delete the city created through MCP"
 mcp server/discover "" "" -H 'Origin: http://localhost:6274'
 status_is 200 "MCP from the allowed origin"
 mcp server/discover "" "" -H 'Origin: http://localhost:9999'

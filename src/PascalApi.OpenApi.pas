@@ -69,6 +69,15 @@ type
     Code: Integer;
   end;
 
+  /// A header parameter the MCP tool takes as an argument (0.25.0):
+  /// Header names a plHeader parameter of the operation; Argument is the
+  /// argument's name ('' derives it: If-Match -> ifMatch). Checked when
+  /// PascalApi.Mcp builds the catalog, not here.
+  TApiMcpHeader = record
+    Header: string;
+    Argument: string;
+  end;
+
   /// One documented operation. Path is in Horse's form ('/cities/:code');
   /// the document writes OpenAPI's ('/cities/{code}').
   TApiOperation = class
@@ -91,6 +100,9 @@ type
     ResponseHeaders: TArray<TApiResponseHeader>;
     /// Left out of the MCP tools (phase 5); still documented.
     NoMcp: Boolean;
+    /// The header parameters that are MCP tool arguments (0.25.0); the
+    /// others are documented only.
+    McpHeaders: TArray<TApiMcpHeader>;
     /// Needs no token: with TApiDocument.BearerAuth, written as
     /// "security": [] (OpenAPI's way to lift the document's requirement).
     NoAuth: Boolean;

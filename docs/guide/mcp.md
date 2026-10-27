@@ -56,7 +56,7 @@ TMcpEndpoint.Register('/mcp', 'http://127.0.0.1:' + IntToStr(GPort), 'cities-api
   [], ['http://localhost:6274']);
 ```
 
-The last two arguments are the tag filter (step 4) and the browser origins allowed (step 6).
+The last two arguments are the tag filter (step 4) and the browser origins allowed (step 7).
 
 ### 2. What a tool looks like
 
@@ -114,6 +114,7 @@ the base URL:
 |---|---|
 | a path parameter | the URL (`/cities/3550308`) |
 | a query parameter | the query string (`?state=SC&limit=50`) |
+| a header parameter the route opts in (`McpHeader`, step 6) | that header (`If-Match: "3"`) |
 | a body member | a JSON body |
 
 The origin put every non-path argument into a body, also for `GET`, so a filter never reached the
@@ -133,6 +134,7 @@ What the client gets back:
 | the API answered below 400 | `isError: false`, the API's body as text |
 | the API answered 400 or more | `isError: true`, the API's error body as text, which the model can act on (checked: `City 999 not found.`) |
 | a required argument is missing, or an argument is unknown | `isError: true`, `Missing required argument: id` / `Unknown argument: town`, without calling the API (checked) |
+| a header argument that isn't a string of printable ASCII | `isError: true`, `Argument ifMatch: a header value must be printable ASCII (no accents, no control characters)`, without calling the API (checked: a CR LF over HTTP, an accent with the Python SDK) |
 | the API couldn't be reached (down, wrong base URL, timeout) | `isError: true`, `Could not call the API.` |
 
 **Until 0.13.0 the last row sent the transport's message**: measured with the probe,
@@ -160,7 +162,60 @@ a peer the library trusts as a proxy, so the rate limit and the access log see t
 address, not the API's own ([Rate limiting](rate-limiting.md), step 3). A call waits up to 30 s
 (`MCP_HTTP_TIMEOUT_MS`; `Register` has no setting for it).
 
-### 6. Who may call the endpoint
+### 6. Headers a tool sends: `McpHeader` (0.25.0)
+
+A route that requires `If-Match` answers 428 without it, so a tool for it needs the header. A
+header parameter becomes an argument only when the route says so. From
+`samples/02-db/DbApiSample.dpr`:
+
+```pascal
+TRouteDoc.Put('/cities/:code')
+  .Summary('Replace a city''s members, from the version read').Tag('cities')
+  .OperationId('replace_city')
+  .PathParam('code', 'IBGE code (7 digits)')
+  .HeaderParam('If-Match', 'The version read, in quotes: "3" for version 3', True)
+  .McpHeader('If-Match')
+  .Body<ICityReplace>
+  ...
+  .Register(PutCity);
+TRouteDoc.Post('/cities')
+  .HeaderParam('Idempotency-Key', 'Optional, 1 to 255 visible ASCII characters (a UUID): ...')
+  .McpHeader('Idempotency-Key') // the tool's "idempotencyKey"
+  ...
+```
+
+`tools/list` then has (checked):
+
+```json
+"ifMatch":{"type":"string","description":"The version read, in quotes: \"3\" for version 3 (sent as the If-Match header)"}
+"required":["code","ifMatch","name", ...
+```
+
+- **The name** is the header's words, the first in lower case: `If-Match` is `ifMatch`,
+  `Idempotency-Key` is `idempotencyKey` (`McpHeaderArgName`, tested). `McpHeader('If-Match',
+  'version')` names it yourself.
+- **Required** when the header is (`HeaderParam`'s third argument); a missing one is an
+  `isError` without a call, as for the others.
+- **The description** is `HeaderParam`'s, plus the header it becomes. Write there what to
+  pass: the model reads nothing else.
+- **`Register` raises `EMcpError`** (tested) for a header the route doesn't declare with
+  `HeaderParam`, for a name another argument has, and for a header the transport or the server
+  sets: `Authorization`, `X-Forwarded-*`, `Forwarded`, `X-Real-IP`, `traceparent`,
+  `tracestate`, `Host`, `Content-Type`, `Content-Length`, `Accept`, `Expect`, `Cookie`,
+  `MCP-Protocol-Version`, `Mcp-*`, `Proxy-*` and the hop-by-hop headers
+  (`McpHeaderReserved`). A model's argument can never set who the caller is.
+- **A value** must be a string of printable ASCII (`#32` to `#126`): a line break, which would
+  start another header, or an accent is an `isError` without a call (checked). An empty value
+  is no value.
+
+**The model sees only the response's body**, never its headers. An `ETag` header alone is
+invisible to it: sample 02's city carries its `version` in the body too (0.25.0), and the
+scenarios read it from `get_citie`, call `replace_city` with that version in quotes
+(`"ifMatch": "\"6\""`), and get the API's 412 as an `isError` result when they use it twice
+(checked). With `idempotencyKey`, a model that repeats `create_citie` gets the first answer
+again instead of a 409 (checked).
+
+### 7. Who may call the endpoint
 
 - **Authentication.** `/mcp` is a route like any other: behind `TJwtMiddleware` unless you exclude
   it. Sample 01 keeps it protected (checked: 401 without a token), and the token reaches each tool
@@ -171,7 +226,7 @@ address, not the API's own ([Rate limiting](rate-limiting.md), step 3). A call w
   and accepts clients that send none (SDKs, command-line agents). `http://localhost:6274` is the
   MCP Inspector's address; list only the origins you use.
 
-### 7. The protocol revision
+### 8. The protocol revision
 
 The endpoint speaks revision **2026-07-28 only**, without sessions (decided with the user; see the
 design document):
@@ -218,7 +273,11 @@ comment).
   tools, and a call without a token reaches every route that doesn't check one itself (the
   protected ones answer it 401, as `isError`).
 - **An `Origin` you didn't list**: a browser-based client gets 403.
-- **A client on an older revision**: 404 on `initialize` (step 7).
+- **A client on an older revision**: 404 on `initialize` (step 8).
+- **A version only in the `ETag` header**: a tool's result is the body, so the model can't
+  fill `ifMatch` (step 6). Put the version in the body.
+- **`McpHeader` on a header the route doesn't declare**, or on `Authorization`: `Register`
+  raises (step 6).
 - **The provider**: one that serves a request at a time would wait for itself (from the unit's
   comment; Horse's providers are threaded).
 
@@ -227,7 +286,8 @@ comment).
 **The catalog and the protocol, without a server.** `TMcpServer` takes a `TApiDocument` and an
 `IMcpToolExecutor`. A fake executor records what it was asked and answers what you set, as
 `PascalApi.McpTests` does: check the tool names, the input schemas, and the request each call
-would make (method, path with its query string, body, forwarded headers), without HTTP.
+would make (method, path with its query string, body, forwarded headers and the header
+arguments in `TMcpForward.Headers`), without HTTP.
 
 **Over HTTP.** Send the protocol's messages with curl, as `tools/http_scenarios.sh` does:
 
@@ -251,10 +311,11 @@ python3 tools/mcp_client_check.py 02 http://127.0.0.1:9330
 ## Reference
 
 - `PascalApi.Mcp`: the catalog, the names, the input schemas, the dispatcher (comment at the
-  top); `MCP_PROTOCOL_VERSION`, `MCP_CALL_FAILED`.
+  top); `MCP_PROTOCOL_VERSION`, `MCP_CALL_FAILED`, `McpHeaderArgName`, `McpHeaderReserved`.
+- `PascalApi.Horse.OpenApi`: `TRouteDocBuilder.McpHeader`.
 - `PascalApi.Horse.Mcp`: `TMcpEndpoint`, `TMcpHttpExecutor`, `MCP_HTTP_TIMEOUT_MS`.
 - `PascalApi.McpTests`.
 - `samples/01-api` (`/mcp` behind JWT, `/mcp/unreachable`), `samples/02-db` (`/mcp` without
-  authentication, an allowed origin); `tools/http_scenarios.sh`, `tools/http_scenarios_db.sh`,
+  authentication, an allowed origin, `If-Match` and `Idempotency-Key` as arguments); `tools/http_scenarios.sh`, `tools/http_scenarios_db.sh`,
   `tools/mcp_client_check.py`.
 - [docs/mcp-design.md](../mcp-design.md): the protocol as measured, and the four decisions.

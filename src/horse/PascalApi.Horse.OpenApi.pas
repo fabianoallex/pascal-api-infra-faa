@@ -71,10 +71,18 @@ type
     function QueryParam(const AName: string; const ADescription: string = '';
       AType: TApiParamType = ptString; ARequired: Boolean = False): TRouteDocBuilder;
     /// A request header (0.23.0), documented as a string: If-Match,
-    /// Idempotency-Key. Not an MCP tool argument (the executor sends no
-    /// headers of the model's): a route that requires one is usually NoMcp.
+    /// Idempotency-Key. Not an MCP tool argument unless McpHeader names it.
     function HeaderParam(const AName: string; const ADescription: string = '';
       ARequired: Boolean = False): TRouteDocBuilder;
+    /// The header parameter AHeader (declared with HeaderParam, before or
+    /// after) becomes an argument of the route's MCP tool (0.25.0), sent as
+    /// that header; required if the header is. The argument is named
+    /// AArgument, or derived (If-Match -> ifMatch). Checked when the catalog
+    /// is built (TMcpEndpoint.Register raises EMcpError): a header the route
+    /// doesn't declare, one the transport sets (Authorization, traceparent,
+    /// Content-Type, Mcp-*: McpHeaderReserved), or a name another argument has.
+    function McpHeader(const AHeader: string): TRouteDocBuilder; overload;
+    function McpHeader(const AHeader, AArgument: string): TRouteDocBuilder; overload;
     /// A header the answers carry (0.23.0), documented as a string: ETag,
     /// Idempotent-Replayed. ACode 0: on every 2xx response of the route,
     /// declared before or after; otherwise on that response only.
@@ -214,6 +222,22 @@ function TRouteDocBuilder.HeaderParam(const AName, ADescription: string;
   ARequired: Boolean): TRouteDocBuilder;
 begin
   AddParam(AName, ADescription, plHeader, ptString, ARequired);
+  Result := Self;
+end;
+
+function TRouteDocBuilder.McpHeader(const AHeader: string): TRouteDocBuilder;
+begin
+  Result := McpHeader(AHeader, '');
+end;
+
+function TRouteDocBuilder.McpHeader(const AHeader, AArgument: string): TRouteDocBuilder;
+var
+  LEntry: TApiMcpHeader;
+begin
+  LEntry.Header := AHeader;
+  LEntry.Argument := AArgument;
+  SetLength(FOp.McpHeaders, Length(FOp.McpHeaders) + 1);
+  FOp.McpHeaders[High(FOp.McpHeaders)] := LEntry;
   Result := Self;
 end;
 

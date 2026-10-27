@@ -28,10 +28,21 @@
 
   A call goes through IMcpToolExecutor (PascalApi.Horse.Mcp's executor makes
   an HTTP request to the API itself, so every middleware applies): path
-  arguments into the URL, query arguments into the query string, the others
-  into a JSON body. An HTTP status of 400 or more gives a result with
-  isError true and the API's body as text, which the model can act on. An
-  executor that raises (the API unreachable, a timeout) gives isError true
+  arguments into the URL, query arguments into the query string, header
+  arguments into TMcpForward.Headers, the others into a JSON body.
+
+  Header arguments (0.25.0): a header parameter is an argument only when
+  the operation opts it in (TApiOperation.McpHeaders, TRouteDocBuilder's
+  McpHeader), named McpHeaderArgName's way (If-Match -> ifMatch) unless
+  named there. Building the catalog raises EMcpError for a header the
+  operation doesn't declare and for one the transport or the server sets
+  (McpHeaderReserved: Authorization, X-Forwarded-*, traceparent, Host,
+  Content-Type, Mcp-* and the like). A value must be a string of printable
+  ASCII (#32..#126): anything else, a line break included, is an isError
+  result without a call; an empty value is no value.
+
+  An HTTP status of 400 or more gives a result with isError true and the
+  API's body as text, which the model can act on. An executor that raises (the API unreachable, a timeout) gives isError true
   and the fixed MCP_CALL_FAILED: the exception's message named the API's
   host and port (measured), so it goes to the executor's log, not to the
   client.
@@ -54,12 +65,21 @@ const
 type
   EMcpError = class(Exception);
 
+  /// A request header of a tool call (0.25.0).
+  TMcpHeaderValue = record
+    Name: string;
+    Value: string;
+  end;
+
   /// What the HTTP layer passes on to the API with every tool call.
   TMcpForward = record
     Authorization: string; // the incoming Authorization header, as is
     ForwardedFor: string;  // the caller's address, sent as X-Forwarded-For
     TraceParent: string;   // the MCP request's span (TLoggerMiddleware), so the call is its child
     TraceState: string;    // passed on with it
+    /// The tool's header arguments (0.25.0), set by TMcpServer for each
+    /// call, never by the transport: printable ASCII, never a reserved name.
+    Headers: TArray<TMcpHeaderValue>;
   end;
 
   IMcpToolExecutor = interface
@@ -71,12 +91,13 @@ type
       out AStatus: Integer): string;
   end;
 
-  TMcpArgLocation = (alPath, alQuery, alBody);
+  TMcpArgLocation = (alPath, alQuery, alBody, alHeader);
 
   TMcpArg = record
     Name: string;
     Location: TMcpArgLocation;
     Required: Boolean;
+    Header: string; // alHeader: the header's name, as the route declares it
   end;
 
   TMcpTool = class
@@ -137,6 +158,20 @@ function McpMatchesTags(const AOpTags, AFilter: array of string): Boolean;
 /// Percent-encodes AText's UTF-8 bytes for a URL path segment or query value
 /// (RFC 3986 unreserved characters stay as they are).
 function McpUrlEncode(const AText: string): string;
+
+/// A header's argument name (0.25.0): its hyphen-separated words, the first
+/// in lower case, the others capitalized (If-Match -> ifMatch,
+/// Idempotency-Key -> idempotencyKey, X-REQUEST-ID -> xRequestId).
+function McpHeaderArgName(const AHeader: string): string;
+
+/// True for a header a tool argument may never set (any case): the ones
+/// the executor or the HTTP client set (Authorization, X-Forwarded-For,
+/// traceparent, tracestate, Host, Content-Type, Content-Length, Accept,
+/// Expect), MCP's own (MCP-Protocol-Version, Mcp-*), the ones that say who
+/// the caller is (Cookie, Forwarded, X-Forwarded-*, X-Real-IP, Proxy-*) and
+/// the hop-by-hop ones (Connection, Keep-Alive, TE, Trailer,
+/// Transfer-Encoding, Upgrade).
+function McpHeaderReserved(const AHeader: string): Boolean;
 
 implementation
 
@@ -250,6 +285,81 @@ begin
     else
       Result := Result + '%' + HEX[(B shr 4) + 1] + HEX[(B and $F) + 1];
   end;
+end;
+
+function McpHeaderArgName(const AHeader: string): string;
+var
+  I: Integer;
+  LUpper: Boolean;
+begin
+  Result := '';
+  LUpper := False;
+  for I := 1 to Length(AHeader) do
+    if AHeader[I] = '-' then
+      LUpper := Result <> ''
+    else if LUpper then
+    begin
+      Result := Result + UpperCase(AHeader[I]);
+      LUpper := False;
+    end
+    else
+      Result := Result + LowerCase(AHeader[I]);
+end;
+
+function McpHeaderReserved(const AHeader: string): Boolean;
+const
+  EXACT: array[0..20] of string = ('authorization', 'x-forwarded-for', 'traceparent',
+    'tracestate', 'host', 'content-type', 'content-length', 'accept', 'expect',
+    'mcp-protocol-version', 'cookie', 'forwarded', 'x-real-ip', 'connection', 'keep-alive', 'te',
+    'trailer', 'transfer-encoding', 'upgrade', 'proxy-authorization', 'proxy-connection');
+  PREFIXES: array[0..2] of string = ('mcp-', 'x-forwarded-', 'proxy-');
+var
+  LName: string;
+  I: Integer;
+begin
+  LName := LowerCase(Trim(AHeader));
+  for I := 0 to High(EXACT) do
+    if LName = EXACT[I] then
+      Exit(True);
+  for I := 0 to High(PREFIXES) do
+    if Copy(LName, 1, Length(PREFIXES[I])) = PREFIXES[I] then
+      Exit(True);
+  Result := False;
+end;
+
+// RFC 9110's token: what a header name is made of.
+function IsHeaderToken(const AName: string): Boolean;
+var
+  I: Integer;
+begin
+  Result := AName <> '';
+  for I := 1 to Length(AName) do
+    if not CharInSet(AName[I], ['A'..'Z', 'a'..'z', '0'..'9', '!', '#', '$', '%', '&', '''',
+      '*', '+', '-', '.', '^', '_', '`', '|', '~']) then
+      Exit(False);
+end;
+
+function IsArgumentName(const AName: string): Boolean;
+var
+  I: Integer;
+begin
+  Result := AName <> '';
+  for I := 1 to Length(AName) do
+    if not CharInSet(AName[I], ['A'..'Z', 'a'..'z', '0'..'9', '_']) then
+      Exit(False);
+end;
+
+// Printable ASCII only: no control character (a CR or LF would start
+// another header), no byte or code unit above #126 (the same refusal on
+// FPC's UTF-8 and Delphi's UTF-16 strings).
+function IsHeaderValue(const AValue: string): Boolean;
+var
+  I: Integer;
+begin
+  for I := 1 to Length(AValue) do
+    if (Ord(AValue[I]) < 32) or (Ord(AValue[I]) > 126) then
+      Exit(False);
+  Result := True;
 end;
 
 // "=?base64?...?=" (the transport's sentinel for non-ASCII header values)
@@ -374,16 +484,17 @@ begin
 end;
 
 procedure AddArg(ATool: TMcpTool; const AName: string; ALocation: TMcpArgLocation;
-  ARequired: Boolean);
+  ARequired: Boolean; const AHeader: string = '');
 var
   LArg: TMcpArg;
 begin
   if ATool.FindArg(AName, LArg) then
     raise EMcpError.CreateFmt('MCP tool %s: the argument "%s" is used twice ' +
-      '(a path, query or body name repeated)', [ATool.Name, AName]);
+      '(a path, query, header or body name repeated)', [ATool.Name, AName]);
   LArg.Name := AName;
   LArg.Location := ALocation;
   LArg.Required := ARequired;
+  LArg.Header := AHeader;
   SetLength(ATool.Args, Length(ATool.Args) + 1);
   ATool.Args[High(ATool.Args)] := LArg;
 end;
@@ -414,12 +525,55 @@ begin
     end;
 end;
 
+// The header parameters AOp opts in (TApiOperation.McpHeaders), checked:
+// declared as headers, not reserved, each once. AArgNames gets each one's
+// argument name.
+function OptedHeaders(AOp: TApiOperation; const AToolName: string;
+  const AParams: TArray<TApiParam>; out AArgNames: TArray<string>): TArray<TApiParam>;
+var
+  I, J, K: Integer;
+  LFound: Boolean;
+  LHeader: string;
+begin
+  SetLength(Result, Length(AOp.McpHeaders));
+  SetLength(AArgNames, Length(AOp.McpHeaders));
+  for I := 0 to High(AOp.McpHeaders) do
+  begin
+    LHeader := AOp.McpHeaders[I].Header;
+    LFound := False;
+    for J := 0 to High(AParams) do
+      if (AParams[J].Location = plHeader) and SameText(AParams[J].Name, LHeader) then
+      begin
+        Result[I] := AParams[J];
+        LFound := True;
+        Break;
+      end;
+    if not LFound then
+      raise EMcpError.CreateFmt('MCP tool %s: McpHeader("%s") names no header parameter of ' +
+        'the route (declare it with HeaderParam)', [AToolName, LHeader]);
+    if McpHeaderReserved(LHeader) or not IsHeaderToken(LHeader) then
+      raise EMcpError.CreateFmt('MCP tool %s: the header "%s" can''t be a tool argument ' +
+        '(the transport or the server sets it)', [AToolName, LHeader]);
+    for K := 0 to I - 1 do
+      if SameText(Result[K].Name, Result[I].Name) then
+        raise EMcpError.CreateFmt('MCP tool %s: the header "%s" is an argument twice',
+          [AToolName, LHeader]);
+    AArgNames[I] := AOp.McpHeaders[I].Argument;
+    if AArgNames[I] = '' then
+      AArgNames[I] := McpHeaderArgName(Result[I].Name);
+    if not IsArgumentName(AArgNames[I]) then
+      raise EMcpError.CreateFmt('MCP tool %s: "%s" is not an argument name for the header ' +
+        '"%s" (letters, digits and "_")', [AToolName, AArgNames[I], LHeader]);
+  end;
+end;
+
 function BuildTool(ADoc: TApiDocument; AOp: TApiOperation): TMcpTool;
 var
-  LParams: TArray<TApiParam>;
+  LAll, LParams, LHeaders: TArray<TApiParam>;
+  LHeaderArgs: TArray<string>;
   LBody, LProps, LReq: TJsonValue;
   LW: TJsonWriter;
-  LHint: string;
+  LHint, LDesc: string;
   LAnyRequired: Boolean;
   I: Integer;
 begin
@@ -451,16 +605,19 @@ begin
       else
         Result.Description := Result.Description + '. ' + LHint;
 
-    // The arguments: path and query parameters, then the body's properties.
-    // Header parameters (0.23.0: If-Match, Idempotency-Key) aren't
-    // arguments: the executor sends no headers of the model's. A route that
-    // needs one answers the call with its 4xx; mark it NoMcp.
-    LParams := WithoutHeaderParams(ApiOperationParams(ADoc, AOp));
+    // The arguments: path and query parameters, the header parameters the
+    // route opts in (0.25.0: If-Match, Idempotency-Key), then the body's
+    // properties. Other header parameters are documented only.
+    LAll := ApiOperationParams(ADoc, AOp);
+    LParams := WithoutHeaderParams(LAll);
+    LHeaders := OptedHeaders(AOp, Result.Name, LAll, LHeaderArgs);
     for I := 0 to High(LParams) do
       if LParams[I].Location = plPath then
         AddArg(Result, LParams[I].Name, alPath, True)
       else
         AddArg(Result, LParams[I].Name, alQuery, LParams[I].Required);
+    for I := 0 to High(LHeaders) do
+      AddArg(Result, LHeaderArgs[I], alHeader, LHeaders[I].Required, LHeaders[I].Name);
     LProps := nil;
     LReq := nil;
     if AOp.Body <> nil then
@@ -489,6 +646,21 @@ begin
         LW.Name('description');
         LW.WriteString(LParams[I].Description);
       end;
+      LW.EndObject;
+    end;
+    // A header argument says which header it becomes, after what to pass.
+    for I := 0 to High(LHeaders) do
+    begin
+      LW.Name(LHeaderArgs[I]);
+      LW.BeginObject;
+      LW.Name('type');
+      LW.WriteString('string');
+      if LHeaders[I].Description <> '' then
+        LDesc := LHeaders[I].Description + ' (sent as the ' + LHeaders[I].Name + ' header)'
+      else
+        LDesc := 'Sent as the ' + LHeaders[I].Name + ' header';
+      LW.Name('description');
+      LW.WriteString(LDesc);
       LW.EndObject;
     end;
     if LProps <> nil then
@@ -612,20 +784,48 @@ var
   LBody: TJsonWriter;
   LHasBody: Boolean;
   LArg: TMcpArg;
+  LValue: TJsonValue;
+  LForward: TMcpForward;
   I, P, Q: Integer;
   LStatus: Integer;
 begin
   AIsError := True;
-  // Arguments the schema doesn't have, and required ones missing: errors
-  // the model can correct.
+  // Arguments the schema doesn't have, header values that can't be sent,
+  // and required ones missing: errors the model can correct.
+  LForward := AForward;
+  LForward.Headers := nil;
   if AArgs <> nil then
     for I := 0 to AArgs.Count - 1 do
+    begin
       if not ATool.FindArg(AArgs.Names[I], LArg) then
         Exit('Unknown argument: ' + AArgs.Names[I]);
+      LValue := AArgs.Items[I];
+      if (LArg.Location = alHeader) and not LValue.IsNull then
+      begin
+        if LValue.Kind <> jkString then
+          Exit('Argument ' + LArg.Name + ': a header value must be a string');
+        if not IsHeaderValue(LValue.AsString) then
+          Exit('Argument ' + LArg.Name + ': a header value must be printable ASCII ' +
+            '(no accents, no control characters)');
+        if LValue.AsString <> '' then
+        begin
+          SetLength(LForward.Headers, Length(LForward.Headers) + 1);
+          LForward.Headers[High(LForward.Headers)].Name := LArg.Header;
+          LForward.Headers[High(LForward.Headers)].Value := LValue.AsString;
+        end;
+      end;
+    end;
   for I := 0 to High(ATool.Args) do
-    if ATool.Args[I].Required and ((AArgs = nil) or (AArgs.Find(ATool.Args[I].Name) = nil) or
-      AArgs.Find(ATool.Args[I].Name).IsNull) then
-      Exit('Missing required argument: ' + ATool.Args[I].Name);
+    if ATool.Args[I].Required then
+    begin
+      if AArgs = nil then
+        LValue := nil
+      else
+        LValue := AArgs.Find(ATool.Args[I].Name);
+      if (LValue = nil) or LValue.IsNull or
+        ((ATool.Args[I].Location = alHeader) and (LValue.AsString = '')) then
+        Exit('Missing required argument: ' + ATool.Args[I].Name);
+    end;
 
   // Path: ':name' segments replaced with the encoded value.
   LPath := '';
@@ -679,9 +879,9 @@ begin
       LHasBody := True; // "{}" for a body route called with no body arguments
     try
       if LHasBody then
-        Result := FExecutor.Execute(UpperCase(ATool.Method), LPath, LBody.ToString, AForward, LStatus)
+        Result := FExecutor.Execute(UpperCase(ATool.Method), LPath, LBody.ToString, LForward, LStatus)
       else
-        Result := FExecutor.Execute(UpperCase(ATool.Method), LPath, '', AForward, LStatus);
+        Result := FExecutor.Execute(UpperCase(ATool.Method), LPath, '', LForward, LStatus);
       AIsError := LStatus >= 400;
     except
       // The message stays out: the executor logs it.

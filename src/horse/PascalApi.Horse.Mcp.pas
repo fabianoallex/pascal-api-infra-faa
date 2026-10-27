@@ -20,8 +20,9 @@
   on FPC, THTTPClient on Delphi), so it goes through every middleware as a
   direct call would: the incoming Authorization header, the caller's
   address (as X-Forwarded-For) and the trace context (traceparent and
-  tracestate) are passed on. With TLoggerMiddleware in use, each call is a
-  client span (PascalCommon.Tracing) under the MCP request's server span, and
+  tracestate) are passed on, with the header arguments a route opted in
+  (0.25.0, TRouteDocBuilder.McpHeader: If-Match, Idempotency-Key). With
+  TLoggerMiddleware in use, each call is a client span (PascalCommon.Tracing) under the MCP request's server span, and
   the call's traceparent names it: MCP request -> tool call -> the route's
   own server span, one trace. A call that fails before the API answers
   (unreachable, a timeout) is logged through TErrorHandlerMiddleware's
@@ -147,6 +148,7 @@ var
   LClient: TFPHTTPClient;
   LSent: TStringStream;
   LReceived: TBytesStream;
+  I: Integer;
 begin
   LClient := TFPHTTPClient.Create(nil);
   LSent := nil;
@@ -164,6 +166,9 @@ begin
       LClient.AddHeader('traceparent', AForward.TraceParent);
     if AForward.TraceState <> '' then
       LClient.AddHeader('tracestate', AForward.TraceState);
+    for I := 0 to High(AForward.Headers) do
+      if not McpHeaderReserved(AForward.Headers[I].Name) then
+        LClient.AddHeader(AForward.Headers[I].Name, AForward.Headers[I].Value);
     if ABody <> '' then
     begin
       // FPC strings are UTF-8 already (the jsonmapper writes them so).
@@ -192,6 +197,7 @@ var
   LRequest: IHTTPRequest;
   LSent: TBytesStream;
   LResponse: IHTTPResponse;
+  I: Integer;
 begin
   LClient := THTTPClient.Create;
   LSent := nil;
@@ -209,6 +215,9 @@ begin
       LRequest.SetHeaderValue('traceparent', AForward.TraceParent);
     if AForward.TraceState <> '' then
       LRequest.SetHeaderValue('tracestate', AForward.TraceState);
+    for I := 0 to High(AForward.Headers) do
+      if not McpHeaderReserved(AForward.Headers[I].Name) then
+        LRequest.SetHeaderValue(AForward.Headers[I].Name, AForward.Headers[I].Value);
     if ABody <> '' then
     begin
       LSent := TBytesStream.Create(PaStringToUtf8Bytes(ABody));

@@ -1,6 +1,8 @@
 """Drives a sample's /mcp endpoint with the official MCP Python SDK (mcp 2.0.0,
 protocol 2026-07-28): connects in "auto" mode (server/discover first), lists
-the tools and calls some, as an AI client would.
+the tools and calls some, as an AI client would; on sample 02 also a replace
+with ifMatch (the If-Match header, 0.25.0) and a create repeated with the
+same idempotencyKey.
 
     python3 tools/mcp_client_check.py 01 http://127.0.0.1:9310   (logs in for a token)
     python3 tools/mcp_client_check.py 02 http://127.0.0.1:9330
@@ -61,6 +63,34 @@ async def run(sample, base):
                 check(r.is_error, "route error as isError")
                 r = await client.call_tool("create_citie", {"code": "123", "name": "X", "state": "SC"})
                 check(r.is_error, "invalid body as isError")
+
+                # If-Match through MCP: the version read, in quotes.
+                schema = tools["replace_city"].input_schema
+                check("ifMatch" in schema["properties"] and "ifMatch" in schema.get("required", []),
+                      "replace_city takes a required ifMatch")
+                r = await client.call_tool("get_citie", {"code": "4314902"})
+                city = json.loads(r.content[0].text)
+                args = {"code": "4314902", "name": city["name"], "state": city["state"],
+                        "population": city["population"]}
+                r = await client.call_tool("replace_city", dict(args, ifMatch='"%d"' % city["version"]))
+                check(not r.is_error and json.loads(r.content[0].text)["version"] == city["version"] + 1,
+                      "replace with the version read: %s" % r.content[0].text)
+                r = await client.call_tool("replace_city", dict(args, ifMatch='"%d"' % city["version"]))
+                check(r.is_error and "precondition_failed" in r.content[0].text,
+                      "replace from an old version: %s" % r.content[0].text)
+                r = await client.call_tool("replace_city", dict(args, ifMatch='"São"'))
+                check(r.is_error and "printable ASCII" in r.content[0].text,
+                      "a non-ASCII header value refused: %s" % r.content[0].text)
+
+                # Idempotency-Key: a repeated call gets the first answer.
+                new = {"code": "2611606", "name": "Recife", "state": "PE", "idempotencyKey": "sdk-recife"}
+                first = await client.call_tool("create_citie", new)
+                again = await client.call_tool("create_citie", new)
+                check(not first.is_error and not again.is_error and
+                      first.content[0].text == again.content[0].text,
+                      "create repeated with one idempotencyKey: %s" % again.content[0].text)
+                r = await client.call_tool("delete_citie", {"code": "2611606"})
+                check(not r.is_error, "delete the city")
 
 
 def main():

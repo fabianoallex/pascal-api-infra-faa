@@ -111,6 +111,40 @@ same JWT middleware as the API unless the application excludes it.
   `2026-07-28`), in the Linux container, listing and calling the tools.
 - Delphi Win32/Win64 as always.
 
+## Header arguments (0.25.0)
+
+Asked by pascal-agenda-faa (its `docs/design.md`, "M5: design", decision 1, 2026-10-27): moving
+and cancelling an appointment require `If-Match` (428 without), and booking takes an
+`Idempotency-Key`, but the tools left header parameters out and the executor sent only
+`Authorization`, `X-Forwarded-For` and the trace context. Decisions taken with the user
+(2026-10-27):
+
+1. **Opt-in per parameter, `McpHeader(AHeader)` after `HeaderParam`** (not a fourth parameter of
+   `HeaderParam`): `HeaderParam`'s signature doesn't change, and a header documented for
+   OpenAPI stays out of the tools unless named. Stored in `TApiOperation.McpHeaders` and
+   resolved when the catalog is built, so the checks are in `PascalApi.Mcp` and tested with the
+   fake executor.
+2. **The argument's name is derived**: the header's hyphen-separated words, the first in lower
+   case (`If-Match` -> `ifMatch`, `Idempotency-Key` -> `idempotencyKey`); `McpHeader(AHeader,
+   AArgument)` names it. A name another argument has raises `EMcpError`, as before.
+3. **Reserved headers raise `EMcpError` at `Register`** (a programming error): the ones the
+   executor or the HTTP client set (`Authorization`, `X-Forwarded-For`, `traceparent`,
+   `tracestate`, `Host`, `Content-Type`, `Content-Length`, `Accept`, `Expect`), MCP's own
+   (`MCP-Protocol-Version`, `Mcp-*`), the ones that say who the caller is (`Cookie`,
+   `Forwarded`, `X-Forwarded-*`, `X-Real-IP`, `Proxy-*`) and the hop-by-hop ones. The executor
+   skips a reserved name again before sending, in case a `TMcpForward` is built by hand.
+4. **A value is a string of printable ASCII (`#32`..`#126`)**, else an `isError` result
+   without a call: no accent (the same refusal on FPC's UTF-8 and Delphi's UTF-16 strings,
+   and ETags and keys are ASCII), no CR or LF (they would start another header). An empty value
+   is no value; required follows `HeaderParam`'s `ARequired`.
+5. **The version goes in the body**: a tool's result is the response's body only, so an `ETag`
+   header is invisible to the model. Sample 02's `ICity` gained `version` (the agenda's
+   responses had it already). Not taken: returning response headers in the tool's result (more
+   library surface for a case the body solves).
+
+The values reach the executor in `TMcpForward.Headers`, which leaves `IMcpToolExecutor`'s
+signature unchanged.
+
 ## Not in this phase
 
 stdio transport, SSE responses, resources, prompts, `subscriptions/listen`, MRTR,

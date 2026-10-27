@@ -21,7 +21,8 @@
   Optimistic concurrency (0.23.0, PascalApi.Preconditions): every row has
   a VERSION that each change moves up; the handlers send it as the ETag,
   and Replace (PUT) needs If-Match with the version read and writes only
-  WHERE VERSION = :VERSION. The keys of PascalApi.Idempotency's database
+  WHERE VERSION = :VERSION. The city carries its version in the body too
+  (0.25.0), since an MCP tool's result is the body alone. The keys of PascalApi.Idempotency's database
   store (POST /cities with an Idempotency-Key) are in IDEMPOTENCY_KEYS,
   migration 5, with the store's six statements; without tenants their
   TENANT_ID (the scope) is ''. }
@@ -66,10 +67,14 @@ type
     function GetName: string;
     function GetState: string;
     function GetPopulation: INullInteger;
+    function GetVersion: Int64;
     property Code: string read GetCode;
     property Name: string read GetName;
     property State: string read GetState;
     property Population: INullInteger read GetPopulation;
+    /// The row's version (0.25.0): If-Match takes it in quotes ("3"), as
+    /// the ETag header carries it; an MCP tool sees only the body.
+    property Version: Int64 read GetVersion;
   end;
 
   /// PUT /cities/:code: every member but the code, which the path names.
@@ -155,16 +160,19 @@ type
   private
     FCode, FName, FState: string;
     FPopulation: INullInteger;
+    FVersion: Int64;
   public
     function GetCode: string;
     function GetName: string;
     function GetState: string;
     function GetPopulation: INullInteger;
+    function GetVersion: Int64;
   published
     property Code: string read FCode write FCode;
     property Name: string read FName write FName;
     property State: string read FState write FState;
     property Population: INullInteger read FPopulation write FPopulation;
+    property Version: Int64 read FVersion write FVersion;
   end;
 {$M-}
 
@@ -275,7 +283,7 @@ begin
     .Add(DIR, 'CITY.COUNT',
       'SELECT COUNT(*) AS TOTAL FROM CITIES WHERE 1 = 1 [STATE {] AND STATE = :STATE [} STATE]')
     .Add(DIR, 'CITY.PAGE',
-      'SELECT CODE, NAME, STATE, POPULATION FROM CITIES WHERE 1 = 1 ' +
+      'SELECT CODE, NAME, STATE, POPULATION, VERSION FROM CITIES WHERE 1 = 1 ' +
       '[STATE {] AND STATE = :STATE [} STATE] ORDER BY ${ORDER} ${PAGE}')
     .Add(DIR, 'CITY.BY_CODE',
       'SELECT CODE, NAME, STATE, POPULATION, VERSION FROM CITIES WHERE CODE = :CODE')
@@ -434,6 +442,11 @@ begin
   Result := TOptionals.Safe(FPopulation);
 end;
 
+function TCity.GetVersion: Int64;
+begin
+  Result := FVersion;
+end;
+
 { TCityRepository }
 
 constructor TCityRepository.Create(const AFactory: IDBFactory);
@@ -454,6 +467,7 @@ begin
   LCity.Name := AResult.Strings['NAME'];
   LCity.State := AResult.Strings['STATE'];
   LCity.Population := AResult.NullableIntegers['POPULATION'];
+  LCity.Version := AResult.Int64s['VERSION'];
 end;
 
 // The count and the page through the same filter (PascalApi.PagedQuery,
@@ -685,6 +699,7 @@ initialization
     .Prop('Population').Desc('Inhabitants; null when unknown').Example('537211').Minimum(0);
   TApiSchema.Describe(TypeInfo(ICity), 'A city')
     .Prop('Code').Desc('IBGE code').Example('4205407')
-    .Prop('Population').Desc('Inhabitants; null when unknown');
+    .Prop('Population').Desc('Inhabitants; null when unknown')
+    .Prop('Version').Desc('The row''s version; If-Match takes it in quotes, as in "3"');
 
 end.
