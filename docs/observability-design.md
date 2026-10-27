@@ -353,7 +353,53 @@ Verified: 215 unit tests, 0 leaks, and HTTP 146 + 65 checks on FPC Win64 and Lin
   exported, route templates only. Delphi 12 Win32 and Win64: the same tests and checks pass,
   and the collector accepted every batch from `THTTPClient` (125 spans each, checked).
 - Not done: metrics over OTLP (Prometheus covers them; `PcMetrics.Snapshot` is there when
-  wanted), span events (an exception as an `exception` event), logs over OTLP.
+  wanted; done in 0.26.0, below), span events (an exception as an `exception` event), logs over
+  OTLP.
+
+## Metrics over OTLP (0.26.0)
+
+Asked by pascal-agenda-faa (its `docs/design.md`, "M5: design", decision 4, 2026-10-27): its
+worker is a console program with no HTTP, so it has no `/metrics` to scrape; it already sends
+spans to a collector, and the metrics go the same way (worker -> collector -> Prometheus), so the
+worker opens no port. Decisions taken with the user (2026-10-27):
+
+1. **An object the program owns**, `TOtlpMetricsExporter.Create(registry, options, onError)`:
+   the constructor starts the thread, `Free` joins it and exports once more. Not taken: class
+   methods like `TPcTracing.Start`/`Shutdown` (process-wide state, one per process). Nothing is
+   created lazily.
+2. **Its own options record**, `TOtlpMetricsOptions` (service name and version, resource
+   attributes, endpoint, headers, timeout, interval), `FromEnvironment` reading the `OTEL_*`
+   names through a lookup (`ReadAppConfig` keeps the `.env`). Not taken: reusing
+   `TPcTracingOptions` (a program without tracing would build tracing options).
+3. **CI goes as far as Prometheus**: the collector's `prometheus` exporter, a `prom/prometheus`
+   container that scrapes it, and PromQL queries (`tools/otlp_metrics_check.py`), plus `promtool`
+   on the collector's page. Not taken: the collector's page alone (doesn't prove a scrape).
+4. **Sample 02 in CI, sample 04 by hand**: 02 already sends spans to the collector in CI; 04
+   (consumers) counts what its consumer handled and pushes it, run by hand as its guide says.
+
+Built:
+- `OtlpMetricsJson` (pure): counter -> monotonic `sum`, up-down counter -> non-monotonic `sum`,
+  gauge -> `gauge`, histogram -> `histogram` (`explicitBounds`, `bucketCounts` as strings);
+  cumulative (`aggregationTemporality` 2), each sum and histogram starting when the exporter was
+  created; `asDouble`, with the protobuf JSON mapping's `"Infinity"`/`"NaN"` strings for what JSON
+  can't write; a metric without series left out, and nothing sent when no metric has one.
+- The thread waits on an event for the interval, so `Free` doesn't wait an interval; one lock
+  around an export, so `ExportNow` from another thread can't overlap the thread's. A failure
+  (status other than 2xx, an exception) goes to the callback as `metric export failed: ...`,
+  never to the program; the next export sends the cumulative values again.
+- `IOtlpSender` is the seam the tests use; `TOtlpHttpSender` POSTs through the same routine as
+  the span exporter (`OtlpPost`, fphttpclient on FPC, `THTTPClient` on Delphi).
+
+Measured: CI (FPC Linux), sample 02 pushing every 500 ms, Prometheus has
+`http_server_request_duration_seconds_count{job="cities-api"}` (131 requests in the run, by
+route), the `+Inf` and `0.005` buckets, `http_server_active_requests` and fourteen
+`db_client_connection_*` series; `promtool` accepts the collector's page with the one lint
+already accepted (`db_client_connection_count`). By hand, sample 04 on FPC/Windows:
+`orders_consumed_total{job="siblings-probe",result="done"} 3` and `result="rejected"` 1, for three
+orders and one bad message. The collector names a counter `_total`, adds the unit's suffix
+(`_seconds`) and drops a `{...}` unit.
+
+Not done: delta temporality, exemplars, the `OTEL_METRICS_EXPORTER` switch, gzip.
 
 ## Phase B: what was done (2026-10-09)
 

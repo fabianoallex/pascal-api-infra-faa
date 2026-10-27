@@ -36,7 +36,15 @@ program MessagingSample;
   run. The consumer reads each message into an IOrder; one it can't read
   raises, and pascal-amqp-faa (0.4.1 or later) calls OnConsumerError, which
   logs, then rejects it without requeue (to the queue's dead-letter exchange
-  if it has one, else dropped). Until 0.3.0 it stayed unacknowledged. *)
+  if it has one, else dropped). Until 0.3.0 it stayed unacknowledged.
+
+  Metrics over OTLP (0.26.0): the consumer counts what it handled
+  (orders.consumed, by result: done or rejected) in PcMetrics, and with
+  OTEL_EXPORTER_OTLP_ENDPOINT set a TOtlpMetricsExporter pushes the registry
+  to that collector every OTEL_METRIC_EXPORT_INTERVAL ms: the way a worker
+  without HTTP reaches Prometheus. Measured on FPC 3.2.2/Windows on
+  2026-10-27 against the collector and Prometheus of tools/otelcol.yaml and
+  tools/prometheus.yml. *)
 
 {$MODE DELPHI}{$H+}
 
@@ -46,10 +54,11 @@ uses
   Horse,
   PascalCommon.Tracing,
   PascalCommon.SafeLog,
+  PascalCommon.Metrics,
   Redis.Types, Redis.Client, Redis.Commands.Strings,
   AMQP.Connection, AMQP.Queue.Methods, AMQP.Basic.Methods,
   PascalJsonMapper.Json, PascalJsonMapper.Mapper,
-  PascalApi.Http, PascalApi.Text, PascalApi.Config,
+  PascalApi.Http, PascalApi.Text, PascalApi.Config, PascalApi.Otlp,
   PascalApi.Horse.Middlewares;
 
 type
@@ -102,6 +111,8 @@ var
   GPublisher, GConsumer, GConfirmed: TAMQPChannel;
   GQueue: string;
   GConsumed: Integer;
+  GOrders: TPcCounter;
+  GMetrics: TOtlpMetricsExporter;
   GLastItem: string; // under GOut
   GPort: Integer;
   GRedisParams: TRedisParams;
@@ -141,6 +152,7 @@ begin
   // raises, and OnOrderError logs it (pascal-amqp-faa 0.4.0).
   LOrder := TJsonMapper.Shared.FromJson<IOrder>(ADelivery.BodyAsText);
   InterlockedIncrement(GConsumed);
+  GOrders.Labels(['done']).Inc;
   GOut.Enter;
   try
     GLastItem := LOrder.Item;
@@ -161,6 +173,7 @@ begin
   // message that always fails.
   // Inside the message's 'process' span (pascal-amqp-faa 0.4.1; 0.4.0 had
   // already finished it), so the line carries the trace id.
+  GOrders.Labels(['rejected']).Inc;
   TErrorHandlerMiddleware.LogError(Format('order rejected: %s: %s',
     [AError.ClassName, AError.Message]), TraceIdOf(TPcTracing.Current));
 end;
@@ -308,6 +321,13 @@ begin
   GOut := TCriticalSection.Create;
   GApp := TApp.Create;
   TPcTracing.Start(TPcTracingOptions.Default('siblings-probe', '1'), TPrintExporter.Create);
+  GOrders := PcMetrics.Counter('orders.consumed', '{order}',
+    'Orders the consumer handled, by result', ['result']);
+  // Pushed, as a worker without HTTP would (0.26.0). Never freed here:
+  // Listen doesn't return; a worker frees it on its stop, for the last export.
+  if TAppConfig.Get('OTEL_EXPORTER_OTLP_ENDPOINT', '') <> '' then
+    GMetrics := TOtlpMetricsExporter.Create(PcMetrics,
+      TOtlpMetricsOptions.FromEnvironment('siblings-probe', '1', ReadAppConfig), GApp.Line);
 
   GRedisParams := RedisDefaultParams;
   GRedisParams.Port := StrToIntDef(ParamStr(2), 6379);

@@ -4,8 +4,9 @@ What a running API tells the people who run it: one access line per request, an 
 what went wrong, a request id that ties them together, metrics a Prometheus server scrapes,
 health endpoints for an orchestrator, and spans sent to an OpenTelemetry collector. The code
 comes from the three samples, which `tools/http_scenarios*.sh` check over HTTP; CI also checks
-the metrics with `promtool` and the spans with a real OpenTelemetry Collector
-(`tools/otlp_check.py`). The decisions behind all of this are in
+the metrics with `promtool`, the spans with a real OpenTelemetry Collector
+(`tools/otlp_check.py`), and the metrics pushed over OTLP with that collector and a real
+Prometheus (`tools/otlp_metrics_check.py`). The decisions behind all of this are in
 [docs/observability-design.md](../observability-design.md).
 
 ## What it solves
@@ -202,6 +203,65 @@ Your own metrics go in the same registry, pascal-common-faa's `PcMetrics`
 (`PascalCommon.Metrics`), and every one needs a description: `promtool` rejects a metric without
 help text.
 
+#### Pushed instead of scraped: `TOtlpMetricsExporter` (0.26.0)
+
+A program with no HTTP server (a worker, a consumer) has no `/metrics` to scrape. It can push the
+same registry to an OpenTelemetry Collector, which Prometheus scrapes instead. From
+`samples/04-messaging/MessagingSample.lpr` (sample 02 does the same next to its `/metrics`):
+
+```pascal
+GOrders := PcMetrics.Counter('orders.consumed', '{order}',
+  'Orders the consumer handled, by result', ['result']);
+if TAppConfig.Get('OTEL_EXPORTER_OTLP_ENDPOINT', '') <> '' then
+  GMetrics := TOtlpMetricsExporter.Create(PcMetrics,
+    TOtlpMetricsOptions.FromEnvironment('siblings-probe', '1', ReadAppConfig), GApp.Line);
+...
+GMetrics.Free; // at the program's stop: the last export, then the thread is joined
+```
+
+The exporter has a thread of its own that sends every `OTEL_METRIC_EXPORT_INTERVAL` ms (60000,
+the specification's default), and `Free` sends once more. Unit-tested with a fake sender
+(`MetricsExporter_*`).
+
+| `PcMetrics` | OTLP | Prometheus, through the collector (measured) |
+|---|---|---|
+| counter | `sum`, monotonic, cumulative | `orders_consumed_total`: `_total` added, `{order}` dropped |
+| up-down counter | `sum`, not monotonic, cumulative | a gauge: `http_server_active_requests` |
+| gauge | `gauge` | a gauge |
+| histogram | `histogram`, `explicitBounds` and `bucketCounts` | `http_server_request_duration_seconds_bucket`, `_sum`, `_count` |
+
+The labels become attributes, the resource is the spans' one (`service.name`, `service.version`,
+`OTEL_RESOURCE_ATTRIBUTES`), and the collector turns `service.name` into Prometheus' `job` label.
+The settings: `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`, else `OTEL_EXPORTER_OTLP_ENDPOINT` +
+`/v1/metrics`, else `http://localhost:4318/v1/metrics`; headers and timeout from
+`OTEL_EXPORTER_OTLP_METRICS_HEADERS`/`_TIMEOUT`, else the general `OTEL_EXPORTER_OTLP_` ones.
+
+On the collector, a `prometheus` exporter in a metrics pipeline (`tools/otelcol.yaml`):
+
+```yaml
+exporters:
+  prometheus:
+    endpoint: 0.0.0.0:8889
+service:
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      exporters: [prometheus]
+```
+
+and Prometheus scrapes that port with `honor_labels: true` (`tools/prometheus.yml`), so `job`
+stays the service's name; without it Prometheus would rename it `exported_job` (Prometheus'
+documentation; not tried here). Checked in CI: sample 02 pushes every 500 ms, and
+`tools/otlp_metrics_check.py` finds in Prometheus its request count by route, the histogram's
+buckets, the active requests and pascal-db-faa's pool metrics; `promtool` accepts the collector's
+page. Measured by hand with sample 04 (2026-10-27, FPC/Windows): three orders and one rejected
+message gave `orders_consumed_total{job="siblings-probe",result="done"} 3` and
+`{result="rejected"} 1`.
+
+A failed export (the collector down, a status other than 2xx) goes to the callback as
+`metric export failed: ...`, never to the program; the next one sends the cumulative values
+again, so only the points in between are missing.
+
 ### 8. Health
 
 ```pascal
@@ -262,7 +322,9 @@ collector, `FileLog`. The access line goes wherever your `TLogProc` sends it.
 
 ### Metrics, spans, or both
 
-Metrics are cheap and always on: rates, latencies, saturation. Spans answer "why was *this*
+Metrics are cheap and always on: rates, latencies, saturation. Scraped (`/metrics`) when the
+program serves HTTP; pushed (`TOtlpMetricsExporter`) when it doesn't, or when everything already
+goes through a collector. An API can do both from the one registry, as sample 02 does. Spans answer "why was *this*
 request slow"; with many requests, keep a ratio (`OTEL_TRACES_SAMPLER_ARG`). The metrics
 middleware and the logger are separate, so you can have either.
 
@@ -283,6 +345,8 @@ middleware and the logger are separate, so you can have either.
 - **Spans still queued when the program is killed** are lost: the samples never call
   `TPcTracing.Shutdown` (`Listen` doesn't return). Not measured; keep the batch interval short if
   the last seconds matter.
+- **A killed program loses up to one interval of metrics**: the last export happens in `Free`.
+  Free the exporter on the program's stop, and keep the interval short if the last seconds matter.
 - **Log lines through plain `Writeln`**: not UTF-8 with output in a file or a pipe, even with
   `PcSetSafeLogUtf8(True)` (only `SafeWriteln` follows it); step 2.
 - **An https collector on FPC** needs the `opensslsockets` unit in your program (comment in
@@ -292,8 +356,10 @@ middleware and the logger are separate, so you can have either.
 
 The pieces are tested without a server: the id rules (`ResolveRequestTrace`), the access line
 (`AccessLogLine`, `AccessLogJson`), the metric labels (`MetricRoute`, `MetricMethod`), the health
-answer (`HealthJson`) and the OTLP body (`OtlpTracesJson`, byte for byte), in
-`PascalApi.HttpTests` and `PascalApi.OtlpTests`.
+answer (`HealthJson`) and the OTLP bodies (`OtlpTracesJson` and `OtlpMetricsJson`, byte for byte),
+in `PascalApi.HttpTests` and `PascalApi.OtlpTests`. `TOtlpMetricsExporter` takes an `IOtlpSender`:
+a fake one records the bodies, and the tests check the last export on `Free` and a failure going
+to the callback, without a network.
 
 Over HTTP, the scenarios read what the server wrote when the runner passes its output in
 `SERVER_LOG`: the error line by the id the client got, the client's address in the access line,
@@ -305,7 +371,8 @@ grep -q "something broke trace_id=$FAIL_ID" "$SERVER_LOG" && ok \
 ```
 
 For spans, CI starts an OpenTelemetry Collector that writes what it receives to a file, and
-`tools/otlp_check.py` checks the parent-child links, the names and the statuses.
+`tools/otlp_check.py` checks the parent-child links, the names and the statuses. For pushed
+metrics, a Prometheus scrapes that collector, and `tools/otlp_metrics_check.py` asks it with PromQL.
 
 ## Reference
 
@@ -313,7 +380,9 @@ For spans, CI starts an OpenTelemetry Collector that writes what it receives to 
 - `PascalApi.Horse.Observability`: `TMetricsMiddleware`, `TMetricsEndpoint`, `THealthEndpoint`.
 - `PascalApi.Http`: `ResolveRequestTrace`, `AccessLogLine`, `AccessLogJson`, `TrustedClientIp`,
   `MetricRoute`, `HealthJson`.
-- `PascalApi.FileLog`, `PascalApi.Otlp`; pascal-common-faa's `PascalCommon.Tracing` and
+- `PascalApi.FileLog`, `PascalApi.Otlp` (`TOtlpHttpExporter`, `TOtlpMetricsExporter`,
+  `TOtlpMetricsOptions`, `OtlpMetricsJson`); pascal-common-faa's `PascalCommon.Tracing` and
   `PascalCommon.Metrics`.
 - [docs/observability-design.md](../observability-design.md): the decisions and what was measured.
-- `tools/http_scenarios*.sh`, `tools/otlp_check.py`, `tools/promtool_check.sh`.
+- `tools/http_scenarios*.sh`, `tools/otlp_check.py`, `tools/otlp_metrics_check.py`,
+  `tools/otelcol.yaml`, `tools/prometheus.yml`, `tools/promtool_check.sh`.

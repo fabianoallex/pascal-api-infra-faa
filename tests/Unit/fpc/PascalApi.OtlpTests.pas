@@ -10,7 +10,11 @@
   byte for byte (ids as hex, enums as numbers, 64-bit integers as strings,
   typed attribute values), the resource attributes, the traces endpoint,
   the 'key=value' lists of the OTEL_* variables and ReadAppConfig as the
-  lookup of TPcTracingOptions.FromEnvironment.
+  lookup of TPcTracingOptions.FromEnvironment; and the metrics (0.26.0):
+  the body of each kind (sum, gauge, histogram, labels, an infinity), the
+  options from the OTEL_* names, and TOtlpMetricsExporter through a fake
+  sender (the last export on Free, a failure to the callback, the thread's
+  interval).
   The body is also checked by a real OpenTelemetry Collector in CI
   (tools/test_http_docker.sh).
 
@@ -23,16 +27,47 @@ uses
   fpcunit, testregistry,
   Classes,
   SysUtils,
+  Math,
   PascalApi.Text,
   PascalApi.Config,
   PascalApi.Http,
+  SyncObjs,
   PascalCommon.Tracing,
+  PascalCommon.Metrics,
   PascalApi.Otlp,
   PascalApi.Version;
 
 type
+  /// Records the bodies; fails (False, or raises) when told to.
+  TFakeOtlpSender = class(TInterfacedObject, IOtlpSender)
+  private
+    FLock: TCriticalSection;
+    FCount: Integer;
+    FLast: string;
+  public
+    Answer: Boolean;
+    Raises: Boolean;
+    constructor Create;
+    destructor Destroy; override;
+    function Send(const ABody: string; out AError: string): Boolean;
+    function Count: Integer;
+    function Last: string;
+  end;
+
   TOtlpTests = class(TTestCase)
+  private
+    FErrors: TStringList;
+    procedure OnError(const ALine: string);
   published
+    procedure MetricsJson_CountersWithLabels;
+    procedure MetricsJson_GaugeHasNoStart_InfinityAsString;
+    procedure MetricsJson_Histogram;
+    procedure MetricsJson_NoSeries_Empty;
+    procedure MetricsEndpoint_MetricsThenBaseThenDefault;
+    procedure MetricsOptions_FromEnvironment;
+    procedure MetricsExporter_LastExportOnFree;
+    procedure MetricsExporter_FailureToTheCallback;
+    procedure MetricsExporter_ThreadExportsEachInterval;
     procedure TracesJson_FullSpan;
     procedure TracesJson_RootSpan_NoParentNoMessage;
     procedure Resource_ExtraAttributesAddAndReplace;
@@ -213,7 +248,332 @@ begin
   end;
 end;
 
+{ TFakeOtlpSender }
+
+constructor TFakeOtlpSender.Create;
+begin
+  inherited Create;
+  FLock := TCriticalSection.Create;
+  Answer := True;
+end;
+
+destructor TFakeOtlpSender.Destroy;
+begin
+  FLock.Free;
+  inherited;
+end;
+
+function TFakeOtlpSender.Send(const ABody: string; out AError: string): Boolean;
+begin
+  FLock.Enter;
+  try
+    Inc(FCount);
+    FLast := ABody;
+  finally
+    FLock.Leave;
+  end;
+  if Raises then
+    raise Exception.Create('connection refused');
+  Result := Answer;
+  if Result then
+    AError := ''
+  else
+    AError := 'http://c:4318/v1/metrics answered 503';
+end;
+
+function TFakeOtlpSender.Count: Integer;
+begin
+  FLock.Enter;
+  try
+    Result := FCount;
+  finally
+    FLock.Leave;
+  end;
+end;
+
+function TFakeOtlpSender.Last: string;
+begin
+  FLock.Enter;
+  try
+    Result := FLast;
+  finally
+    FLock.Leave;
+  end;
+end;
+
+{ Metrics }
+
+procedure TOtlpTests.OnError(const ALine: string);
+begin
+  if FErrors <> nil then
+    FErrors.Add(ALine);
+end;
+
+function MetricsHead: string;
+begin
+  Result := '{"resourceMetrics":[{' + Resource('') + ',"scopeMetrics":[{' + Scope + ',"metrics":[';
+end;
+
+const
+  METRICS_TAIL = ']}]}]}';
+
+procedure TOtlpTests.MetricsJson_CountersWithLabels;
+var
+  R: TPcMetricRegistry;
+  C: TPcCounter;
+  U: TPcUpDownCounter;
+begin
+  R := TPcMetricRegistry.Create;
+  try
+    C := R.Counter('jobs.done', '{job}', 'Jobs done', ['kind']);
+    C.Labels(['email']).Inc;
+    C.Labels(['email']).Inc;
+    C.Labels(['sms']).Add(1.5);
+    U := R.UpDownCounter('jobs.running', '{job}', 'Jobs running', []);
+    U.Inc;
+    U.Inc;
+    U.Dec;
+    TAssert.AssertEquals(MetricsHead +
+      '{"name":"jobs.done","description":"Jobs done","unit":"{job}","sum":{"dataPoints":[' +
+      '{"attributes":[{"key":"kind","value":{"stringValue":"email"}}],' +
+      '"startTimeUnixNano":"100","timeUnixNano":"200","asDouble":2},' +
+      '{"attributes":[{"key":"kind","value":{"stringValue":"sms"}}],' +
+      '"startTimeUnixNano":"100","timeUnixNano":"200","asDouble":1.5}],' +
+      '"aggregationTemporality":2,"isMonotonic":true}},' +
+      '{"name":"jobs.running","description":"Jobs running","unit":"{job}","sum":{"dataPoints":[' +
+      '{"attributes":[],"startTimeUnixNano":"100","timeUnixNano":"200","asDouble":1}],' +
+      '"aggregationTemporality":2,"isMonotonic":false}}' + METRICS_TAIL,
+      OtlpMetricsJson(TOtlpMetricsOptions.Default('svc', '1.2.3'), R, 100, 200));
+  finally
+    R.Free;
+  end;
+end;
+
+procedure TOtlpTests.MetricsJson_GaugeHasNoStart_InfinityAsString;
+var
+  R: TPcMetricRegistry;
+  G: TPcGauge;
+begin
+  R := TPcMetricRegistry.Create;
+  try
+    G := R.Gauge('queue.depth', '', '', ['queue']);
+    G.Labels(['a']).SetValue(-3.25);
+    G.Labels(['b']).SetValue(Infinity);
+    TAssert.AssertEquals(MetricsHead +
+      '{"name":"queue.depth","gauge":{"dataPoints":[' +
+      '{"attributes":[{"key":"queue","value":{"stringValue":"a"}}],"timeUnixNano":"200","asDouble":-3.25},' +
+      '{"attributes":[{"key":"queue","value":{"stringValue":"b"}}],"timeUnixNano":"200","asDouble":"Infinity"}' +
+      ']}}' + METRICS_TAIL,
+      OtlpMetricsJson(TOtlpMetricsOptions.Default('svc', '1.2.3'), R, 100, 200));
+  finally
+    R.Free;
+  end;
+end;
+
+procedure TOtlpTests.MetricsJson_Histogram;
+var
+  R: TPcMetricRegistry;
+  H: TPcHistogram;
+begin
+  R := TPcMetricRegistry.Create;
+  try
+    H := R.Histogram('send.duration', 's', 'Send time', ['result'], [0.1, 1]);
+    H.Labels(['ok']).Observe(0.25);
+    H.Labels(['ok']).Observe(0.5);
+    H.Labels(['ok']).Observe(4);
+    TAssert.AssertEquals(MetricsHead +
+      '{"name":"send.duration","description":"Send time","unit":"s","histogram":{"dataPoints":[' +
+      '{"attributes":[{"key":"result","value":{"stringValue":"ok"}}],' +
+      '"startTimeUnixNano":"100","timeUnixNano":"200","count":"3","sum":4.75,' +
+      '"bucketCounts":["0","2","1"],"explicitBounds":[0.1,1]}],' +
+      '"aggregationTemporality":2}}' + METRICS_TAIL,
+      OtlpMetricsJson(TOtlpMetricsOptions.Default('svc', '1.2.3'), R, 100, 200));
+  finally
+    R.Free;
+  end;
+end;
+
+procedure TOtlpTests.MetricsJson_NoSeries_Empty;
+var
+  R: TPcMetricRegistry;
+begin
+  R := TPcMetricRegistry.Create;
+  try
+    TAssert.AssertEquals('', OtlpMetricsJson(TOtlpMetricsOptions.Default('svc', '1'), R, 1, 2));
+    // A metric with labels has no series until one is used.
+    R.Counter('jobs.done', '', 'Jobs done', ['kind']);
+    TAssert.AssertEquals('', OtlpMetricsJson(TOtlpMetricsOptions.Default('svc', '1'), R, 1, 2));
+    R.Counter('jobs.done', '', 'Jobs done', ['kind']).Labels(['x']).Inc;
+    TAssert.AssertTrue(Pos('"jobs.done"', OtlpMetricsJson(TOtlpMetricsOptions.Default('svc', '1'),
+      R, 1, 2)) > 0);
+  finally
+    R.Free;
+  end;
+end;
+
+procedure TOtlpTests.MetricsEndpoint_MetricsThenBaseThenDefault;
+begin
+  TAssert.AssertEquals('http://c:4318/m', OtlpMetricsEndpoint(' http://c:4318/m ', 'http://b:4318'));
+  TAssert.AssertEquals('http://b:4318/v1/metrics', OtlpMetricsEndpoint('', 'http://b:4318/'));
+  TAssert.AssertEquals('http://localhost:4318/v1/metrics', OtlpMetricsEndpoint('', ''));
+end;
+
+procedure TOtlpTests.MetricsOptions_FromEnvironment;
+var
+  O: TOtlpMetricsOptions;
+begin
+  GFakeEnv := TStringList.Create;
+  try
+    O := TOtlpMetricsOptions.FromEnvironment('worker', '2.0', FakeEnvironment);
+    TAssert.AssertEquals('worker', O.ServiceName);
+    TAssert.AssertEquals('http://localhost:4318/v1/metrics', O.Endpoint);
+    TAssert.AssertEquals(0, Length(O.Headers));
+    TAssert.AssertEquals(10000, O.TimeoutMs);
+    TAssert.AssertEquals(60000, O.IntervalMs);
+
+    // The general names.
+    GFakeEnv.Values['OTEL_SERVICE_NAME'] := 'agenda-worker';
+    GFakeEnv.Values['OTEL_RESOURCE_ATTRIBUTES'] := 'deployment.environment=test';
+    GFakeEnv.Values['OTEL_EXPORTER_OTLP_ENDPOINT'] := 'http://collector:4318';
+    GFakeEnv.Values['OTEL_EXPORTER_OTLP_HEADERS'] := 'api-key=general';
+    GFakeEnv.Values['OTEL_EXPORTER_OTLP_TIMEOUT'] := '2500';
+    GFakeEnv.Values['OTEL_METRIC_EXPORT_INTERVAL'] := '1000';
+    O := TOtlpMetricsOptions.FromEnvironment('worker', '2.0', FakeEnvironment);
+    TAssert.AssertEquals('agenda-worker', O.ServiceName);
+    TAssert.AssertEquals('2.0', O.ServiceVersion);
+    TAssert.AssertEquals('deployment.environment=test', O.ResourceAttributes);
+    TAssert.AssertEquals('http://collector:4318/v1/metrics', O.Endpoint);
+    TAssert.AssertEquals(1, Length(O.Headers));
+    TAssert.AssertEquals('general', O.Headers[0].Value);
+    TAssert.AssertEquals(2500, O.TimeoutMs);
+    TAssert.AssertEquals(1000, O.IntervalMs);
+
+    // The metrics' own names win.
+    GFakeEnv.Values['OTEL_EXPORTER_OTLP_METRICS_ENDPOINT'] := 'http://m:4318/custom';
+    GFakeEnv.Values['OTEL_EXPORTER_OTLP_METRICS_HEADERS'] := 'api-key=metrics';
+    GFakeEnv.Values['OTEL_EXPORTER_OTLP_METRICS_TIMEOUT'] := '700';
+    O := TOtlpMetricsOptions.FromEnvironment('worker', '2.0', FakeEnvironment);
+    TAssert.AssertEquals('http://m:4318/custom', O.Endpoint);
+    TAssert.AssertEquals('metrics', O.Headers[0].Value);
+    TAssert.AssertEquals(700, O.TimeoutMs);
+
+    // Not a positive count of milliseconds: the default.
+    GFakeEnv.Values['OTEL_METRIC_EXPORT_INTERVAL'] := '$3E8';
+    TAssert.AssertEquals(60000, TOtlpMetricsOptions.FromEnvironment('w', '', FakeEnvironment).IntervalMs);
+    GFakeEnv.Values['OTEL_METRIC_EXPORT_INTERVAL'] := '0';
+    TAssert.AssertEquals(60000, TOtlpMetricsOptions.FromEnvironment('w', '', FakeEnvironment).IntervalMs);
+    GFakeEnv.Values['OTEL_METRIC_EXPORT_INTERVAL'] := '99999999999';
+    TAssert.AssertEquals(60000, TOtlpMetricsOptions.FromEnvironment('w', '', FakeEnvironment).IntervalMs);
+  finally
+    FreeAndNil(GFakeEnv);
+  end;
+end;
+
+procedure TOtlpTests.MetricsExporter_LastExportOnFree;
+var
+  R: TPcMetricRegistry;
+  LFake: TFakeOtlpSender;
+  LSender: IOtlpSender;
+  E: TOtlpMetricsExporter;
+begin
+  R := TPcMetricRegistry.Create;
+  LFake := TFakeOtlpSender.Create;
+  LSender := LFake;
+  try
+    E := TOtlpMetricsExporter.Create(R, TOtlpMetricsOptions.Default('svc', '1'), LSender, OnError,
+      False);
+    try
+      // Nothing recorded yet: nothing sent.
+      TAssert.AssertTrue(E.ExportNow);
+      TAssert.AssertEquals(0, LFake.Count);
+      R.Counter('jobs.done', '', 'Jobs done', []).Inc;
+    finally
+      E.Free;
+    end;
+    TAssert.AssertEquals(1, LFake.Count);
+    TAssert.AssertTrue(Pos('"name":"jobs.done"', LFake.Last) > 0);
+    TAssert.AssertTrue(Pos('"asDouble":1', LFake.Last) > 0);
+  finally
+    LSender := nil;
+    R.Free;
+  end;
+end;
+
+procedure TOtlpTests.MetricsExporter_FailureToTheCallback;
+var
+  R: TPcMetricRegistry;
+  LFake: TFakeOtlpSender;
+  LSender: IOtlpSender;
+  E: TOtlpMetricsExporter;
+begin
+  R := TPcMetricRegistry.Create;
+  LFake := TFakeOtlpSender.Create;
+  LSender := LFake;
+  FErrors := TStringList.Create;
+  try
+    R.Gauge('queue.depth', '', '', []).SetValue(3);
+    E := TOtlpMetricsExporter.Create(R, TOtlpMetricsOptions.Default('svc', '1'), LSender, OnError,
+      False);
+    try
+      LFake.Answer := False;
+      TAssert.AssertFalse(E.ExportNow);
+      LFake.Raises := True;
+      TAssert.AssertFalse(E.ExportNow); // never raises
+    finally
+      E.Free; // the last export fails too, and stays in the callback
+    end;
+    TAssert.AssertEquals(3, FErrors.Count);
+    TAssert.AssertEquals('metric export failed: http://c:4318/v1/metrics answered 503', FErrors[0]);
+    TAssert.AssertEquals('metric export failed: Exception: connection refused', FErrors[1]);
+  finally
+    FreeAndNil(FErrors);
+    LSender := nil;
+    R.Free;
+  end;
+end;
+
+procedure TOtlpTests.MetricsExporter_ThreadExportsEachInterval;
+var
+  R: TPcMetricRegistry;
+  LFake: TFakeOtlpSender;
+  LSender: IOtlpSender;
+  E: TOtlpMetricsExporter;
+  O: TOtlpMetricsOptions;
+  I, LBefore: Integer;
+begin
+  R := TPcMetricRegistry.Create;
+  LFake := TFakeOtlpSender.Create;
+  LSender := LFake;
+  try
+    R.Counter('jobs.done', '', 'Jobs done', []).Inc;
+    O := TOtlpMetricsOptions.Default('svc', '1');
+    O.IntervalMs := 20;
+    E := TOtlpMetricsExporter.Create(R, O, LSender, OnError, True);
+    try
+      for I := 1 to 200 do
+      begin
+        if LFake.Count >= 2 then
+          Break;
+        Sleep(10);
+      end;
+      TAssert.AssertTrue('two exports by the thread', LFake.Count >= 2);
+      LBefore := LFake.Count;
+    finally
+      E.Free;
+    end;
+    // Free joined the thread and sent once more; nothing after that.
+    TAssert.AssertTrue(LFake.Count >= LBefore + 1);
+    LBefore := LFake.Count;
+    Sleep(60);
+    TAssert.AssertEquals(LBefore, LFake.Count);
+  finally
+    LSender := nil;
+    R.Free;
+  end;
+end;
+
 initialization
   RegisterTest(TOtlpTests);
+
 
 end.

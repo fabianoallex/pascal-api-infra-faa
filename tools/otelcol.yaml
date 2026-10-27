@@ -4,6 +4,11 @@
 # collector is the reference implementation here: a body it can't decode
 # is answered 400, the sample logs "span export failed", and the check
 # finds nothing.
+#
+# Metrics (0.26.0): sample 02 pushes its registry over OTLP; the prometheus
+# exporter serves them on :8889, which tools/prometheus.yml scrapes, and
+# tools/otlp_metrics_check.py asks that Prometheus for them: the path a
+# program without HTTP (a worker) takes to a dashboard.
 receivers:
   otlp:
     protocols:
@@ -14,12 +19,17 @@ exporters:
   file:
     path: /otel/traces.json
     flush_interval: 100ms
+  prometheus:
+    endpoint: 0.0.0.0:8889
 
 service:
   pipelines:
     traces:
       receivers: [otlp]
       exporters: [file]
+    metrics:
+      receivers: [otlp]
+      exporters: [prometheus]
   telemetry:
     logs:
       level: warn

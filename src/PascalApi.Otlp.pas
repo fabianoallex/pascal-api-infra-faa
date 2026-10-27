@@ -26,25 +26,138 @@ unit PascalApi.Otlp;
   executor. On FPC an https endpoint needs the program to use the
   opensslsockets unit (fphttpclient finds its TLS handler there); this unit
   doesn't, so an API that sends to a local collector over http doesn't load
-  OpenSSL. Any status other than 2xx is a failed batch. *)
+  OpenSSL. Any status other than 2xx is a failed batch.
+
+  Metrics (0.26.0, asked by pascal-agenda-faa for a worker without HTTP):
+  TOtlpMetricsExporter sends a TPcMetricRegistry (usually PcMetrics) to
+  /v1/metrics every IntervalMs on a thread of its own, and once more when
+  it is freed, so a console program pushes what /metrics would serve.
+
+    LMetrics := TOtlpMetricsExporter.Create(PcMetrics,
+      TOtlpMetricsOptions.FromEnvironment('agenda-worker', '1.0.0', ReadAppConfig), LOnError);
+    try
+      RunWorker;
+    finally
+      LMetrics.Free; // the last export, then the thread is joined
+    end;
+
+  The body (pure, OtlpMetricsJson) is the specification's JSON mapping: a
+  counter is a monotonic sum, an up-down counter a non-monotonic sum, a
+  gauge a gauge, a histogram a histogram (explicitBounds, bucketCounts);
+  cumulative temporality, every point starting when the exporter was
+  created; values as asDouble; uint64 counts as strings; the labels as
+  string attributes; the resource as for traces. A metric without series
+  is left out, and an export with no series sends nothing. Settings:
+  OTEL_EXPORTER_OTLP_METRICS_ENDPOINT as is, else OTEL_EXPORTER_OTLP_ENDPOINT
+  + '/v1/metrics', else http://localhost:4318/v1/metrics; headers and
+  timeout from OTEL_EXPORTER_OTLP_METRICS_HEADERS/_TIMEOUT, else the
+  OTEL_EXPORTER_OTLP_ ones; OTEL_METRIC_EXPORT_INTERVAL (60000 ms, the
+  specification's default). A failed export (a status other than 2xx, the
+  collector down) goes to the error callback as "metric export failed:
+  ...", never to the program; the next one sends the cumulative values
+  again, so nothing is lost but the points in between. *)
 
 interface
 
 uses
   SysUtils,
+  Classes,
+  SyncObjs,
   PascalApi.Http,
+  PascalCommon.Metrics,
   PascalCommon.Tracing;
 
 const
   OTLP_DEFAULT_TRACES_ENDPOINT = 'http://localhost:4318/v1/traces';
+  OTLP_DEFAULT_METRICS_ENDPOINT = 'http://localhost:4318/v1/metrics';
   OTLP_DEFAULT_TIMEOUT_MS = 10000;
+  /// OTEL_METRIC_EXPORT_INTERVAL's default, in milliseconds.
+  OTLP_DEFAULT_METRIC_INTERVAL_MS = 60000;
   /// telemetry.sdk.name of the resource.
   OTLP_SDK_NAME = 'pascal-api-infra-faa';
+
+type
+  /// Where and how often TOtlpMetricsExporter sends (0.26.0).
+  TOtlpMetricsOptions = record
+    ServiceName: string;
+    ServiceVersion: string;
+    /// 'key=value,key=value' (OTEL_RESOURCE_ATTRIBUTES).
+    ResourceAttributes: string;
+    Endpoint: string;
+    Headers: TArray<THttpHeader>;
+    TimeoutMs: Integer;
+    IntervalMs: Integer;
+    /// The default endpoint, no headers, 10 s timeout, 60 s interval.
+    class function Default(const AServiceName, AServiceVersion: string): TOtlpMetricsOptions; static;
+    /// Default, then the OTEL_* variables through ALookup (ReadAppConfig keeps
+    /// the .env; see the unit header): OTEL_SERVICE_NAME replaces
+    /// AServiceName; an invalid number keeps the default.
+    class function FromEnvironment(const AServiceName, AServiceVersion: string;
+      ALookup: TPcEnvironmentLookup): TOtlpMetricsOptions; static;
+  end;
+
+  /// Sends one OTLP request body; TOtlpMetricsExporter's seam for tests.
+  IOtlpSender = interface
+    ['{FC13E684-3479-4B54-B0D0-85BCC6791187}']
+    /// False (and AError) for a status other than 2xx; may raise on a
+    /// transport failure.
+    function Send(const ABody: string; out AError: string): Boolean;
+  end;
+
+  /// POSTs to AEndpoint, as TOtlpHttpExporter does.
+  TOtlpHttpSender = class(TInterfacedObject, IOtlpSender)
+  private
+    FEndpoint: string;
+    FHeaders: TArray<THttpHeader>;
+    FTimeoutMs: Integer;
+  public
+    constructor Create(const AEndpoint: string; const AHeaders: TArray<THttpHeader>;
+      ATimeoutMs: Integer = OTLP_DEFAULT_TIMEOUT_MS);
+    function Send(const ABody: string; out AError: string): Boolean;
+  end;
+
+  /// Exports a registry's metrics on its own thread (see the unit header).
+  /// Free stops the thread and exports once more.
+  TOtlpMetricsExporter = class
+  private
+    FRegistry: TPcMetricRegistry;
+    FOptions: TOtlpMetricsOptions;
+    FSender: IOtlpSender;
+    FOnError: TPcLogProc;
+    FStartUnixNano: Int64;
+    FLock: TCriticalSection;
+    FThread: TThread;
+  public
+    /// Sends to AOptions.Endpoint every AOptions.IntervalMs. ARegistry must
+    /// outlive the exporter (PcMetrics lives until finalization).
+    constructor Create(ARegistry: TPcMetricRegistry; const AOptions: TOtlpMetricsOptions;
+      const AOnError: TPcLogProc); overload;
+    /// Through ASender; AAutoExport = False (tests) starts no thread: only
+    /// ExportNow and Free export.
+    constructor Create(ARegistry: TPcMetricRegistry; const AOptions: TOtlpMetricsOptions;
+      const ASender: IOtlpSender; const AOnError: TPcLogProc; AAutoExport: Boolean = True); overload;
+    destructor Destroy; override;
+    /// Exports now. Never raises: False after telling the error callback.
+    /// True also when there was nothing to send.
+    function ExportNow: Boolean;
+    property Options: TOtlpMetricsOptions read FOptions;
+  end;
 
 /// The resource attributes: service.name, service.version (when not ''),
 /// telemetry.sdk.name and telemetry.sdk.version, then the pairs of
 /// AOptions.ResourceAttributes (one that repeats a key above replaces it).
-function OtlpResourceAttributes(const AOptions: TPcTracingOptions): TArray<THttpHeader>;
+function OtlpResourceAttributes(const AOptions: TPcTracingOptions): TArray<THttpHeader>; overload;
+function OtlpResourceAttributes(const AServiceName, AServiceVersion,
+  AResourceAttributes: string): TArray<THttpHeader>; overload;
+
+/// The body of POST /v1/metrics for every series of ARegistry, read now:
+/// sums start at AStartUnixNano, every point is at ATimeUnixNano. '' when
+/// no metric has a series.
+function OtlpMetricsJson(const AOptions: TOtlpMetricsOptions; ARegistry: TPcMetricRegistry;
+  AStartUnixNano, ATimeUnixNano: Int64): string;
+
+/// The metrics endpoint from the OTEL_EXPORTER_OTLP_* values (see the header).
+function OtlpMetricsEndpoint(const AMetricsEndpoint, ABaseEndpoint: string): string;
 
 /// The body of POST /v1/traces for ASpans.
 function OtlpTracesJson(const AOptions: TPcTracingOptions; const ASpans: TPcSpanDataArray): string;
@@ -75,14 +188,15 @@ type
 implementation
 
 uses
-  Classes,
   {$IFDEF FPC}
   fphttpclient,
   {$ELSE}
   System.Net.HttpClient,
   System.Net.URLClient,
   {$ENDIF}
+  Math,
   PascalJsonMapper.Json,
+  PascalCommon.SystemContext,
   PascalApi.Config,
   PascalApi.Text,
   PascalApi.Version;
@@ -179,6 +293,13 @@ begin
 end;
 
 function OtlpResourceAttributes(const AOptions: TPcTracingOptions): TArray<THttpHeader>;
+begin
+  Result := OtlpResourceAttributes(AOptions.ServiceName, AOptions.ServiceVersion,
+    AOptions.ResourceAttributes);
+end;
+
+function OtlpResourceAttributes(const AServiceName, AServiceVersion,
+  AResourceAttributes: string): TArray<THttpHeader>;
 var
   LList: TArray<THttpHeader>;
   LExtra: TArray<THttpHeader>;
@@ -196,13 +317,13 @@ var
 
 begin
   LList := nil;
-  if AOptions.ServiceName <> '' then
-    Add('service.name', AOptions.ServiceName);
-  if AOptions.ServiceVersion <> '' then
-    Add('service.version', AOptions.ServiceVersion);
+  if AServiceName <> '' then
+    Add('service.name', AServiceName);
+  if AServiceVersion <> '' then
+    Add('service.version', AServiceVersion);
   Add('telemetry.sdk.name', OTLP_SDK_NAME);
   Add('telemetry.sdk.version', PASCALAPI_VERSION_STRING);
-  LExtra := ParseKeyValueList(AOptions.ResourceAttributes);
+  LExtra := ParseKeyValueList(AResourceAttributes);
   for I := 0 to High(LExtra) do
   begin
     LFound := False;
@@ -392,9 +513,12 @@ begin
     ParseKeyValueList(TAppConfig.Get('OTEL_EXPORTER_OTLP_HEADERS', '')), LTimeout);
 end;
 
+// One POST of ABody (JSON) to AEndpoint: True for a 2xx answer. Raises on a
+// transport failure (refused, timeout).
 {$IFDEF FPC}
 
-function TOtlpHttpExporter.ExportSpans(const ASpans: TPcSpanDataArray; out AError: string): Boolean;
+function OtlpPost(const AEndpoint: string; const AHeaders: TArray<THttpHeader>;
+  ATimeoutMs: Integer; const ABody: string; out AError: string): Boolean;
 var
   LClient: TFPHTTPClient;
   LSent: TBytesStream;
@@ -402,23 +526,23 @@ var
   I, LStatus: Integer;
 begin
   LClient := TFPHTTPClient.Create(nil);
-  LSent := TBytesStream.Create(PaStringToUtf8Bytes(OtlpTracesJson(TPcTracing.Options, ASpans)));
+  LSent := TBytesStream.Create(PaStringToUtf8Bytes(ABody));
   LReceived := TBytesStream.Create;
   try
-    LClient.ConnectTimeout := FTimeoutMs;
-    LClient.IOTimeout := FTimeoutMs;
+    LClient.ConnectTimeout := ATimeoutMs;
+    LClient.IOTimeout := ATimeoutMs;
     LClient.AllowRedirect := False;
     LClient.AddHeader('Content-Type', 'application/json');
-    for I := 0 to High(FHeaders) do
-      LClient.AddHeader(FHeaders[I].Name, FHeaders[I].Value);
+    for I := 0 to High(AHeaders) do
+      LClient.AddHeader(AHeaders[I].Name, AHeaders[I].Value);
     LClient.RequestBody := LSent;
-    LClient.HTTPMethod('POST', FEndpoint, LReceived, []);
+    LClient.HTTPMethod('POST', AEndpoint, LReceived, []);
     LStatus := LClient.ResponseStatusCode;
     Result := (LStatus >= 200) and (LStatus < 300);
     if Result then
       AError := ''
     else
-      AError := Format('%s answered %d', [FEndpoint, LStatus]);
+      AError := Format('%s answered %d', [AEndpoint, LStatus]);
   finally
     LClient.RequestBody := nil;
     LReceived.Free;
@@ -429,7 +553,8 @@ end;
 
 {$ELSE}
 
-function TOtlpHttpExporter.ExportSpans(const ASpans: TPcSpanDataArray; out AError: string): Boolean;
+function OtlpPost(const AEndpoint: string; const AHeaders: TArray<THttpHeader>;
+  ATimeoutMs: Integer; const ABody: string; out AError: string): Boolean;
 var
   LClient: THTTPClient;
   LRequest: IHTTPRequest;
@@ -438,15 +563,15 @@ var
   I, LStatus: Integer;
 begin
   LClient := THTTPClient.Create;
-  LSent := TBytesStream.Create(PaStringToUtf8Bytes(OtlpTracesJson(TPcTracing.Options, ASpans)));
+  LSent := TBytesStream.Create(PaStringToUtf8Bytes(ABody));
   try
-    LClient.ConnectionTimeout := FTimeoutMs;
-    LClient.ResponseTimeout := FTimeoutMs;
+    LClient.ConnectionTimeout := ATimeoutMs;
+    LClient.ResponseTimeout := ATimeoutMs;
     LClient.HandleRedirects := False;
-    LRequest := LClient.GetRequest('POST', FEndpoint);
+    LRequest := LClient.GetRequest('POST', AEndpoint);
     LRequest.SetHeaderValue('Content-Type', 'application/json');
-    for I := 0 to High(FHeaders) do
-      LRequest.SetHeaderValue(FHeaders[I].Name, FHeaders[I].Value);
+    for I := 0 to High(AHeaders) do
+      LRequest.SetHeaderValue(AHeaders[I].Name, AHeaders[I].Value);
     LRequest.SourceStream := LSent;
     LResponse := LClient.Execute(LRequest);
     LStatus := LResponse.StatusCode;
@@ -454,7 +579,7 @@ begin
     if Result then
       AError := ''
     else
-      AError := Format('%s answered %d', [FEndpoint, LStatus]);
+      AError := Format('%s answered %d', [AEndpoint, LStatus]);
   finally
     // Released before the stream and the client they point to.
     LResponse := nil;
@@ -465,5 +590,401 @@ begin
 end;
 
 {$ENDIF}
+
+function TOtlpHttpExporter.ExportSpans(const ASpans: TPcSpanDataArray; out AError: string): Boolean;
+begin
+  Result := OtlpPost(FEndpoint, FHeaders, FTimeoutMs, OtlpTracesJson(TPcTracing.Options, ASpans),
+    AError);
+end;
+
+{ Metrics: the body }
+
+function OtlpMetricsEndpoint(const AMetricsEndpoint, ABaseEndpoint: string): string;
+begin
+  if Trim(AMetricsEndpoint) <> '' then
+    Exit(Trim(AMetricsEndpoint));
+  Result := Trim(ABaseEndpoint);
+  if Result = '' then
+    Exit(OTLP_DEFAULT_METRICS_ENDPOINT);
+  while (Result <> '') and (Result[Length(Result)] = '/') do
+    SetLength(Result, Length(Result) - 1);
+  Result := Result + '/v1/metrics';
+end;
+
+// A Double as OTLP's JSON writes it: a number, or the protobuf JSON
+// mapping's "NaN"/"Infinity"/"-Infinity" strings (a gauge may be set to an
+// infinity; JSON has no number for it).
+procedure WriteOtlpDouble(AWriter: TJsonWriter; AValue: Double);
+begin
+  if IsNan(AValue) then
+    AWriter.WriteString('NaN')
+  else if IsInfinite(AValue) then
+  begin
+    if AValue > 0 then
+      AWriter.WriteString('Infinity')
+    else
+      AWriter.WriteString('-Infinity');
+  end
+  else
+    AWriter.WriteDouble(AValue);
+end;
+
+procedure WritePointAttributes(AWriter: TJsonWriter; AMetric: TPcMetric;
+  const APoint: TPcMetricPoint);
+var
+  I: Integer;
+begin
+  AWriter.Name('attributes');
+  AWriter.BeginArray;
+  for I := 0 to High(AMetric.LabelNames) do
+    if I <= High(APoint.LabelValues) then
+      WriteStringKeyValue(AWriter, AMetric.LabelNames[I], APoint.LabelValues[I]);
+  AWriter.EndArray;
+end;
+
+procedure WriteMetric(AWriter: TJsonWriter; AMetric: TPcMetric; const APoints: TPcMetricPoints;
+  AStartUnixNano, ATimeUnixNano: Int64);
+var
+  I, J: Integer;
+begin
+  AWriter.BeginObject;
+  AWriter.Name('name');
+  AWriter.WriteString(AMetric.Name);
+  if AMetric.Description <> '' then
+  begin
+    AWriter.Name('description');
+    AWriter.WriteString(AMetric.Description);
+  end;
+  if AMetric.MetricUnit <> '' then
+  begin
+    AWriter.Name('unit');
+    AWriter.WriteString(AMetric.MetricUnit);
+  end;
+  case AMetric.Kind of
+    mkCounter, mkUpDownCounter: AWriter.Name('sum');
+    mkGauge: AWriter.Name('gauge');
+  else
+    AWriter.Name('histogram');
+  end;
+  AWriter.BeginObject;
+  AWriter.Name('dataPoints');
+  AWriter.BeginArray;
+  for I := 0 to High(APoints) do
+  begin
+    AWriter.BeginObject;
+    WritePointAttributes(AWriter, AMetric, APoints[I]);
+    // A gauge has no start: its value is a sample, not an accumulation.
+    if AMetric.Kind <> mkGauge then
+    begin
+      AWriter.Name('startTimeUnixNano');
+      AWriter.WriteString(IntToStr(AStartUnixNano));
+    end;
+    AWriter.Name('timeUnixNano');
+    AWriter.WriteString(IntToStr(ATimeUnixNano));
+    if AMetric.Kind = mkHistogram then
+    begin
+      AWriter.Name('count');
+      AWriter.WriteString(UIntToStr(APoints[I].Count));
+      AWriter.Name('sum');
+      WriteOtlpDouble(AWriter, APoints[I].Sum);
+      AWriter.Name('bucketCounts');
+      AWriter.BeginArray;
+      for J := 0 to High(APoints[I].BucketCounts) do
+        AWriter.WriteString(UIntToStr(APoints[I].BucketCounts[J]));
+      AWriter.EndArray;
+      AWriter.Name('explicitBounds');
+      AWriter.BeginArray;
+      for J := 0 to High(AMetric.Bounds) do
+        WriteOtlpDouble(AWriter, AMetric.Bounds[J]);
+      AWriter.EndArray;
+    end
+    else
+    begin
+      AWriter.Name('asDouble');
+      WriteOtlpDouble(AWriter, APoints[I].Value);
+    end;
+    AWriter.EndObject;
+  end;
+  AWriter.EndArray;
+  // AggregationTemporality of opentelemetry/proto/metrics/v1/metrics.proto:
+  // 2 is cumulative.
+  if AMetric.Kind <> mkGauge then
+  begin
+    AWriter.Name('aggregationTemporality');
+    AWriter.WriteInt64(2);
+  end;
+  if AMetric.Kind in [mkCounter, mkUpDownCounter] then
+  begin
+    AWriter.Name('isMonotonic');
+    AWriter.WriteBoolean(AMetric.Kind = mkCounter);
+  end;
+  AWriter.EndObject;
+  AWriter.EndObject;
+end;
+
+function OtlpMetricsJson(const AOptions: TOtlpMetricsOptions; ARegistry: TPcMetricRegistry;
+  AStartUnixNano, ATimeUnixNano: Int64): string;
+var
+  LWriter: TJsonWriter;
+  LResource: TArray<THttpHeader>;
+  LMetrics: TPcMetricList;
+  LPoints: TPcMetricPoints;
+  LAny: Boolean;
+  I: Integer;
+begin
+  LResource := OtlpResourceAttributes(AOptions.ServiceName, AOptions.ServiceVersion,
+    AOptions.ResourceAttributes);
+  LMetrics := ARegistry.Metrics;
+  LAny := False;
+  LWriter := TJsonWriter.Create;
+  try
+    LWriter.BeginObject;
+    LWriter.Name('resourceMetrics');
+    LWriter.BeginArray;
+    LWriter.BeginObject;
+    LWriter.Name('resource');
+    LWriter.BeginObject;
+    LWriter.Name('attributes');
+    LWriter.BeginArray;
+    for I := 0 to High(LResource) do
+      WriteStringKeyValue(LWriter, LResource[I].Name, LResource[I].Value);
+    LWriter.EndArray;
+    LWriter.EndObject;
+    LWriter.Name('scopeMetrics');
+    LWriter.BeginArray;
+    LWriter.BeginObject;
+    LWriter.Name('scope');
+    LWriter.BeginObject;
+    LWriter.Name('name');
+    LWriter.WriteString(OTLP_SDK_NAME);
+    LWriter.Name('version');
+    LWriter.WriteString(PASCALAPI_VERSION_STRING);
+    LWriter.EndObject;
+    LWriter.Name('metrics');
+    LWriter.BeginArray;
+    for I := 0 to High(LMetrics) do
+    begin
+      // One snapshot per metric: its points are read once, written once.
+      LPoints := LMetrics[I].Snapshot;
+      if Length(LPoints) = 0 then
+        Continue;
+      WriteMetric(LWriter, LMetrics[I], LPoints, AStartUnixNano, ATimeUnixNano);
+      LAny := True;
+    end;
+    LWriter.EndArray;
+    LWriter.EndObject;
+    LWriter.EndArray;
+    LWriter.EndObject;
+    LWriter.EndArray;
+    LWriter.EndObject;
+    if LAny then
+      Result := LWriter.ToString
+    else
+      Result := '';
+  finally
+    LWriter.Free;
+  end;
+end;
+
+{ TOtlpMetricsOptions }
+
+class function TOtlpMetricsOptions.Default(const AServiceName,
+  AServiceVersion: string): TOtlpMetricsOptions;
+begin
+  Result.ServiceName := AServiceName;
+  Result.ServiceVersion := AServiceVersion;
+  Result.ResourceAttributes := '';
+  Result.Endpoint := OTLP_DEFAULT_METRICS_ENDPOINT;
+  Result.Headers := nil;
+  Result.TimeoutMs := OTLP_DEFAULT_TIMEOUT_MS;
+  Result.IntervalMs := OTLP_DEFAULT_METRIC_INTERVAL_MS;
+end;
+
+// A positive count of milliseconds: digits only (TryStrToInt wraps around
+// on FPC 3.2.2 and reads '$3'), at most 9 of them; else ADefault.
+function PositiveMs(const AText: string; ADefault: Integer): Integer;
+var
+  LText: string;
+  I: Integer;
+begin
+  LText := Trim(AText);
+  if (LText = '') or (Length(LText) > 9) then
+    Exit(ADefault);
+  Result := 0;
+  for I := 1 to Length(LText) do
+  begin
+    if (LText[I] < '0') or (LText[I] > '9') then
+      Exit(ADefault);
+    Result := Result * 10 + Ord(LText[I]) - Ord('0');
+  end;
+  if Result < 1 then
+    Result := ADefault;
+end;
+
+// The signal's own variable, else the general one.
+function FirstSet(ALookup: TPcEnvironmentLookup; const ASignalName, AGeneralName: string): string;
+begin
+  Result := Trim(ALookup(ASignalName));
+  if Result = '' then
+    Result := Trim(ALookup(AGeneralName));
+end;
+
+class function TOtlpMetricsOptions.FromEnvironment(const AServiceName, AServiceVersion: string;
+  ALookup: TPcEnvironmentLookup): TOtlpMetricsOptions;
+var
+  LName: string;
+begin
+  LName := Trim(ALookup('OTEL_SERVICE_NAME'));
+  if LName = '' then
+    LName := AServiceName;
+  Result := Default(LName, AServiceVersion);
+  Result.ResourceAttributes := Trim(ALookup('OTEL_RESOURCE_ATTRIBUTES'));
+  Result.Endpoint := OtlpMetricsEndpoint(ALookup('OTEL_EXPORTER_OTLP_METRICS_ENDPOINT'),
+    ALookup('OTEL_EXPORTER_OTLP_ENDPOINT'));
+  Result.Headers := ParseKeyValueList(FirstSet(ALookup, 'OTEL_EXPORTER_OTLP_METRICS_HEADERS',
+    'OTEL_EXPORTER_OTLP_HEADERS'));
+  Result.TimeoutMs := PositiveMs(FirstSet(ALookup, 'OTEL_EXPORTER_OTLP_METRICS_TIMEOUT',
+    'OTEL_EXPORTER_OTLP_TIMEOUT'), OTLP_DEFAULT_TIMEOUT_MS);
+  Result.IntervalMs := PositiveMs(ALookup('OTEL_METRIC_EXPORT_INTERVAL'),
+    OTLP_DEFAULT_METRIC_INTERVAL_MS);
+end;
+
+{ TOtlpHttpSender }
+
+constructor TOtlpHttpSender.Create(const AEndpoint: string; const AHeaders: TArray<THttpHeader>;
+  ATimeoutMs: Integer);
+begin
+  inherited Create;
+  FEndpoint := AEndpoint;
+  FHeaders := Copy(AHeaders, 0, Length(AHeaders));
+  FTimeoutMs := ATimeoutMs;
+end;
+
+function TOtlpHttpSender.Send(const ABody: string; out AError: string): Boolean;
+begin
+  Result := OtlpPost(FEndpoint, FHeaders, FTimeoutMs, ABody, AError);
+end;
+
+{ TOtlpMetricsThread }
+
+type
+  // Waits IntervalMs on an event, exports, again; the event (set by
+  // Destroy) ends the wait at once, so stopping doesn't wait an interval.
+  TOtlpMetricsThread = class(TThread)
+  private
+    FOwner: TOtlpMetricsExporter;
+    FIntervalMs: Cardinal;
+    FWake: TEvent;
+  protected
+    procedure Execute; override;
+  public
+    constructor Create(AOwner: TOtlpMetricsExporter; AIntervalMs: Integer);
+    destructor Destroy; override;
+    procedure Stop;
+  end;
+
+constructor TOtlpMetricsThread.Create(AOwner: TOtlpMetricsExporter; AIntervalMs: Integer);
+begin
+  FOwner := AOwner;
+  FIntervalMs := AIntervalMs;
+  FWake := TEvent.Create(nil, True, False, '');
+  inherited Create(False);
+end;
+
+destructor TOtlpMetricsThread.Destroy;
+begin
+  FWake.Free;
+  inherited;
+end;
+
+procedure TOtlpMetricsThread.Execute;
+begin
+  while not Terminated do
+  begin
+    if FWake.WaitFor(FIntervalMs) <> wrTimeout then
+      Break;
+    FOwner.ExportNow;
+  end;
+end;
+
+procedure TOtlpMetricsThread.Stop;
+begin
+  Terminate;
+  FWake.SetEvent;
+  WaitFor;
+end;
+
+{ TOtlpMetricsExporter }
+
+constructor TOtlpMetricsExporter.Create(ARegistry: TPcMetricRegistry;
+  const AOptions: TOtlpMetricsOptions; const AOnError: TPcLogProc);
+begin
+  Create(ARegistry, AOptions, TOtlpHttpSender.Create(AOptions.Endpoint, AOptions.Headers,
+    AOptions.TimeoutMs), AOnError, True);
+end;
+
+constructor TOtlpMetricsExporter.Create(ARegistry: TPcMetricRegistry;
+  const AOptions: TOtlpMetricsOptions; const ASender: IOtlpSender; const AOnError: TPcLogProc;
+  AAutoExport: Boolean);
+begin
+  inherited Create;
+  if ARegistry = nil then
+    raise EArgumentException.Create('TOtlpMetricsExporter: the registry is nil');
+  FRegistry := ARegistry;
+  FOptions := AOptions;
+  if FOptions.IntervalMs < 1 then
+    FOptions.IntervalMs := OTLP_DEFAULT_METRIC_INTERVAL_MS;
+  FSender := ASender;
+  FOnError := AOnError;
+  FStartUnixNano := PcUnixNanoOfLocal(TClock.Now);
+  FLock := TCriticalSection.Create;
+  if AAutoExport then
+    FThread := TOtlpMetricsThread.Create(Self, FOptions.IntervalMs);
+end;
+
+destructor TOtlpMetricsExporter.Destroy;
+begin
+  // The thread first (it may be exporting), then the last export here.
+  if FThread <> nil then
+  begin
+    TOtlpMetricsThread(FThread).Stop;
+    FreeAndNil(FThread);
+  end;
+  if FLock <> nil then
+    ExportNow;
+  FSender := nil;
+  FLock.Free;
+  inherited;
+end;
+
+function TOtlpMetricsExporter.ExportNow: Boolean;
+var
+  LBody, LError: string;
+begin
+  Result := True;
+  FLock.Enter;
+  try
+    try
+      LBody := OtlpMetricsJson(FOptions, FRegistry, FStartUnixNano, PcUnixNanoOfLocal(TClock.Now));
+      if LBody = '' then
+        Exit;
+      Result := FSender.Send(LBody, LError);
+    except
+      on E: Exception do
+      begin
+        Result := False;
+        LError := E.ClassName + ': ' + E.Message;
+      end;
+    end;
+    if not Result and Assigned(FOnError) then
+      try
+        FOnError('metric export failed: ' + LError);
+      except
+        // The callback's own failure stays here: the exporter must go on.
+      end;
+  finally
+    FLock.Leave;
+  end;
+end;
 
 end.

@@ -58,7 +58,10 @@
 
   The access log is JSON, one object per request (sample 01 keeps the text
   line), with the trace id the response carries as X-Request-Id. Spans go to
-  an OpenTelemetry collector when OTEL_EXPORTER_OTLP_ENDPOINT is set. *)
+  an OpenTelemetry collector when OTEL_EXPORTER_OTLP_ENDPOINT is set, and so
+  do the metrics /metrics serves (0.26.0, TOtlpMetricsExporter, every
+  OTEL_METRIC_EXPORT_INTERVAL ms): CI reads them back from a Prometheus that
+  scrapes the collector. *)
 
 {$IFDEF FPC}{$MODE DELPHI}{$H+}{$ENDIF}
 {$APPTYPE CONSOLE}
@@ -97,6 +100,7 @@ uses
   PascalApi.Horse.Observability,
   PascalCommon.Tracing,
   PascalCommon.SafeLog,
+  PascalCommon.Metrics,
   PascalApi.Otlp,
   DbApiSample.Normalizers in 'DbApiSample.Normalizers.pas',
   DbApiSample.Validators in 'DbApiSample.Validators.pas',
@@ -106,6 +110,7 @@ var
   GFactory: IDBFactory;
   GCities: TCityRepository;
   GIdempotency: TIdempotency;
+  GMetricsExporter: TOtlpMetricsExporter;
 
 { Handlers }
 
@@ -381,6 +386,10 @@ begin
     if TAppConfig.Get('OTEL_EXPORTER_OTLP_ENDPOINT', '') <> '' then
       TPcTracing.Start(TPcTracingOptions.FromEnvironment('cities-api', '1.0.0', ReadAppConfig),
         TOtlpHttpExporter.FromEnvironment, GLog.Error);
+    // The same registry as /metrics, pushed to the collector (0.26.0).
+    if TAppConfig.Get('OTEL_EXPORTER_OTLP_ENDPOINT', '') <> '' then
+      GMetricsExporter := TOtlpMetricsExporter.Create(PcMetrics,
+        TOtlpMetricsOptions.FromEnvironment('cities-api', '1.0.0', ReadAppConfig), GLog.Error);
     TErrorHandlerMiddleware.Register(GLog.Error);
     THorse.Use(TLoggerMiddleware.New(nil, alfJson));
     THorse.Use(TMetricsMiddleware.New);
@@ -453,6 +462,7 @@ begin
     SafeWriteln('DbApiSample listening on port %d', [GPort]);
     THorse.Listen(GPort);
   finally
+    GMetricsExporter.Free; // the last export
     GIdempotency.Free;
     GCities.Free;
     GFactory := nil;

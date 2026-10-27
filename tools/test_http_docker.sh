@@ -16,6 +16,13 @@
 # (OTEL_EXPORTER_OTLP_ENDPOINT), it writes what it accepts to a volume, and
 # tools/otlp_check.py checks that after both samples ran.
 #
+# Metrics over OTLP (0.26.0): sample 02 also pushes its metrics to the
+# collector every 500 ms (OTEL_METRIC_EXPORT_INTERVAL); the collector's
+# prometheus exporter serves them, a Prometheus (PROMETHEUS_IMAGE,
+# prom/prometheus:v2.53.0, tools/prometheus.yml) scrapes it, and
+# tools/otlp_metrics_check.py queries that Prometheus; promtool checks the
+# collector's page too.
+#
 # JWT keys: sample 03 runs twice more, its signing keys generated and
 # rotated in seconds (tools/http_scenarios_jwt_rotation.sh, two instances
 # on one store): in the control database, then in a Redis
@@ -42,11 +49,13 @@ done
 COLLECTOR_IMAGE="${OTEL_COLLECTOR_IMAGE:-otel/opentelemetry-collector-contrib:0.111.0}"
 REDIS_IMAGE="${REDIS_IMAGE:-redis:7.2-alpine}"
 PG_IMAGE="${PG_IMAGE:-postgres:17}"
+PROMETHEUS_IMAGE="${PROMETHEUS_IMAGE:-prom/prometheus:v2.53.0}"
 NAME="pascalapi-otel-$$"
 cleanup() {
   docker rm -f "$NAME" >/dev/null 2>&1 || true
   docker rm -f "$NAME-redis" >/dev/null 2>&1 || true
   docker rm -f "$NAME-pg" >/dev/null 2>&1 || true
+  docker rm -f "$NAME-prom" >/dev/null 2>&1 || true
   docker network rm "$NAME" >/dev/null 2>&1 || true
   docker volume rm "$NAME" >/dev/null 2>&1 || true
 }
@@ -54,8 +63,10 @@ trap cleanup EXIT
 docker network create "$NAME" >/dev/null
 docker volume create "$NAME" >/dev/null
 # As root: the file exporter writes to the volume's root, which root owns.
-MSYS_NO_PATHCONV=1 docker run -d --name "$NAME" --network "$NAME" --user 0   -v "$NAME:/otel" -v "$MOUNT:/src:ro" "$COLLECTOR_IMAGE" --config /src/tools/otelcol.yaml >/dev/null
+MSYS_NO_PATHCONV=1 docker run -d --name "$NAME" --network "$NAME" --network-alias collector --user 0   -v "$NAME:/otel" -v "$MOUNT:/src:ro" "$COLLECTOR_IMAGE" --config /src/tools/otelcol.yaml >/dev/null
 docker run -d --name "$NAME-redis" --network "$NAME" "$REDIS_IMAGE" >/dev/null
+MSYS_NO_PATHCONV=1 docker run -d --name "$NAME-prom" --network "$NAME" -v "$MOUNT:/src:ro" \
+  "$PROMETHEUS_IMAGE" --config.file=/src/tools/prometheus.yml --storage.tsdb.path=/prometheus >/dev/null
 docker run -d --name "$NAME-pg" --network "$NAME" -e POSTGRES_PASSWORD=postgres \
   -e POSTGRES_DB=dbapi_sample "$PG_IMAGE" >/dev/null
 PG_READY=""
@@ -69,7 +80,7 @@ for D in control shared tenant_acme tenant_globex; do
   docker exec "$NAME-pg" psql -q -U postgres -c "CREATE DATABASE $D" >/dev/null
 done
 
-MSYS_NO_PATHCONV=1 docker run --rm --network "$NAME" -v "$NAME:/otel:ro" -v "$MOUNT:/src:ro"   -e OTEL_EXPORTER_OTLP_ENDPOINT="http://$NAME:4318" -e OTEL_BSP_SCHEDULE_DELAY=200 -e REDIS_HOST="$NAME-redis" -e PG_HOST="$NAME-pg" -e REFRESH_TOKEN_SECONDS=3   "$IMAGE" sh -c '
+MSYS_NO_PATHCONV=1 docker run --rm --network "$NAME" -v "$NAME:/otel:ro" -v "$MOUNT:/src:ro"   -e OTEL_EXPORTER_OTLP_ENDPOINT="http://$NAME:4318" -e OTEL_BSP_SCHEDULE_DELAY=200 -e OTEL_METRIC_EXPORT_INTERVAL=500 -e PROM_HOST="$NAME-prom" -e REDIS_HOST="$NAME-redis" -e PG_HOST="$NAME-pg" -e REFRESH_TOKEN_SECONDS=3   "$IMAGE" sh -c '
   set -e
   mkdir -p /t/uApiSample /t/uDbApiSample /t/uTenantApiSample && cp -r /src/src /src/samples /src/tools /src/external /t/
   E=/t/external
@@ -110,8 +121,8 @@ MSYS_NO_PATHCONV=1 docker run --rm --network "$NAME" -v "$NAME:/otel:ro" -v "$MO
     # The last spans: the exporter sends every 200 ms.
     sleep 1
     kill $PID 2>/dev/null || true
-    if grep -q "span export failed" /t/server-$2.log; then
-      grep "span export failed" /t/server-$2.log | head -3; RC=1
+    if grep -qE "span export failed|metric export failed" /t/server-$2.log; then
+      grep -E "span export failed|metric export failed" /t/server-$2.log | head -3; RC=1
     fi
     [ $RC -eq 0 ] || { echo "--- server log"; tail -40 /t/server-$2.log; exit $RC; }
   }
@@ -119,6 +130,10 @@ MSYS_NO_PATHCONV=1 docker run --rm --network "$NAME" -v "$NAME:/otel:ro" -v "$MO
   run 01-api ApiSample 9310 http_scenarios.sh "" 01
   echo "-- samples/02-db"
   run 02-db DbApiSample 9330 http_scenarios_db.sh --reset 02
+  echo "-- the metrics of sample 02 over OTLP, read by Prometheus"
+  python3 /t/tools/otlp_metrics_check.py http://$PROM_HOST:9090 cities-api
+  curl -s -o /t/collector-metrics.txt http://collector:8889/metrics
+  sh /t/tools/promtool_check.sh /t/collector-metrics.txt
   echo "-- samples/03-tenants"
   run 03-tenants TenantApiSample 9350 http_scenarios_tenants.sh --reset ""
   # Sample 03 twice more on one key store, keys rotated in seconds (built by

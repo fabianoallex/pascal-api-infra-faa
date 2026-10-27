@@ -6,6 +6,37 @@ may change the API; each such change is listed here.
 
 ## [Unreleased]
 
+## [0.26.0] - 2026-10-27
+
+Asked by pascal-agenda-faa (M5, decision 4): its worker has no HTTP, so it pushes its metrics to
+the OpenTelemetry Collector it already sends spans to, and Prometheus reads them there. Same
+dependencies as 0.25.0.
+
+### Added
+
+- **Metrics over OTLP/HTTP (JSON)**, `PascalApi.Otlp`: `TOtlpMetricsExporter.Create(PcMetrics,
+  TOtlpMetricsOptions.FromEnvironment(...), OnError)` sends a `TPcMetricRegistry` every
+  `OTEL_METRIC_EXPORT_INTERVAL` ms (60000) on a thread of its own, and once more on `Free`. A
+  counter is a monotonic sum, an up-down counter a non-monotonic sum, a gauge a gauge, a
+  histogram a histogram; cumulative; the spans' resource. Endpoint
+  `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`, else `OTEL_EXPORTER_OTLP_ENDPOINT` + `/v1/metrics`,
+  else `http://localhost:4318/v1/metrics`; headers and timeout from the `_METRICS_` names, else
+  the general ones. A failed export goes to the callback (`metric export failed: ...`), never to
+  the program.
+- `OtlpMetricsJson` (the body, pure), `OtlpMetricsEndpoint`, `TOtlpMetricsOptions`,
+  `IOtlpSender` and `TOtlpHttpSender` (the seam for tests), and an `OtlpResourceAttributes`
+  overload that takes the service name, version and attributes.
+- CI: the collector gets a metrics pipeline with its `prometheus` exporter, a Prometheus
+  (`prom/prometheus:v2.53.0`, `tools/prometheus.yml`) scrapes it, and
+  `tools/otlp_metrics_check.py` finds sample 02's request histogram, active requests and pool
+  metrics there; `promtool` checks the collector's page.
+
+### Changed
+
+- Sample 02 also pushes its metrics when `OTEL_EXPORTER_OTLP_ENDPOINT` is set (its `/metrics`
+  stays). Sample 04's consumer counts what it handled (`orders.consumed`, by result) and pushes
+  it the same way.
+
 ## [0.25.0] - 2026-10-27
 
 Asked by pascal-agenda-faa (M5, decision 1): its AI agent must move and cancel appointments,

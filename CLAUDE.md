@@ -322,6 +322,12 @@ its own Horse `src` to the search path.
   environment: pass `ReadAppConfig` (`PascalApi.Config`) to keep the `.env`. CI checks the spans
   with a real OpenTelemetry Collector (`tools/otlp_check.py`, including sample 02's database
   spans from pascal-db-faa); after changing the OTLP JSON, run `tools/ci-test.sh`.
+- **Metrics over OTLP** (0.26.0, `TOtlpMetricsExporter`, from pascal-agenda-faa's worker): an
+  object the program owns, its own thread, `Free` = the last export (decisions in
+  `docs/observability-design.md`). CI checks the whole path: sample 02 pushes to the collector,
+  whose `prometheus` exporter a real Prometheus scrapes (`tools/prometheus.yml`, `honor_labels`),
+  and `tools/otlp_metrics_check.py` asks it with PromQL. A failed export goes to the callback,
+  never raises.
 - **Every metric needs a description**: `promtool check metrics` (run by CI on both samples'
   `/metrics`) exits non-zero on "no help text" even when the format is right. One lint is
   accepted on purpose, through `tools/promtool_check.sh`: the `_count` suffix of pascal-db-faa's
