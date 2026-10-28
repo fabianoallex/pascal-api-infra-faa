@@ -39,13 +39,23 @@ unit PascalApi.Idempotency;
   need the handler's response body, which Horse doesn't expose alike on
   both compilers.
 
-  Not atomic with the request's own transaction: the claim, the request
-  and the stored answer are three transactions, so a process that dies
-  after the request committed and before the answer was stored runs it
-  again on the retry (the request's own checks then answer: a booking
-  finds its slot taken). Storing the answer in the request's transaction
-  would close that, at the cost of the store knowing the request's
-  connection.
+  The answer and the request's own change (0.27.0, found by
+  pascal-agenda-faa under load): TIdempotentCall keeps one request's key.
+  - Complete after the change committed: its own transaction, on another
+    pooled connection. When it fails (no connection in the pool, SQLite's
+    writer lock), the change is made already, so it never raises: the
+    error is the caller's to log, the answer goes out, and the key stays
+    claimed until its lease runs out (a retry before that is a 409 in
+    flight; after it, the request runs again and its own checks answer:
+    a booking finds its slot taken). Until 0.26.0 the error reached the
+    client, a 409 or a 503 for a change that was made, and Fail released
+    the key, so a retry ran it again at once (measured on PostgreSQL and
+    SQLite).
+  - CompleteOn inside the change's transaction, on its query: the answer
+    commits with the change or neither does, with no second connection.
+    TDbIdempotencyStore only (IIdempotencyQueryStore), and only when the
+    keys' table is in the change's database. It also closes the process
+    that dies between the commit and Complete.
 
   From pascal-agenda-faa (Agenda.Idempotency), where it guards booking an
   appointment. *)
@@ -92,6 +102,14 @@ type
     procedure Release(const AScope, AKey: string);
   end;
 
+  /// A store that can write the answer on the caller's query, inside the
+  /// caller's transaction (0.27.0): TDbIdempotencyStore.
+  IIdempotencyQueryStore = interface
+    ['{6E677FF4-249C-4FB4-AA28-68C79289D2BE}']
+    procedure CompleteOn(const AQuery: IQuery; const AScope, AKey: string;
+      const AResponse: TStoredResponse);
+  end;
+
   /// The keys in memory, for one process (and tests). Expired keys go when
   /// they are claimed again.
   TMemoryIdempotencyStore = class(TInterfacedObject, IIdempotencyStore)
@@ -125,11 +143,13 @@ type
   /// deleted: on SQLite a read first takes a shared lock two writers can't
   /// both upgrade), then an INSERT that does nothing when the key exists
   /// (ON CONFLICT DO NOTHING: SQLite 3.24 and PostgreSQL 9.5 alike).
-  TDbIdempotencyStore = class(TInterfacedObject, IIdempotencyStore)
+  TDbIdempotencyStore = class(TInterfacedObject, IIdempotencyStore, IIdempotencyQueryStore)
   private
     FFactory: IDBFactory;
     FPurgeSql, FClaimSql, FByKeySql, FTakeOverSql, FCompleteSql, FReleaseSql: string;
     function ExecOne(const ASqlName, AScope, AKey: string): Int64;
+    procedure ExecComplete(const AQuery: IQuery; const AScope, AKey: string;
+      const AResponse: TStoredResponse);
   public
     constructor Create(const AFactory: IDBFactory;
       const APurgeSql: string = 'IDEMPOTENCY.PURGE';
@@ -142,6 +162,11 @@ type
       AExpiresAt: Int64; out AResponse: TStoredResponse): TIdempotencyClaim;
     procedure Complete(const AScope, AKey: string; const AResponse: TStoredResponse);
     procedure Release(const AScope, AKey: string);
+    /// COMPLETE on AQuery, in the transaction AQuery's connection is in
+    /// (0.27.0). The statement's text comes from this store's factory; the
+    /// query must reach the keys' table (the same database).
+    procedure CompleteOn(const AQuery: IQuery; const AScope, AKey: string;
+      const AResponse: TStoredResponse);
   end;
 
   /// The policy over a store. Thread-safe as its store is (both here are).
@@ -159,15 +184,83 @@ type
     /// 409 in flight, 422 another request. ANow: Unix seconds.
     function Start(const AScope: string; var AKey: string; const AFingerprint: string;
       ANow: Int64; out AResponse: TStoredResponse): Boolean;
+    /// Stores the answer in a transaction of the store's own. Raises what
+    /// the store raises; a handler uses TIdempotentCall.Complete instead.
     procedure Complete(const AScope, AKey: string; AStatus: Integer;
       const AHeaders, ABody: string);
+    /// Stores the answer on AQuery, inside the caller's transaction
+    /// (0.27.0). EArgumentException when the store can't
+    /// (IIdempotencyQueryStore: TDbIdempotencyStore can, the memory store
+    /// can't).
+    procedure CompleteOn(const AQuery: IQuery; const AScope, AKey: string; AStatus: Integer;
+      const AHeaders, ABody: string);
+    /// Forgets a claimed key that has no answer (0.27.0); a key with an
+    /// answer stays. Raises what the store raises.
+    procedure Release(const AScope, AKey: string);
     /// After the request raised E: a client error (one the error handler
     /// doesn't log, PascalApi.Http's MapException) is stored as the handler
     /// answers it; anything else releases the key. Never raises (the caller
-    /// re-raises E).
+    /// re-raises E). Only when the request changed nothing: after a commit,
+    /// TIdempotentCall keeps the key instead.
     procedure Fail(const AScope, AKey: string; E: Exception; const AMethod, APath: string);
     property TtlSeconds: Int64 read FTtlSeconds;
     property LeaseSeconds: Int64 read FLeaseSeconds;
+  end;
+
+  TIdempotentCallState = (
+    icsOpen,       // claimed, nothing stored yet
+    icsStoredOn,   // CompleteOn ran in the caller's transaction (commit unknown)
+    icsDone        // Complete or Fail ran: nothing else is written
+  );
+
+  /// One request's use of a key, after TIdempotency.Start claimed it
+  /// (0.27.0): what PascalApi.Horse.Idempotency's THorseIdempotentRequest
+  /// does, without Horse. A value on the caller's stack; without a key
+  /// (AKey = '') every method does nothing.
+  ///
+  ///   LCall.Init(GIdempotency, Scope, Key, 'POST', '/orders');
+  ///   try
+  ///     ... the change, committed ...
+  ///     if not LCall.Complete(201, LHeaders, LJson) then
+  ///       Log(LCall.CompleteError);   // sent anyway: the change is made
+  ///   except
+  ///     on E: Exception do begin LCall.Fail(E); raise; end;
+  ///   end;
+  ///
+  /// Or, the keys' table in the change's database: LCall.CompleteOn(LQuery,
+  /// ...) before the change's commit, and no Complete after it.
+  TIdempotentCall = record
+  private
+    FIdempotency: TIdempotency;
+    FScope, FKey, FMethod, FPath: string;
+    FState: TIdempotentCallState;
+    FCompleteError: string;
+  public
+    /// AKey as TIdempotency.Start returned it (unquoted); '' without a key.
+    procedure Init(AIdempotency: TIdempotency; const AScope, AKey, AMethod, APath: string);
+    /// The answer, after the change committed. Never raises: False when the
+    /// store failed (CompleteError says how; the caller logs it and sends
+    /// the answer), and the key stays claimed until its lease runs out.
+    /// True without a key, and after CompleteOn (already stored).
+    function Complete(AStatus: Integer; const AHeaders, ABody: string): Boolean;
+    /// The answer on AQuery, before the change's commit: it commits with
+    /// the change or neither does. Raises what the store raises (the caller
+    /// rolls back), EArgumentException for a store that can't.
+    procedure CompleteOn(const AQuery: IQuery; AStatus: Integer; const AHeaders, ABody: string);
+    /// After the request raised E. Before any answer: TIdempotency.Fail (a
+    /// client error stored, anything else released). After CompleteOn: the
+    /// key is released only if its answer didn't commit (a release never
+    /// touches an answered key), never a client error stored over it.
+    /// After Complete: nothing. Never raises. After CompleteOn, call it
+    /// after the rollback: the release is another connection, and the
+    /// caller's transaction holds the key's row (PostgreSQL waits on it,
+    /// SQLite on its writer lock).
+    procedure Fail(E: Exception);
+    property Key: string read FKey;
+    property State: TIdempotentCallState read FState;
+    /// Why the last Complete returned False ('' otherwise): the exception's
+    /// class and message. No key in it.
+    property CompleteError: string read FCompleteError;
   end;
 
 /// The key without its quotes, or '' when it isn't one.
@@ -483,6 +576,18 @@ begin
   end;
 end;
 
+procedure TDbIdempotencyStore.ExecComplete(const AQuery: IQuery; const AScope, AKey: string;
+  const AResponse: TStoredResponse);
+begin
+  AQuery.Sql := FFactory.SqlLoader[FCompleteSql].SQL;
+  AQuery.Params.Strings['TENANT_ID'] := AScope;
+  AQuery.Params.Strings['IDEM_KEY'] := AKey;
+  AQuery.Params.Integers['STATUS_CODE'] := AResponse.Status;
+  AQuery.Params.Strings['RESPONSE_HEADERS'] := AResponse.Headers;
+  AQuery.Params.Strings['RESPONSE_BODY'] := AResponse.Body;
+  AQuery.ExecSql;
+end;
+
 procedure TDbIdempotencyStore.Complete(const AScope, AKey: string;
   const AResponse: TStoredResponse);
 var
@@ -492,18 +597,20 @@ begin
   LTx := FFactory.GetPool.AcquireQuery(LQuery);
   LTx.StartTransaction;
   try
-    LQuery.Sql := FFactory.SqlLoader[FCompleteSql].SQL;
-    LQuery.Params.Strings['TENANT_ID'] := AScope;
-    LQuery.Params.Strings['IDEM_KEY'] := AKey;
-    LQuery.Params.Integers['STATUS_CODE'] := AResponse.Status;
-    LQuery.Params.Strings['RESPONSE_HEADERS'] := AResponse.Headers;
-    LQuery.Params.Strings['RESPONSE_BODY'] := AResponse.Body;
-    LQuery.ExecSql;
+    ExecComplete(LQuery, AScope, AKey, AResponse);
     LTx.Commit;
   except
     LTx.Rollback;
     raise;
   end;
+end;
+
+procedure TDbIdempotencyStore.CompleteOn(const AQuery: IQuery; const AScope, AKey: string;
+  const AResponse: TStoredResponse);
+begin
+  if AQuery = nil then
+    raise EArgumentException.Create('TDbIdempotencyStore.CompleteOn: AQuery is nil');
+  ExecComplete(AQuery, AScope, AKey, AResponse);
 end;
 
 procedure TDbIdempotencyStore.Release(const AScope, AKey: string);
@@ -560,6 +667,26 @@ begin
   FStore.Complete(AScope, AKey, LResponse);
 end;
 
+procedure TIdempotency.CompleteOn(const AQuery: IQuery; const AScope, AKey: string;
+  AStatus: Integer; const AHeaders, ABody: string);
+var
+  LStore: IIdempotencyQueryStore;
+  LResponse: TStoredResponse;
+begin
+  if not Supports(FStore, IIdempotencyQueryStore, LStore) then
+    raise EArgumentException.Create('TIdempotency.CompleteOn: the store can''t write in ' +
+      'the caller''s transaction (TDbIdempotencyStore can)');
+  LResponse.Status := AStatus;
+  LResponse.Headers := AHeaders;
+  LResponse.Body := ABody;
+  LStore.CompleteOn(AQuery, AScope, AKey, LResponse);
+end;
+
+procedure TIdempotency.Release(const AScope, AKey: string);
+begin
+  FStore.Release(AScope, AKey);
+end;
+
 procedure TIdempotency.Fail(const AScope, AKey: string; E: Exception;
   const AMethod, APath: string);
 var
@@ -575,6 +702,79 @@ begin
   except
     // The original error matters more; an unreleased key frees itself when
     // its lease runs out.
+  end;
+end;
+
+{ TIdempotentCall }
+
+procedure TIdempotentCall.Init(AIdempotency: TIdempotency; const AScope, AKey, AMethod,
+  APath: string);
+begin
+  if (AKey <> '') and (AIdempotency = nil) then
+    raise EArgumentException.Create('TIdempotentCall.Init: AIdempotency is nil');
+  FIdempotency := AIdempotency;
+  FScope := AScope;
+  FKey := AKey;
+  FMethod := AMethod;
+  FPath := APath;
+  FState := icsOpen;
+  FCompleteError := '';
+end;
+
+function TIdempotentCall.Complete(AStatus: Integer; const AHeaders, ABody: string): Boolean;
+begin
+  Result := True;
+  FCompleteError := '';
+  if (FKey = '') or (FState = icsDone) then
+    Exit;
+  if FState = icsStoredOn then
+  begin
+    FState := icsDone; // stored with the change, which committed
+    Exit;
+  end;
+  // The change committed: from here on the key is never released by this
+  // request, whatever the store does.
+  FState := icsDone;
+  try
+    FIdempotency.Complete(FScope, FKey, AStatus, AHeaders, ABody);
+  except
+    on E: Exception do
+    begin
+      FCompleteError := E.ClassName + ': ' + E.Message;
+      Result := False;
+    end;
+  end;
+end;
+
+procedure TIdempotentCall.CompleteOn(const AQuery: IQuery; AStatus: Integer;
+  const AHeaders, ABody: string);
+begin
+  if (FKey = '') or (FState = icsDone) then
+    Exit;
+  FIdempotency.CompleteOn(AQuery, FScope, FKey, AStatus, AHeaders, ABody);
+  FState := icsStoredOn;
+end;
+
+procedure TIdempotentCall.Fail(E: Exception);
+var
+  LState: TIdempotentCallState;
+begin
+  if FKey = '' then
+    Exit;
+  LState := FState;
+  FState := icsDone;
+  case LState of
+    icsOpen:
+      FIdempotency.Fail(FScope, FKey, E, FMethod, FPath);
+    icsStoredOn:
+      // Whether the answer committed is unknown here; a release removes
+      // only a key without one (DONE = 0), so it is right either way.
+      try
+        FIdempotency.Release(FScope, FKey);
+      except
+        // The lease frees it.
+      end;
+    icsDone: ;
   end;
 end;
 

@@ -37,9 +37,17 @@ unit PascalApi.Horse.Idempotency;
     tenants).
   - A replay sends the stored headers, then Idempotent-Replayed: true, then
     the stored JSON body with its status.
-  - Complete goes inside the try: a store that fails there releases the key
-    through Fail, and the client gets the error instead of an answer the
-    store never kept.
+  - Complete goes after the change committed (0.27.0). It never raises: a
+    store that fails there (no pooled connection, SQLite's writer lock)
+    goes to the error log, the answer is sent, and the key stays claimed
+    until its lease runs out; Fail after it does nothing. Until 0.26.0 the
+    client got the store's error (a 409 or a 503 for a change that was
+    made) and Fail released the key, so a retry ran the change again
+    (pascal-agenda-faa, measured under load).
+  - CompleteOn (0.27.0) stores the answer on the handler's own query,
+    before its commit, when the keys' table is in the same database: the
+    answer commits with the change or neither does, and no second
+    connection is taken. Then no Complete; Fail after the rollback.
 
   Not a middleware: one would have to capture the handler's response body,
   which Horse doesn't expose the same way on both compilers. From
@@ -50,17 +58,17 @@ interface
 uses
   SysUtils,
   Horse,
+  PascalDb.Interfaces,
   PascalApi.Idempotency;
 
 type
   /// One request's use of the key; a value on the handler's stack.
   THorseIdempotentRequest = record
   private
-    FIdempotency: TIdempotency;
     FReq: THorseRequest;
     FRes: THorseResponse;
-    FScope: string;
-    FKey: string;
+    FCall: TIdempotentCall;
+    function GetKey: string;
   public
     /// Reads Idempotency-Key. Without one: False, and the rest does nothing;
     /// or, with ARequired (0.24.0), EHttpException 400
@@ -69,15 +77,22 @@ type
     /// EHttpException 400, 409, 422 as Start raises them.
     function Start(AIdempotency: TIdempotency; AReq: THorseRequest; ARes: THorseResponse;
       const AScope: string; ARequired: Boolean = False): Boolean;
-    /// Stores the answer under the key (nothing without one). AHeaders as
-    /// HeaderLines writes them.
+    /// Stores the answer under the key (nothing without one), after the
+    /// change committed. AHeaders as HeaderLines writes them. Never raises
+    /// (0.27.0): a store's error goes to TErrorHandlerMiddleware.LogError
+    /// and the key stays claimed until its lease runs out.
     procedure Complete(AStatus: Integer; const AJson: string; const AHeaders: string = '');
-    /// After the handler raised E: TIdempotency.Fail. Never raises.
+    /// Stores the answer on AQuery, inside the handler's transaction,
+    /// before its commit (0.27.0; TDbIdempotencyStore, the keys' table in
+    /// the same database). Raises what the store raises: roll back.
+    procedure CompleteOn(const AQuery: IQuery; AStatus: Integer; const AJson: string;
+      const AHeaders: string = '');
+    /// After the handler raised E: TIdempotentCall.Fail. Never raises.
     procedure Fail(E: Exception);
     /// Sends AHeaders and the JSON body with AStatus (TJsonSend).
     procedure Send(AStatus: Integer; const AJson: string; const AHeaders: string = '');
     /// The key, unquoted; '' without one.
-    property Key: string read FKey;
+    property Key: string read GetKey;
   end;
 
   THorseIdempotency = class
@@ -107,11 +122,9 @@ var
   LKey: string;
   LReplay: TStoredResponse;
 begin
-  FIdempotency := AIdempotency;
   FReq := AReq;
   FRes := ARes;
-  FScope := AScope;
-  FKey := '';
+  FCall.Init(nil, AScope, '', AReq.Method, AReq.PathInfo);
   Result := False;
   LKey := Trim(AReq.Headers[IDEMPOTENCY_KEY_HEADER]);
   if ARequired then
@@ -125,19 +138,32 @@ begin
   if Result then
     THorseIdempotency.SendReplay(ARes, LReplay)
   else
-    FKey := LKey;
+    FCall.Init(AIdempotency, AScope, LKey, AReq.Method, AReq.PathInfo);
+end;
+
+function THorseIdempotentRequest.GetKey: string;
+begin
+  Result := FCall.Key;
 end;
 
 procedure THorseIdempotentRequest.Complete(AStatus: Integer; const AJson, AHeaders: string);
 begin
-  if FKey <> '' then
-    FIdempotency.Complete(FScope, FKey, AStatus, AHeaders, AJson);
+  // No key in the line: a key may guard an answer only its client sees.
+  if not FCall.Complete(AStatus, AHeaders, AJson) then
+    TErrorHandlerMiddleware.LogError(FReq, Format('%s %s: the Idempotency-Key answer was ' +
+      'not stored, sent anyway (the key stays claimed until its lease runs out): %s',
+      [FReq.Method, FReq.PathInfo, FCall.CompleteError]));
+end;
+
+procedure THorseIdempotentRequest.CompleteOn(const AQuery: IQuery; AStatus: Integer;
+  const AJson, AHeaders: string);
+begin
+  FCall.CompleteOn(AQuery, AStatus, AHeaders, AJson);
 end;
 
 procedure THorseIdempotentRequest.Fail(E: Exception);
 begin
-  if FKey <> '' then
-    FIdempotency.Fail(FScope, FKey, E, FReq.Method, FReq.PathInfo);
+  FCall.Fail(E);
 end;
 
 procedure THorseIdempotentRequest.Send(AStatus: Integer; const AJson, AHeaders: string);

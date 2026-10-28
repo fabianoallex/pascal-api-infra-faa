@@ -243,8 +243,14 @@ database store on pascal-db-faa's mock), `src/horse/PascalApi.Horse.Idempotency`
   four `PUT`s from one version at once and want one 200 and three 412.
 - The idempotency claim's transaction starts with a write (the purge) for the same reason; its
   `INSERT ... ON CONFLICT DO NOTHING` is the same on SQLite 3.24+ and PostgreSQL.
-- `Complete` goes inside the handler's `try` (a store that fails releases the key through
-  `Fail`); `Fail` never raises.
+- `Complete` runs after the change committed, so it never raises (0.27.0): a store that fails
+  there is logged, the answer is sent and the key stays claimed until its lease; `Fail` after it
+  does nothing. Until 0.26.0 the store's error reached the client (a 409/503 for a booking that
+  was made) and `Fail` released the key, so a retry booked again (pascal-agenda-faa under load,
+  measured on PostgreSQL and SQLite). Never release a key after a commit. `CompleteOn(AQuery)`
+  writes the answer in the handler's own transaction (same database; sample 02's `POST
+  /cities`); `Fail` after it goes after the rollback, and only releases (`AND DONE = 0`).
+  `Fail` never raises.
 - A header parameter (`HeaderParam`) is an MCP argument only with `McpHeader` (0.25.0, from
   pascal-agenda-faa's M5): named `ifMatch` from `If-Match` unless named there; `Register` raises
   for a reserved header (`McpHeaderReserved`: `Authorization`, `X-Forwarded-*`, `traceparent`,

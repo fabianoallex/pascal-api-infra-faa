@@ -149,22 +149,40 @@ end;
 // With an Idempotency-Key (0.23.0): a retry with the same key and body gets
 // the first answer again, a 201 or the 4xx it was (a duplicate code's 409);
 // the same key with another body is a 422. Without one, as before.
+// The answer is stored in the city's own transaction (0.27.0, CompleteOn):
+// the keys' table is in the same database, so the city and its answer
+// commit together or neither does, on one connection.
 procedure PostCity(AReq: THorseRequest; ARes: THorseResponse; ANext: TNextProc);
 var
   LIdem: THorseIdempotentRequest;
+  LInsert: ICityInsert;
+  LQuery: IQuery;
+  LScope: IScopeTransaction;
   LVersion: Int64;
   LJson, LHeaders: string;
 begin
   if LIdem.Start(GIdempotency, AReq, ARes, '') then
     Exit; // replayed
   try
-    LJson := TJsonMapper.Shared.ToJson<ICity>(
-      GCities.Insert(THorseBody.Read<ICityInsert>(AReq), LVersion));
-    LHeaders := HeaderLines([HttpHeader('ETag', VersionETag(LVersion))]);
-    LIdem.Complete(201, LJson, LHeaders);
+    LInsert := THorseBody.Read<ICityInsert>(AReq);
+    LScope := GFactory.GetPool.AcquireQuery(LQuery);
+    LScope.StartTransaction;
+    try
+      LJson := TJsonMapper.Shared.ToJson<ICity>(GCities.InsertOn(LQuery, LInsert, LVersion));
+      LHeaders := HeaderLines([HttpHeader('ETag', VersionETag(LVersion))]);
+      LIdem.CompleteOn(LQuery, 201, LJson, LHeaders);
+      LScope.Commit;
+    except
+      LScope.Rollback;
+      raise;
+    end;
   except
     on E: Exception do
     begin
+      // After the rollback, the connection back in the pool: Fail takes one
+      // of its own, and the key's row is free again.
+      LQuery := nil;
+      LScope := nil;
       LIdem.Fail(E);
       raise;
     end;

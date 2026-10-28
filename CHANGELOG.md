@@ -6,6 +6,42 @@ may change the API; each such change is listed here.
 
 ## [Unreleased]
 
+## [0.27.0] - 2026-10-28
+
+Found by pascal-agenda-faa's load test (M5, 2026-10-27 and 2026-10-28): an `Idempotency-Key`
+whose answer couldn't be stored after the booking committed. On PostgreSQL (FPC Linux, a pool of
+10) `Complete` found no connection (`EPoolTimeoutException` after 5 s) and the client got a 503;
+on SQLite (Delphi Win32, FireDAC) its `UPDATE` waited out the busy timeout for the writer lock
+and the client got a 409 (43 of 568 bookings; 2 on FPC Windows). Each time the booking existed,
+`Fail` released the key, and a retry booked again and got "slot unavailable" (its own booking);
+12 keys stayed in flight when the release failed too. Same dependencies as 0.26.0.
+
+### Fixed
+
+- **`THorseIdempotentRequest.Complete` never raises.** It runs after the change committed, so a
+  store that fails there no longer reaches the client: the line goes to
+  `TErrorHandlerMiddleware.LogError` (no key in it), the answer is sent, and the key stays
+  claimed until its lease runs out (a retry before then is the 409 in flight). `Fail` after a
+  `Complete` does nothing: no release, and no client error stored over an answer.
+
+### Added
+
+- **`CompleteOn(AQuery, ...)`** on `THorseIdempotentRequest`, `TIdempotency` and the new
+  `TIdempotentCall`: the answer is written on the handler's query, inside its transaction, before
+  its commit, so it commits with the change or neither does, on one connection. Needs a store
+  that implements `IIdempotencyQueryStore` (`TDbIdempotencyStore` does; the memory store raises
+  `EArgumentException`) and the keys' table in the change's database. After it, `Fail` only
+  releases a key without an answer (`RELEASE ... AND DONE = 0`).
+- `TIdempotentCall` (`PascalApi.Idempotency`): one request's use of a key without Horse
+  (`Init`, `Complete` returning `False` with `CompleteError`, `CompleteOn`, `Fail`, `State`);
+  `THorseIdempotentRequest` is built on it. `TIdempotency.Release`.
+
+### Changed
+
+- Sample 02's `POST /cities` stores its answer with `CompleteOn`, in the city's transaction
+  (`TCityRepository.InsertOn`); `docs/guide/concurrency.md` shows both forms and says when each
+  fits.
+
 ## [0.26.0] - 2026-10-27
 
 Asked by pascal-agenda-faa (M5, decision 4): its worker has no HTTP, so it pushes its metrics to

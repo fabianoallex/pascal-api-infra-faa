@@ -184,6 +184,7 @@ type
   TCityRepository = class
   private
     FFactory: IDBFactory;
+    function ReadByCode(const AQuery: IQuery; const ACode: string; out AVersion: Int64): ICity;
   public
     constructor Create(const AFactory: IDBFactory);
     /// A page of cities, optionally of one state, ordered by AOrderBy (the
@@ -198,6 +199,11 @@ type
     /// EValidationException for invalid data; the database's
     /// EConstraintViolationException for a code that already exists.
     function Insert(const ACity: ICityInsert; out AVersion: Int64): ICity;
+    /// Insert on AQuery, inside the caller's transaction, which commits
+    /// (pascal-api-infra-faa 0.27.0: POST /cities stores its Idempotency-Key
+    /// answer in the same transaction, THorseIdempotentRequest.CompleteOn).
+    function InsertOn(const AQuery: IQuery; const ACity: ICityInsert;
+      out AVersion: Int64): ICity;
     /// Changes only the members that came; an empty patch changes nothing.
     /// ENotFoundException when there is none, EValidationException for
     /// invalid data.
@@ -492,25 +498,33 @@ begin
   Result := FindByCode(ACode, LVersion);
 end;
 
-function TCityRepository.FindByCode(const ACode: string; out AVersion: Int64): ICity;
+// The city on AQuery, or nil.
+function TCityRepository.ReadByCode(const AQuery: IQuery; const ACode: string;
+  out AVersion: Int64): ICity;
 var
-  LQuery: IQuery;
-  LScope: IScopeTransaction;
   LResult: IQueryResult;
 begin
   Result := nil;
   AVersion := 0;
+  AQuery.Sql := FFactory.SqlLoader['CITY.BY_CODE'].SQL;
+  AQuery.Params.Strings['CODE'] := ACode;
+  LResult := AQuery.Open;
+  if not LResult.Eof then
+  begin
+    Result := ReadCity(LResult);
+    AVersion := LResult.Int64s['VERSION'];
+  end;
+end;
+
+function TCityRepository.FindByCode(const ACode: string; out AVersion: Int64): ICity;
+var
+  LQuery: IQuery;
+  LScope: IScopeTransaction;
+begin
   LScope := FFactory.GetPool.AcquireQuery(LQuery);
   LScope.StartTransaction;
   try
-    LQuery.Sql := FFactory.SqlLoader['CITY.BY_CODE'].SQL;
-    LQuery.Params.Strings['CODE'] := ACode;
-    LResult := LQuery.Open;
-    if not LResult.Eof then
-    begin
-      Result := ReadCity(LResult);
-      AVersion := LResult.Int64s['VERSION'];
-    end;
+    Result := ReadByCode(LQuery, ACode, AVersion);
     LScope.Commit;
   except
     LScope.Rollback;
@@ -524,6 +538,21 @@ function TCityRepository.Insert(const ACity: ICityInsert; out AVersion: Int64): 
 var
   LQuery: IQuery;
   LScope: IScopeTransaction;
+begin
+  LScope := FFactory.GetPool.AcquireQuery(LQuery);
+  LScope.StartTransaction;
+  try
+    Result := InsertOn(LQuery, ACity, AVersion);
+    LScope.Commit;
+  except
+    LScope.Rollback;
+    raise;
+  end;
+end;
+
+function TCityRepository.InsertOn(const AQuery: IQuery; const ACity: ICityInsert;
+  out AVersion: Int64): ICity;
+var
   LCode, LName: string;
   LCheck: TPcValidation;
 begin
@@ -538,24 +567,16 @@ begin
   LCheck.Check('name', LName, TValid.Required);
   LCheck.RaiseIfAny;
 
-  LScope := FFactory.GetPool.AcquireQuery(LQuery);
-  LScope.StartTransaction;
-  try
-    LQuery.Sql := FFactory.SqlLoader['CITY.INSERT']
-      .ProcessTag('POPULATION', ACity.Population.HasValue).SQL;
-    LQuery.Params.Strings['CODE'] := LCode;
-    LQuery.Params.Strings['NAME'] := LName;
-    LQuery.Params.Strings['STATE'] := TNorm.StateCode.Apply(ACity.State);
-    // No if: absent, the column and its parameter are gone (the database
-    // writes NULL); present, the value is bound.
-    LQuery.Params.OptIntegers['POPULATION'] := ACity.Population;
-    LQuery.ExecSql; // EConstraintViolationException (cvUnique) -> 409
-    LScope.Commit;
-  except
-    LScope.Rollback;
-    raise;
-  end;
-  Result := FindByCode(LCode, AVersion);
+  AQuery.Sql := FFactory.SqlLoader['CITY.INSERT']
+    .ProcessTag('POPULATION', ACity.Population.HasValue).SQL;
+  AQuery.Params.Strings['CODE'] := LCode;
+  AQuery.Params.Strings['NAME'] := LName;
+  AQuery.Params.Strings['STATE'] := TNorm.StateCode.Apply(ACity.State);
+  // No if: absent, the column and its parameter are gone (the database
+  // writes NULL); present, the value is bound.
+  AQuery.Params.OptIntegers['POPULATION'] := ACity.Population;
+  AQuery.ExecSql; // EConstraintViolationException (cvUnique) -> 409
+  Result := ReadByCode(AQuery, LCode, AVersion);
 end;
 
 function TCityRepository.Update(const ACode: string; const APatch: ICityPatch;

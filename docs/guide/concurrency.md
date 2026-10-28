@@ -61,16 +61,49 @@ GIdempotency := TIdempotency.Create(TDbIdempotencyStore.Create(GFactory));
 procedure PostCity(AReq: THorseRequest; ARes: THorseResponse; ANext: TNextProc);
 var
   LIdem: THorseIdempotentRequest;
+  LInsert: ICityInsert;
+  LQuery: IQuery;
+  LScope: IScopeTransaction;
   LVersion: Int64;
   LJson, LHeaders: string;
 begin
   if LIdem.Start(GIdempotency, AReq, ARes, '') then
     Exit; // replayed
   try
+    LInsert := THorseBody.Read<ICityInsert>(AReq);
+    LScope := GFactory.GetPool.AcquireQuery(LQuery);
+    LScope.StartTransaction;
+    try
+      LJson := TJsonMapper.Shared.ToJson<ICity>(GCities.InsertOn(LQuery, LInsert, LVersion));
+      LHeaders := HeaderLines([HttpHeader('ETag', VersionETag(LVersion))]);
+      LIdem.CompleteOn(LQuery, 201, LJson, LHeaders); // commits with the city
+      LScope.Commit;
+    except
+      LScope.Rollback;
+      raise;
+    end;
+  except
+    on E: Exception do
+    begin
+      LQuery := nil;  // the connection back in the pool
+      LScope := nil;
+      LIdem.Fail(E);  // after the rollback
+      raise;
+    end;
+  end;
+  LIdem.Send(201, LJson, LHeaders);
+end;
+```
+
+When the repository opens and commits its own transaction, or the keys' table is in another
+database, store the answer after the commit instead (step 4):
+
+```pascal
+  try
     LJson := TJsonMapper.Shared.ToJson<ICity>(
-      GCities.Insert(THorseBody.Read<ICityInsert>(AReq), LVersion));
+      GCities.Insert(THorseBody.Read<ICityInsert>(AReq), LVersion)); // commits
     LHeaders := HeaderLines([HttpHeader('ETag', VersionETag(LVersion))]);
-    LIdem.Complete(201, LJson, LHeaders);
+    LIdem.Complete(201, LJson, LHeaders);  // never raises (0.27.0)
   except
     on E: Exception do
     begin
@@ -79,7 +112,6 @@ begin
     end;
   end;
   LIdem.Send(201, LJson, LHeaders);
-end;
 ```
 
 ## Step by step
@@ -176,11 +208,27 @@ DELETE FROM IDEMPOTENCY_KEYS WHERE TENANT_ID = :TENANT_ID AND IDEM_KEY = :IDEM_K
   exits. **400** `invalid_idempotency_key` for a key that isn't 1 to 255 visible ASCII characters
   (bare or in quotes, `"..."`); **409** `idempotency_key_in_flight` while the first request still
   runs; **422** `idempotency_key_reused` for the same key with another request.
-- `Complete` stores the answer **inside the `try`**: a store that fails there goes to `Fail`,
-  which releases the key, and the client gets the error instead of an answer nobody kept.
+- **`CompleteOn(LQuery, ...)`** (0.27.0) stores the answer on your query, inside your write's
+  transaction, before its commit: the answer commits with the change or neither does, and no
+  second connection is taken. It needs `TDbIdempotencyStore` (the memory store raises
+  `EArgumentException`) and the keys' table in the same database as your write. Then no
+  `Complete`. If it or the commit raises, roll back, let the connection go back to the pool,
+  then `Fail`: it releases the key only if no answer committed (the `RELEASE` statement's
+  `AND DONE = 0`), and never stores a client error over an answer.
+- **`Complete`** stores the answer after your write committed, in a transaction of its own on
+  another pooled connection. Since 0.27.0 it **never raises**: when the store fails (no
+  connection left in the pool, SQLite's writer lock still held after its busy timeout), the
+  change is already made, so the line goes to the error log, the answer is sent, and the key
+  stays claimed until its lease runs out. A retry before then gets the 409 in flight; after it,
+  the request runs again and your own checks answer it (pitfalls). Until 0.26.0 the client got
+  the store's error (a 503 or a 409 for a change that was made) and `Fail` released the key, so
+  the retry ran the change again at once (pascal-agenda-faa, measured under load on PostgreSQL
+  and SQLite). Putting it inside the `try` is still fine: it doesn't raise, and a `Fail` after
+  it does nothing.
 - `Fail(E)` stores a client error as the error handler would send it (status, code, fields), so
   the retry of a request that was refused is refused the same way; anything else (a 500, the
-  database gone) releases the key, so a retry runs again.
+  database gone) releases the key, so a retry runs again. Only before an answer: after
+  `Complete` it does nothing.
 - `Send` sends the headers and the body. The stored headers are `HeaderLines` text
   (`"Name: value"` lines); a header with a line break is refused there.
 
@@ -213,12 +261,16 @@ tenants' keys of the same name never meet.
 
 ## Pitfalls
 
-- **Not atomic with your write.** The claim, your write and `Complete` are three transactions.
-  If the process dies after your write committed and before the answer was stored, the retry
-  runs again and your own checks answer it (a duplicate code's 409, a booked slot's 409): no
-  duplicate row, but the client sees an error for a request that worked. Storing the answer in
-  your write's transaction would close that, at the cost of the store knowing your connection;
-  it doesn't today.
+- **`Complete` is not atomic with your write.** The claim, your write and `Complete` are three
+  transactions. If `Complete` fails, or the process dies, after your write committed, the key
+  has no answer: a retry after the lease runs again, and your own checks answer it (a duplicate
+  code's 409, a booked slot's 409). No duplicate row, but the client sees an error for a request
+  that worked. Under load `Complete` is the likeliest to fail: it needs a second connection
+  while the pool is busy, and on SQLite a second writer. `CompleteOn` closes both: one
+  connection, one transaction.
+- **`CompleteOn` holds the key's row until your commit.** `Fail` after it must come after the
+  rollback (and with the connection back in the pool): before it, the release waits on your own
+  transaction (PostgreSQL's row lock, SQLite's writer lock).
 - **A read before the check is not enough.** Comparing the ETag and then writing without
   `WHERE VERSION = :VERSION` lets a change slip in between: the 412 of step 4 is the guarantee.
 - **Every change moves the version.** A statement that changes the row and forgets
@@ -241,6 +293,10 @@ tenants' keys of the same name never meet.
   The same key with another body: 422. A refused request retried: the same refusal, replayed.
   Four requests with one key at once: one runs; the others get 409 in flight or the replay;
   one row.
+- A store whose `Complete` fails after your write: the answer is sent and a retry gets the 409
+  in flight, not a second run (`PascalApi.IdempotencyTests`, `Call_*`: a store that raises in
+  `Complete`, and pascal-db-faa's mock with `AddFailure('IDEMPOTENCY.COMPLETE', ...)`). Over
+  HTTP it needs a busy pool, which a scenario can't make happen on demand.
 - The lease and the expiry need a clock: test them on `TMemoryIdempotencyStore` with the
   instants in the arguments (`PascalApi.IdempotencyTests`), not over HTTP.
 
@@ -252,10 +308,13 @@ cases.
 - `PascalApi.Preconditions`: `VersionETag`, `EvaluateIfMatch`, `RequireIfMatchSent`,
   `RequireIfMatch`, `RaisePreconditionFailed`; codes `API_CODE_PRECONDITION_REQUIRED`,
   `API_CODE_INVALID_IF_MATCH`, `API_CODE_PRECONDITION_FAILED`.
-- `PascalApi.Idempotency`: `TIdempotency` (`Start`, `Complete`, `Fail`), `IIdempotencyStore`,
+- `PascalApi.Idempotency`: `TIdempotency` (`Start`, `Complete`, `CompleteOn`, `Release`,
+  `Fail`), `TIdempotentCall` (one request's key without Horse: `Complete`, `CompleteOn`, `Fail`,
+  `CompleteError`), `IIdempotencyStore`, `IIdempotencyQueryStore`,
   `TMemoryIdempotencyStore`, `TDbIdempotencyStore`, `NormalizeIdempotencyKey`,
   `RequestFingerprint`, `HeaderLines`, `ParseHeaderLines`.
-- `src/horse/PascalApi.Horse.Idempotency`: `THorseIdempotentRequest`,
+- `src/horse/PascalApi.Horse.Idempotency`: `THorseIdempotentRequest` (`Start`, `Complete`,
+  `CompleteOn`, `Fail`, `Send`),
   `THorseIdempotency.SendReplay`.
 - Documenting them: `TRouteDoc` `HeaderParam('If-Match', ..., True)`,
   `ResponseHeader('ETag', ...)` ([OpenAPI](openapi.md)); as MCP tool arguments,
