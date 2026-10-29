@@ -1,6 +1,8 @@
 #!/bin/sh
 # Builds and runs the unit suite on Linux FPC inside a Docker container, with
 # heaptrc. Acceptance criterion: 0 errors, 0 failures, 0 unfreed blocks.
+# First, tools/otlp_no_db.sh: PascalApi.Otlp builds and runs without
+# pascal-db-faa on the search path.
 #
 # The repository is mounted read-only and copied inside the container, so
 # nothing is written to the working tree. No Lazarus needed: the FPCUnit
@@ -24,7 +26,10 @@ python tools/gen_fpc_mirror.py --check
 
 MSYS_NO_PATHCONV=1 docker run --rm -v "$MOUNT:/src:ro" "$IMAGE" sh -c '
   set -e
-  mkdir -p /t/u && cp -r /src/src /src/tests /src/external /t/
+  mkdir -p /t/u && cp -r /src/src /src/tests /src/tools /src/external /t/
+  echo "== PascalApi.Otlp without pascal-db-faa"
+  sh /t/tools/otlp_no_db.sh /t/otlpnodb
+  echo "== unit suite"
   E=/t/external
   P="-Fu/t/src -Fi/t/src"
   P="$P -Fu$E/pascal-common-faa/src -Fi$E/pascal-common-faa/src -Fu$E/pascal-common-faa/bridges/jsonmapper"

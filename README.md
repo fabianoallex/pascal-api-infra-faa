@@ -10,7 +10,7 @@ threading), [pascal-jsonmapper-faa](https://github.com/fabianoallex/pascal-jsonm
 paging). It is not a drop-in replacement for the Delphi library: DTOs map **published**
 properties, because FPC 3.2.2's RTTI sees nothing else.
 
-Version **0.23.1** (see the [changelog](CHANGELOG.md)): the core, the Horse middlewares, OpenAPI, an MCP
+Version **0.28.0** (see the [changelog](CHANGELOG.md)): the core, the Horse middlewares, OpenAPI, an MCP
 server (protocol 2026-07-28), W3C trace context, metrics (Prometheus), health endpoints,
 spans exported to an OpenTelemetry collector (OTLP), opt-in multi-tenancy
 ([docs/multitenancy-design.md](docs/multitenancy-design.md)), JWT signing keys that rotate
@@ -42,6 +42,7 @@ and what was measured.
 | `PascalApi.FileLog` | asynchronous file logging, one file per category, rotated by size; `TLogTruncate` |
 | `PascalApi.Dto` | marker interfaces and base classes for DTOs, including paged search and paged response |
 | `PascalApi.Text` | UTF-8 bytes ⇄ string, MD5, UTF-8-safe prefix — the same on both compilers |
+| `PascalApi.HttpTypes` | `THttpHeader`, with no dependency, so `PascalApi.Otlp` builds without pascal-db-faa; `PascalApi.Http` keeps the same type |
 | `PascalApi.Http` | HTTP exceptions (`EValidationException`, `ENotFoundException`...), exception → status mapping, CORS, Bearer, client IP, trace context, access log line (text or JSON), metric labels, health answer; replaceable client messages (English or Portuguese) |
 | `PascalApi.Crypto` | SHA-256, HMAC-SHA256, Base64url (FPC 3.2.2 has no SHA-256): wrappers of pascal-common-faa's `PascalCommon.Crypto` |
 | `PascalApi.Jwt` | HS256 JSON Web Tokens: sign, verify (alg, signature, exp, nbf), claims; a key id (`kid`) in the header |
@@ -56,7 +57,7 @@ and what was measured.
 | `PascalApi.Horse.OpenApi` (`src/horse`) | `TRouteDoc`: register and document a route in one call; `/swagger` UI and `/swagger/doc.json`, with the JWT/Bearer scheme taken from the auth middleware |
 | `PascalApi.Mcp` | MCP (2026-07-28): the documented routes as tools, and the JSON-RPC dispatcher |
 | `PascalApi.Horse.Mcp` (`src/horse`) | `TMcpEndpoint.Register('/mcp', ...)`: the MCP endpoint; tool calls go through the API's own middlewares |
-| `PascalApi.Otlp` | OTLP/HTTP JSON for traces and `TOtlpHttpExporter` (an `IPcSpanExporter` for pascal-common-faa's `PascalCommon.Tracing`), configured by the standard `OTEL_*` variables |
+| `PascalApi.Otlp` | OTLP/HTTP JSON for traces and `TOtlpHttpExporter` (an `IPcSpanExporter` for pascal-common-faa's `PascalCommon.Tracing`), configured by the standard `OTEL_*` variables; needs neither pascal-db-faa nor Horse (a desktop client can export) |
 | `PascalApi.Horse.Observability` (`src/horse`) | `TMetricsMiddleware` (OpenTelemetry HTTP server metrics), `TMetricsEndpoint` (`/metrics`, Prometheus text), `THealthEndpoint` (`/health/live`, `/health/ready` with your checks) |
 | `PascalApi.Tenancy` | multi-tenancy, opt-in ([guide](docs/guide/multitenancy.md)): the tenant catalog (configuration, or a control database with a TTL cache), `ITenantDataResolver` (a database per tenant or a shared one, pools named by mode, idle databases dropped), `TTenantFilter.Prepare` (the `TENANT_ID` condition and its parameter in one call), the 401/403 refusals, `TTenantJwtKeyRing` (a signing key ring per tenant). Design: [docs/multitenancy-design.md](docs/multitenancy-design.md) |
 | `PascalApi.Horse.Tenancy` (`src/horse`) | `TTenantMiddleware`: the tenant from the token's `tenant_id` claim, checked against the catalog, after `TJwtMiddleware`; `TTenantMiddleware.Current(AReq)` in a handler; `TenantIdOf` for `tenant.id` in the access log and spans |

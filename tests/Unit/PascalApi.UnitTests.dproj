@@ -129,6 +129,7 @@
         <DCCReference Include="..\..\src\PascalApi.Crypto.pas"/>
         <DCCReference Include="..\..\src\PascalApi.Jwt.pas"/>
         <DCCReference Include="..\..\src\PascalApi.JwtKeys.pas"/>
+        <DCCReference Include="..\..\src\PascalApi.HttpTypes.pas"/>
         <DCCReference Include="..\..\src\PascalApi.Http.pas"/>
         <DCCReference Include="..\..\src\PascalApi.OpenApi.pas"/>
         <DCCReference Include="..\..\src\PascalApi.Mcp.pas"/>

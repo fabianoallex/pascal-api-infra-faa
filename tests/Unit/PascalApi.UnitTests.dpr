@@ -32,6 +32,7 @@ uses
   PascalApi.Crypto in '..\..\src\PascalApi.Crypto.pas',
   PascalApi.Jwt in '..\..\src\PascalApi.Jwt.pas',
   PascalApi.JwtKeys in '..\..\src\PascalApi.JwtKeys.pas',
+  PascalApi.HttpTypes in '..\..\src\PascalApi.HttpTypes.pas',
   PascalApi.Http in '..\..\src\PascalApi.Http.pas',
   PascalApi.OpenApi in '..\..\src\PascalApi.OpenApi.pas',
   PascalApi.Mcp in '..\..\src\PascalApi.Mcp.pas',

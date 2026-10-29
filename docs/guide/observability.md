@@ -308,6 +308,23 @@ A caller's `traceparent` decides for its own trace (parent-based sampling).
 For a call your handler makes to another service, send the request's `traceparent`
 (`AReq.Headers['traceparent']`) so that service joins the trace.
 
+**A program without a database or Horse** (a desktop client, a worker) exports the same way:
+`PascalApi.Otlp` needs only pascal-common-faa and pascal-jsonmapper-faa's `PascalJsonMapper.Json`
+(0.28.0). Its search path is `src`, `external/pascal-common-faa/src` and
+`external/pascal-jsonmapper-faa/src`; the headers are `THttpHeader` from `PascalApi.HttpTypes`
+(also visible through `PascalApi.Http` in an API). On Lazarus, the package
+`pascal_api_infra_faa` still requires `pascal_db_faa`: put those folders on the program's search
+path instead of requiring the package. `tests/Deps/OtlpNoDb.dpr` is the check, built with exactly
+that search path:
+
+```pascal
+uses
+  SysUtils, PascalCommon.Tracing, PascalApi.HttpTypes, PascalApi.Otlp;
+...
+  LHeaders := ParseKeyValueList('api-key=abc, x-team = desk');
+  LExporter := TOtlpHttpExporter.Create('http://127.0.0.1:4318/v1/traces', LHeaders, 1000);
+```
+
 ## Choices
 
 ### Text or JSON
@@ -380,6 +397,7 @@ metrics, a Prometheus scrapes that collector, and `tools/otlp_metrics_check.py` 
 - `PascalApi.Horse.Observability`: `TMetricsMiddleware`, `TMetricsEndpoint`, `THealthEndpoint`.
 - `PascalApi.Http`: `ResolveRequestTrace`, `AccessLogLine`, `AccessLogJson`, `TrustedClientIp`,
   `MetricRoute`, `HealthJson`.
+- `PascalApi.HttpTypes`: `THttpHeader`, with no dependency (0.28.0).
 - `PascalApi.FileLog`, `PascalApi.Otlp` (`TOtlpHttpExporter`, `TOtlpMetricsExporter`,
   `TOtlpMetricsOptions`, `OtlpMetricsJson`); pascal-common-faa's `PascalCommon.Tracing` and
   `PascalCommon.Metrics`.

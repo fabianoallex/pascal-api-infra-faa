@@ -55,7 +55,14 @@ unit PascalApi.Otlp;
   specification's default). A failed export (a status other than 2xx, the
   collector down) goes to the error callback as "metric export failed:
   ...", never to the program; the next one sends the cumulative values
-  again, so nothing is lost but the points in between. *)
+  again, so nothing is lost but the points in between.
+
+  Dependencies (0.28.0, asked by pascal-agenda-faa for a desktop client):
+  this unit needs pascal-common-faa and pascal-jsonmapper-faa's
+  PascalJsonMapper.Json, never pascal-db-faa. THttpHeader comes from
+  PascalApi.HttpTypes, not PascalApi.Http (whose implementation uses
+  pascal-db-faa). tests/Deps/PascalApi.OtlpNoDb builds it with a search path
+  that has no pascal-db-faa: don't add a unit here that brings it back. *)
 
 interface
 
@@ -63,7 +70,7 @@ uses
   SysUtils,
   Classes,
   SyncObjs,
-  PascalApi.Http,
+  PascalApi.HttpTypes,
   PascalCommon.Metrics,
   PascalCommon.Tracing;
 

@@ -2,6 +2,7 @@
 # Regenerates the FPCUnit mirrors from the DUnitX masters, then builds and
 # runs the unit suite on FPC (Windows, through lazbuild). Acceptance
 # criterion: 0 errors, 0 failures and "0 unfreed memory blocks" (heaptrc).
+# First, tools/otlp_no_db.sh: PascalApi.Otlp builds without pascal-db-faa.
 #
 # The Delphi side has no command-line equivalent: Delphi Community Edition
 # doesn't compile outside the IDE. Run tests\Unit\PascalApi.UnitTests.dproj
@@ -13,6 +14,9 @@ command -v "$LAZBUILD" >/dev/null 2>&1 || LAZBUILD=/c/lazarus4.0/lazbuild.exe
 
 cd "$ROOT"
 python tools/gen_fpc_mirror.py
+echo "== PascalApi.Otlp without pascal-db-faa"
+sh tools/otlp_no_db.sh
+echo "== unit suite"
 cd tests/Unit/fpc
 # Never pipe lazbuild into head/Select-Object: when the pipe closes early the
 # compiler hangs (seen in pascal-dfe-broker). Always redirect to a file.

@@ -51,14 +51,19 @@
   - An EHttpException may carry a Code (0.17.0), sent as "code" next to
     "error", for clients that branch on it; and every 401 it becomes names
     its scheme (TErrorResponse.Challenge: 'Bearer'), as the middlewares'
-    401s do. EUnauthorizedException is the 401 for handlers (a login). *)
+    401s do. EUnauthorizedException is the 401 for handlers (a login).
+
+  THttpHeader is declared in PascalApi.HttpTypes (0.28.0) and aliased here:
+  this unit's implementation uses pascal-db-faa, and PascalApi.Otlp needs
+  the type without it. *)
 
 interface
 
 uses
   SysUtils,
   PascalCommon.Tracing,
-  PascalCommon.Validators;
+  PascalCommon.Validators,
+  PascalApi.HttpTypes;
 
 const
   /// The "code" of a 400 that lists failing fields (0.20.0).
@@ -176,10 +181,9 @@ type
     Fields: TPcFieldErrors;
   end;
 
-  THttpHeader = record
-    Name: string;
-    Value: string;
-  end;
+  /// Declared in PascalApi.HttpTypes (0.28.0), which has no dependency, so
+  /// PascalApi.Otlp builds without pascal-db-faa; the same type here.
+  THttpHeader = PascalApi.HttpTypes.THttpHeader;
 
   TCorsOptions = record
     /// '*' allows any origin (not allowed together with AllowCredentials).

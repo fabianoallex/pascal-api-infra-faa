@@ -6,6 +6,31 @@ may change the API; each such change is listed here.
 
 ## [Unreleased]
 
+## [0.28.0] - 2026-10-29
+
+Asked by pascal-agenda-faa (M6, decision 9): a desktop program that exports spans with
+`PascalApi.Otlp` and has no database. `PascalApi.Otlp` took `THttpHeader` from `PascalApi.Http`,
+whose implementation uses pascal-db-faa, so every program with the exporter linked pascal-db-faa.
+Same dependencies as 0.27.0.
+
+### Added
+
+- **`PascalApi.HttpTypes`**: `THttpHeader`, in a unit with an empty `uses`.
+- **`tests/Deps/OtlpNoDb.dpr`** (and `.dproj`, in `PascalApi.groupproj`): builds and runs
+  `PascalApi.Otlp` with a search path of `src`, pascal-common-faa and pascal-jsonmapper-faa only.
+  `tools/otlp_no_db.sh` runs it with plain fpc and heaptrc, from `tools/test_fpc.sh` (Windows) and
+  `tools/test_fpc_docker.sh` (Linux, CI); a unit that brings pascal-db-faa back stops the build
+  ("Can't find unit PascalDb.Interfaces used by PascalApi.Http", checked).
+
+### Changed
+
+- **`PascalApi.Otlp` uses `PascalApi.HttpTypes`, not `PascalApi.Http`**: it now needs only
+  pascal-common-faa and `PascalJsonMapper.Json`. `PascalApi.Http` declares
+  `THttpHeader = PascalApi.HttpTypes.THttpHeader`, the same type, so no caller changes
+  (`PascalApi.Idempotency`, the middlewares, applications). The Lazarus package still requires
+  `pascal_db_faa`: a program without a database puts the folders on its search path instead
+  (guide [Observability](docs/guide/observability.md), step 9).
+
 ## [0.27.0] - 2026-10-28
 
 Found by pascal-agenda-faa's load test (M5, 2026-10-27 and 2026-10-28): an `Idempotency-Key`
