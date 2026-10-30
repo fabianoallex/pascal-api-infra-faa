@@ -6,6 +6,28 @@ may change the API; each such change is listed here.
 
 ## [Unreleased]
 
+## [0.29.0] - 2026-10-30
+
+Asked by pascal-agenda-faa (M6, manual test of the desktop client): a `.env` saved as UTF-16 LE
+with a BOM (what PowerShell 5.1's `>` writes) stopped a VCL program at startup with
+`EEncodingError` "No mapping for the Unicode character exists in the target multi-byte code
+page", naming no file; on FPC it loaded silently, every key with `#0` in it, and the program ran
+on its defaults. Needs pascal-common-faa **1.25.0** (was 1.24.0), whose `PcTryUtf8BytesToString`
+refuses bytes that aren't UTF-8 on both compilers and which adds `PcIsValidUtf8`.
+
+### Fixed
+
+- **`PaUtf8BytesToString` says when the bytes aren't UTF-8**, with their origin, on both
+  compilers: `<origin> is not UTF-8 (it starts with a UTF-16 byte order mark): save it as UTF-8`
+  for FF FE or FE FF, `<origin> is not UTF-8 (it has bytes that are not valid UTF-8): save it as
+  UTF-8` otherwise. The code-page message stays only for its case (FPC, valid non-ASCII UTF-8,
+  a process code page other than UTF-8). So `TAppConfig` with a UTF-16 `.env` raises
+  `ETextEncodingException` naming the file, on Delphi and FPC alike. Other callers gain the same:
+  on Delphi, an `Mcp-Name` header or an MCP tool response with invalid UTF-8 raised
+  `EEncodingError` and now raises `ETextEncodingException` (both are 400 in
+  `PascalApi.Http`), and `PascalApi.Otlp` keeps a percent-encoded value that isn't UTF-8 as
+  written, as it already did on FPC.
+
 ## [0.28.0] - 2026-10-29
 
 Asked by pascal-agenda-faa (M6, decision 9): a desktop program that exports spans with

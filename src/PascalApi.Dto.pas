@@ -83,9 +83,11 @@ uses
 // access log, with stdout in a file or a pipe); 1.15.0: PascalCommon.Random (PascalApi.JwtKeys'
 // generated keys); 1.16.0: PascalCommon.AesGcm (PascalApi.JwtKeys' sealed secrets);
 // 1.17.0: PascalCommon.Crypto (SHA-256, HMAC, Base64url: PascalApi.Crypto wraps it);
-// 1.21.0: PascalCommon.Validators; 1.24.0: PcBase64UrlDecodeStrict (PascalApi.Jwt).
-{$IF PASCALCOMMON_VERSION < 12400}
-  {$MESSAGE FATAL 'pascal-api-infra-faa needs pascal-common-faa 1.24.0 or later'}
+// 1.21.0: PascalCommon.Validators; 1.24.0: PcBase64UrlDecodeStrict (PascalApi.Jwt);
+// 1.25.0: PcTryUtf8BytesToString refuses bytes that aren't UTF-8, and PcIsValidUtf8
+// (PascalApi.Text).
+{$IF PASCALCOMMON_VERSION < 12500}
+  {$MESSAGE FATAL 'pascal-api-infra-faa needs pascal-common-faa 1.25.0 or later'}
 {$IFEND}
 
 type

@@ -55,6 +55,7 @@ type
     procedure Get_CommentAfterValue_IsPartOfIt;
     procedure Get_FileWithBomAndNonAscii;
     procedure Get_FileWithCrLf;
+    procedure Get_Utf16File_RaisesWithTheFileName;
     procedure Get_RealEnvironmentReader_SeesPath;
 
     procedure GetInt_ParsesNumber;
@@ -72,6 +73,8 @@ type
     procedure Decode_SkipsBom;
     procedure Decode_Empty;
     procedure Encode_IsUtf8Bytes;
+    procedure Decode_Utf16Be_NamesTheBom;
+    procedure Decode_InvalidBytes_SaysNotUtf8;
   end;
 
 implementation
@@ -235,6 +238,39 @@ begin
   TAssert.AssertEquals('São Paulo → ok', TAppConfig.Get(KEY_A));
 end;
 
+// What PowerShell 5.1's "Set-Content"/">" writes: UTF-16 LE with FF FE.
+// Delphi raised EEncodingError without the file name, FPC read keys full of
+// #0 and returned the default (pascal-agenda-faa, 2026-10-30).
+procedure TAppConfigTests.Get_Utf16File_RaisesWithTheFileName;
+var
+  LText, LBytes: TBytes;
+  I: Integer;
+  LMessage: string;
+begin
+  LText := PaStringToUtf8Bytes(KEY_A + '=from_file');
+  LBytes := nil;
+  SetLength(LBytes, 2 + 2 * Length(LText));
+  LBytes[0] := $FF;
+  LBytes[1] := $FE;
+  for I := 0 to High(LText) do
+  begin
+    LBytes[2 + 2 * I] := LText[I];
+    LBytes[3 + 2 * I] := 0;
+  end;
+  WriteBytes(FTempEnv, LBytes);
+  LMessage := '';
+  try
+    TAppConfig.Get(KEY_A, 'default');
+    TAssert.Fail('ETextEncodingException expected');
+  except
+    on E: ETextEncodingException do
+      LMessage := E.Message;
+  end;
+  TAssert.AssertTrue('names the file: ' + LMessage, Pos(FTempEnv, LMessage) > 0);
+  TAssert.AssertTrue('says UTF-16: ' + LMessage,
+    Pos('is not UTF-8 (it starts with a UTF-16 byte order mark): save it as UTF-8', LMessage) > 0);
+end;
+
 procedure TAppConfigTests.Get_FileWithCrLf;
 begin
   WriteEnvFile('# comment' + #13#10 + KEY_A + '=one' + #13#10 + KEY_B + '=two' + #13#10);
@@ -316,6 +352,48 @@ end;
 procedure TTextTests.Decode_Empty;
 begin
   TAssert.AssertEquals('', PaUtf8BytesToString(nil, 'test'));
+end;
+
+function DecodeMessage(const ABytes: TBytes): string;
+begin
+  Result := '';
+  try
+    PaUtf8BytesToString(ABytes, 'origin.txt');
+    TAssert.Fail('ETextEncodingException expected');
+  except
+    on E: ETextEncodingException do
+      Result := E.Message;
+  end;
+end;
+
+procedure TTextTests.Decode_Utf16Be_NamesTheBom;
+var
+  LBytes: TBytes;
+begin
+  LBytes := nil;
+  SetLength(LBytes, 4);
+  LBytes[0] := $FE;
+  LBytes[1] := $FF;
+  LBytes[2] := 0;
+  LBytes[3] := Ord('a');
+  TAssert.AssertEquals(
+    'origin.txt is not UTF-8 (it starts with a UTF-16 byte order mark): save it as UTF-8',
+    DecodeMessage(LBytes));
+end;
+
+procedure TTextTests.Decode_InvalidBytes_SaysNotUtf8;
+var
+  LBytes: TBytes;
+begin
+  // 'São' in Windows-1252: E3 alone is not UTF-8.
+  LBytes := nil;
+  SetLength(LBytes, 3);
+  LBytes[0] := Ord('S');
+  LBytes[1] := $E3;
+  LBytes[2] := Ord('o');
+  TAssert.AssertEquals(
+    'origin.txt is not UTF-8 (it has bytes that are not valid UTF-8): save it as UTF-8',
+    DecodeMessage(LBytes));
 end;
 
 procedure TTextTests.Encode_IsUtf8Bytes;

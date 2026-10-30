@@ -13,7 +13,15 @@
   instead of corrupting the text. LCL applications already run in UTF-8;
   console and service programs call SetMultiByteConversionCodePage(CP_UTF8)
   at startup. Since 0.1.1 the decoding is pascal-common-faa's
-  PcTryUtf8BytesToString, which pascal-db-faa's PdbUtf8BytesToString uses too. }
+  PcTryUtf8BytesToString, which pascal-db-faa's PdbUtf8BytesToString uses too.
+
+  Since 0.29.0 the message says which problem it is. Bytes that aren't UTF-8
+  (a .env saved as UTF-16 by PowerShell 5.1's ">", or in a legacy code page)
+  give "<origin> is not UTF-8 (...): save it as UTF-8" on both compilers;
+  the code-page message is only for UTF-8 that FPC's code page can't hold.
+  Before, Delphi raised EEncodingError with no file name and FPC loaded the
+  UTF-16 file silently, with #0 in every key (pascal-agenda-faa, 2026-10-30).
+  pascal-common-faa 1.25.0 validates the bytes and has PcIsValidUtf8. }
 
 interface
 
@@ -24,7 +32,9 @@ type
   ETextEncodingException = class(Exception);
 
 /// The text in ABytes (UTF-8, with or without a BOM). AOrigin names where the
-/// bytes came from, for the error message.
+/// bytes came from, for the error message. ETextEncodingException when the
+/// bytes aren't UTF-8 (a UTF-16 byte order mark is named), and on FPC when
+/// they are non-ASCII and the process code page isn't UTF-8.
 function PaUtf8BytesToString(const ABytes: TBytes; const AOrigin: string): string;
 
 /// AText as UTF-8 bytes, without a BOM.
@@ -60,8 +70,16 @@ function PaUtf8BytesToString(const ABytes: TBytes; const AOrigin: string): strin
 begin
   // The decoding is pascal-common-faa's (1.4.0); this keeps the exception
   // and the message.
-  if not PcTryUtf8BytesToString(ABytes, Result) then
+  if PcTryUtf8BytesToString(ABytes, Result) then
+    Exit;
+  if (Length(ABytes) >= 2) and (((ABytes[0] = $FF) and (ABytes[1] = $FE)) or
+    ((ABytes[0] = $FE) and (ABytes[1] = $FF))) then
     raise ETextEncodingException.CreateFmt(
+      '%s is not UTF-8 (it starts with a UTF-16 byte order mark): save it as UTF-8', [AOrigin]);
+  if not PcIsValidUtf8(ABytes) then
+    raise ETextEncodingException.CreateFmt(
+      '%s is not UTF-8 (it has bytes that are not valid UTF-8): save it as UTF-8', [AOrigin]);
+  raise ETextEncodingException.CreateFmt(
       '%s contains non-ASCII characters, but the process default code page is %d, ' +
       'not UTF-8 (65001): FPC would silently turn characters outside that code page into "?". ' +
       'Call SetMultiByteConversionCodePage(CP_UTF8) at startup (LCL applications already run in UTF-8).',
